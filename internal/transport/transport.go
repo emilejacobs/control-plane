@@ -18,7 +18,7 @@ type Config struct {
 	KeyPEM    []byte
 }
 
-type MessageHandler func(topic string, payload []byte)
+type MessageHandler = func(topic string, payload []byte)
 
 type Transport struct {
 	client mqtt.Client

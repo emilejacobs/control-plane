@@ -33,22 +33,30 @@ type Agent struct {
 	logger     *slog.Logger
 }
 
-func New(cfg Config, transport Transport) (*Agent, error) {
+type Option func(*Agent)
+
+func WithLogger(l *slog.Logger) Option {
+	return func(a *Agent) { a.logger = l }
+}
+
+func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	if err := validateCertFile(cfg.CertPath); err != nil {
 		return nil, err
 	}
 
-	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	a := &Agent{
+		transport: transport,
+		deviceID:  cfg.DeviceID,
+		logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
 
-	d := dispatcher.New(dispatcher.WithLogger(logger))
-	d.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, time.Now()))
+	a.dispatcher = dispatcher.New(dispatcher.WithLogger(a.logger))
+	a.dispatcher.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, time.Now()))
 
-	return &Agent{
-		transport:  transport,
-		dispatcher: d,
-		deviceID:   cfg.DeviceID,
-		logger:     logger,
-	}, nil
+	return a, nil
 }
 
 func (a *Agent) Start() error {
