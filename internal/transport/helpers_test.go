@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,19 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+func requireDocker(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker CLI not in PATH; skipping integration test")
+	}
+	cmd := exec.Command("docker", "info")
+	cmd.Env = append(os.Environ(), "DOCKER_CLI_HINTS=false")
+	cmd.Stdout, cmd.Stderr = nil, nil
+	if err := cmd.Run(); err != nil {
+		t.Skip("docker daemon not reachable; skipping integration test")
+	}
+}
 
 type testCerts struct {
 	CAPEM         []byte
@@ -103,6 +118,7 @@ type mosquittoFixture struct {
 
 func startMosquitto(t *testing.T, ctx context.Context, certs testCerts) *mosquittoFixture {
 	t.Helper()
+	requireDocker(t)
 
 	req := testcontainers.ContainerRequest{
 		Image:        "eclipse-mosquitto:2",
