@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go (agent + API)
+*.test
+*.out
+coverage.out
+coverage.html
+dist/
+bin/
+
+# Node / Next.js (future dashboard)
+node_modules/
+.next/
+build/
+.turbo/
+
+# Terraform / CDK (future infra)
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+cdk.out/
+
+# Env / secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
