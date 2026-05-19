@@ -86,7 +86,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 
 	result, herr := h.Handle(ctx, cmd.Args)
 	if herr != nil {
-		return nil, herr
+		log.Warn("handler returned error", "error", herr)
+		return json.Marshal(envelope.Result{
+			CorrelationID: cmd.CorrelationID,
+			CommandID:     cmd.CommandID,
+			Success:       false,
+			Error: &envelope.ResultError{
+				Code:    "handler.error",
+				Message: herr.Error(),
+			},
+		})
 	}
 
 	resultBytes, err := json.Marshal(result)
