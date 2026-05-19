@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uknomi/control-plane/internal/agent"
-	"github.com/uknomi/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/agent"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 )
 
 type fakeTransport struct {

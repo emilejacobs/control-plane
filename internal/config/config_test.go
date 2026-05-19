@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/uknomi/control-plane/internal/config"
+	"github.com/emilejacobs/control-plane/internal/config"
 )
 
 func TestConfigLoad(t *testing.T) {

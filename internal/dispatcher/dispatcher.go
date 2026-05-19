@@ -7,7 +7,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/uknomi/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 )
 
 type Handler interface {

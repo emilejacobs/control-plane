@@ -1,4 +1,4 @@
-module github.com/uknomi/control-plane
+module github.com/emilejacobs/control-plane
 
 go 1.26.3
 

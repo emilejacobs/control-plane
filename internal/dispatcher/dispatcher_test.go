@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uknomi/control-plane/internal/dispatcher"
-	"github.com/uknomi/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/dispatcher"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 )
 
 func TestDispatcherRoutesToRegisteredHandler(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uknomi/control-plane/internal/transport"
+	"github.com/emilejacobs/control-plane/internal/transport"
 )
 
 func TestTransportRoundtrip(t *testing.T) {

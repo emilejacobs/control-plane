@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/uknomi/control-plane/internal/dispatcher"
-	"github.com/uknomi/control-plane/internal/handlers/heartbeat"
+	"github.com/emilejacobs/control-plane/internal/dispatcher"
+	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 )
 
 type Config struct {

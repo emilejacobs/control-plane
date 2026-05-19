@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/uknomi/control-plane/internal/agent"
-	"github.com/uknomi/control-plane/internal/config"
-	"github.com/uknomi/control-plane/internal/transport"
+	"github.com/emilejacobs/control-plane/internal/agent"
+	"github.com/emilejacobs/control-plane/internal/config"
+	"github.com/emilejacobs/control-plane/internal/transport"
 )
 
 func main() {

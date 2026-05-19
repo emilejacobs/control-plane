@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uknomi/control-plane/internal/handlers/heartbeat"
+	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 )
 
 func TestHeartbeatReturnsExpectedFields(t *testing.T) {
