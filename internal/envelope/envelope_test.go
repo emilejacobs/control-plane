@@ -28,4 +28,5 @@ func TestCommandRoundtripsThroughJSON(t *testing.T) {
 	if !reflect.DeepEqual(original, decoded) {
 		t.Fatalf("roundtrip lost data:\noriginal: %+v\ndecoded:  %+v", original, decoded)
 	}
+	t.Fatal("DELIBERATE FAILURE: CI gate demo — this PR must be blocked by the ruleset")
 }
