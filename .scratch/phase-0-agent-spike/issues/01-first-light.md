@@ -1,6 +1,6 @@
 # Issue 01 — First light: heartbeat round-trip on developer laptop
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

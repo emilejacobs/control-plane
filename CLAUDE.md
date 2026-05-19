@@ -34,7 +34,7 @@ Local markdown under `.scratch/<feature>/`; ephemeral (no remote tracker yet —
 
 ### Triage labels
 
-Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). `ready-for-agent` is dormant during design phase. See `docs/agents/triage-labels.md`.
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) plus a local `done` extension for completed issues we want to keep on disk. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
