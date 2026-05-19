@@ -1,6 +1,6 @@
 # Issue 02 — Cross-compile build matrix + CI gate
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
