@@ -1,19 +1,91 @@
 package agent
 
 import (
+	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"time"
+
+	"github.com/uknomi/control-plane/internal/dispatcher"
+	"github.com/uknomi/control-plane/internal/handlers/heartbeat"
 )
 
 type Config struct {
 	CertPath string
+	DeviceID string
+	Version  string
 }
 
-type Agent struct{}
+type Transport interface {
+	Subscribe(topic string, handler func(topic string, payload []byte)) error
+	Publish(topic string, payload []byte) error
+	Close() error
+}
 
-func New(cfg Config) (*Agent, error) {
-	if _, err := os.Stat(cfg.CertPath); err != nil {
-		return nil, fmt.Errorf("cert file %s: %w", cfg.CertPath, err)
+type Agent struct {
+	transport  Transport
+	dispatcher *dispatcher.Dispatcher
+	deviceID   string
+	logger     *slog.Logger
+}
+
+func New(cfg Config, transport Transport) (*Agent, error) {
+	if err := validateCertFile(cfg.CertPath); err != nil {
+		return nil, err
 	}
-	return &Agent{}, nil
+
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	d := dispatcher.New(dispatcher.WithLogger(logger))
+	d.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, time.Now()))
+
+	return &Agent{
+		transport:  transport,
+		dispatcher: d,
+		deviceID:   cfg.DeviceID,
+		logger:     logger,
+	}, nil
+}
+
+func (a *Agent) Start() error {
+	cmdTopic := "devices/" + a.deviceID + "/cmd"
+	resultTopic := "devices/" + a.deviceID + "/cmd-result"
+
+	return a.transport.Subscribe(cmdTopic, func(_ string, payload []byte) {
+		resultBytes, err := a.dispatcher.Dispatch(context.Background(), payload)
+		if err != nil {
+			a.logger.Error("dispatch failed", "error", err)
+			return
+		}
+		if err := a.transport.Publish(resultTopic, resultBytes); err != nil {
+			a.logger.Error("publish result failed", "error", err)
+		}
+	})
+}
+
+func (a *Agent) Stop() error {
+	return a.transport.Close()
+}
+
+func validateCertFile(path string) error {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("cert file %s: %w", path, err)
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return fmt.Errorf("cert file %s: not a valid PEM block", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("cert file %s: %w", path, err)
+	}
+	if time.Now().After(cert.NotAfter) {
+		return fmt.Errorf("cert file %s: expired at %s", path, cert.NotAfter.Format(time.RFC3339))
+	}
+	return nil
 }
