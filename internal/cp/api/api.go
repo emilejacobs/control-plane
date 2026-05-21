@@ -11,15 +11,18 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/auth"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
 type Deps struct {
 	Registry         *registry.Registry
+	AuthN            *authn.AuthN
 	IdempotencyStore middleware.IdempotencyStore
 
 	// Logger is the base slog.Logger that cplog.Middleware wraps per
@@ -76,6 +79,9 @@ func (b *Builder) MutatingRoutes() []Route { return b.mutating }
 func NewBuilderWith(d Deps) *Builder {
 	b := newBuilder(middleware.Idempotency(d.IdempotencyStore))
 	b.Post("/enrollments", enrollment.New(d.Registry))
+	if d.AuthN != nil {
+		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
+	}
 	if d.DevDevicesGetEnabled {
 		b.Get("/devices/{id}", devices.NewGet(d.Registry))
 	}

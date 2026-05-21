@@ -16,6 +16,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -24,15 +25,20 @@ import (
 
 const testBootstrapKey = "test-bootstrap-key"
 
+// testSigningKey is the HS256 secret used in integration tests. Real
+// deployments load this from JWT_SIGNING_KEY (base64-encoded 32+ bytes).
+var testSigningKey = []byte("integration-test-signing-key-zzzz-32-bytes")
+
 // testServer bundles the live fixtures an integration test needs: an HTTP
 // server wired to a Registry + fake IoTProvisioner, plus the underlying
 // Postgres pool for direct row assertions and a captured log buffer for
 // correlation-id tests. Tests that don't care about logs ignore Logs.
 type testServer struct {
-	URL  string
-	Pool *pgxpool.Pool
-	IoT  *iotprovisioner.Fake
-	Logs *syncBuffer
+	URL   string
+	Pool  *pgxpool.Pool
+	IoT   *iotprovisioner.Fake
+	Logs  *syncBuffer
+	AuthN *authn.AuthN
 }
 
 // syncBuffer is bytes.Buffer with a mutex for the concurrent-writer case
@@ -66,15 +72,17 @@ func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	iot := iotprovisioner.NewFake()
 	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
+	authnSvc := authn.New(pool, authn.Config{SigningKey: testSigningKey})
 	logs := &syncBuffer{}
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:             reg,
+		AuthN:                authnSvc,
 		IdempotencyStore:     idemStore,
 		Logger:               cplog.New(logs, "cp-api-test"),
 		DevDevicesGetEnabled: true,
 	}))
 	t.Cleanup(srv.Close)
-	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs}
+	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc}
 }
 
 func requireDocker(t *testing.T) {
