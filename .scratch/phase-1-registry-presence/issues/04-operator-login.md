@@ -1,6 +1,6 @@
 # Issue 04 — Operator login (first-run admin + password + JWT)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 
 ## Parent
@@ -25,13 +25,50 @@ No TOTP yet (#05). No site-scoping yet (#06).
 
 ## Acceptance criteria
 
-- [ ] `POST /auth/first-run` on a fresh deployment creates the admin account and returns a JWT; a second call returns 410 Gone.
-- [ ] `POST /auth/login` with correct credentials returns an access + refresh token; with wrong credentials, returns 401 and increments the lockout counter; 5 failures within the window locks the account for 15 min.
-- [ ] `POST /auth/refresh` rotates tokens; the previous refresh token is rejected on subsequent use.
-- [ ] `GET /devices/*` without a valid bearer returns 401; with a valid bearer returns the row.
-- [ ] Integration tests cover the full flow against Postgres test container with a fake clock for lockout-window expiry.
-- [ ] Audit log entries are written for first-run claim, login (success and failure), and refresh.
+- [x] `POST /auth/first-run` on a fresh deployment creates the admin account and returns a JWT; a second call returns 410 Gone.
+- [x] `POST /auth/login` with correct credentials returns an access + refresh token; with wrong credentials, returns 401 and increments the lockout counter; 5 failures within the window locks the account for 15 min.
+- [x] `POST /auth/refresh` rotates tokens; the previous refresh token is rejected on subsequent use.
+- [x] `GET /devices/*` without a valid bearer returns 401; with a valid bearer returns the row.
+- [x] Integration tests cover the full flow against Postgres test container with a fake clock for lockout-window expiry.
+- [x] Audit log entries are written for first-run claim, login (success and failure), and refresh.
 
 ## Blocked by
 
 - Issue 03 (HTTP skeleton, idempotency middleware, audit log middleware foundation).
+
+## Comments
+
+### 2026-05-21 — landed in 9 TDD cycles (`f08ecd3`..`aeafb67`)
+
+`AuthN` deep module (`internal/cp/authn`) + `/auth/*` endpoints + bearer
+auth middleware. HS256 JWTs (`golang-jwt/jwt/v5`) over an env-loaded key;
+Argon2id passwords (`alexedwards/argon2id`, OWASP-2024 params). `operators`
+and `refresh_tokens` schema via migrations 003/004.
+
+- Cycles 1–2: `HashPassword`/`VerifyPassword` and the JWT `Signer`
+  (sign + verify round-trip), unit-tested.
+- Cycle 3: `POST /auth/first-run` — `ClaimFirstRunAdmin` bootstraps the
+  admin (no `system_initialized` table; `EXISTS(operators)` + UNIQUE on
+  email handles the race), returns a token pair.
+- Cycle 4: second first-run → 410 Gone, no second operator row.
+- Cycles 5–6: `POST /auth/login` — Argon2id verify, `last_login_at`
+  stamp, token pair; wrong password / unknown email → 401, failed
+  attempts counted per account.
+- Cycle 7: lockout — 5 failures lock for 15 min; `ErrAccountLocked`
+  → 429. `AuthN` clock is injectable (`Config.Now`); lockout timestamps
+  computed in Go so the integration test drives window expiry with a
+  fake clock.
+- Cycle 8: `POST /auth/refresh` — rotation via a conditional UPDATE
+  (replayed/expired token affects no rows, one rotation wins).
+- Cycle 9: `middleware.Auth` guards `GET /devices/{id}`; the
+  `CP_DEV_DEVICES_GET` dev escape hatch from #03 is removed. cp-api
+  loads the signing key from `JWT_SIGNING_KEY` (base64, ≥32 bytes).
+
+Audit-shaped log lines (`audit.first_run`, `audit.login`,
+`audit.refresh`) flow through `cplog`, searchable by correlation_id.
+
+**Deferred — ALB per-IP rate limit (60 req/min) on `/auth/login`.** The
+scope notes it as Terraform "alongside the endpoint", but no ALB module
+exists in Phase 1 yet. Track with the Terraform work in #01; the
+application code is in place. TOTP (#05) and site-scoping (#06) are
+separate slices by design.
