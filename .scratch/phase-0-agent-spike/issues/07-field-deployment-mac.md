@@ -1,6 +1,6 @@
 # Issue 07 — Field deployment: Mac at a real client site
 
-Status: ready-for-human
+Status: done (personal-Mac spike — see [`../results-mac.md`](../results-mac.md) for what was and wasn't covered vs the original acceptance criteria)
 
 ## Parent
 
