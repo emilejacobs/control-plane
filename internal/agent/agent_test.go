@@ -252,3 +252,57 @@ func TestAgentDispatchesServiceStatus(t *testing.T) {
 		t.Errorf("name: got %q, want nginx", payload["name"])
 	}
 }
+
+func TestAgentDispatchesServiceRestart(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newFakeTransport()
+	backend := &service.Fake{} // empty maps: Restart succeeds, Status returns ErrNotFound
+
+	a, err := agent.New(agent.Config{
+		CertPath: cert,
+		DeviceID: "dev-001",
+		Version:  "0.1.0",
+	}, tr, agent.WithServiceBackend(backend))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	cmd := envelope.Command{
+		Type:          "service.restart",
+		CorrelationID: "c1",
+		CommandID:     "x1",
+		Args:          json.RawMessage(`{"name": "nginx"}`),
+		IssuedAt:      time.Now(),
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	tr.deliverTo("devices/dev-001/cmd", cmdBytes)
+
+	results := tr.publishedOn("devices/dev-001/cmd-result")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	var result envelope.Result
+	if err := json.Unmarshal(results[0], &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result.Result, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["name"] != "nginx" {
+		t.Errorf("name: got %v, want nginx", payload["name"])
+	}
+	if _, ok := payload["started_at"].(string); !ok {
+		t.Errorf("started_at missing or not a string: %v", payload["started_at"])
+	}
+	if _, ok := payload["finished_at"].(string); !ok {
+		t.Errorf("finished_at missing or not a string: %v", payload["finished_at"])
+	}
+}

@@ -43,3 +43,26 @@ func (b *launchctlBackend) Status(ctx context.Context, name string) (State, erro
 	}
 	return StateStopped, nil
 }
+
+// Restart shells out to `launchctl kickstart -k system/<name>`. The -k flag asks
+// launchd to terminate the running job (if any) before re-launching. Non-zero
+// exit is reported as *ExecError so callers can surface stderr verbatim.
+func (b *launchctlBackend) Restart(ctx context.Context, name string) error {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "launchctl", "kickstart", "-k", "system/"+name)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &ExecError{
+				ExitCode: exitErr.ExitCode(),
+				Stdout:   stdout.String(),
+				Stderr:   strings.TrimSpace(stderr.String()),
+			}
+		}
+		return fmt.Errorf("launchctl kickstart system/%s: %w", name, err)
+	}
+	return nil
+}

@@ -1,6 +1,6 @@
 # Issue 04 — service.restart command (Mac + Linux impls)
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 

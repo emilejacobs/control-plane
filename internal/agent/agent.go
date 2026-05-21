@@ -12,6 +12,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
+	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
@@ -64,6 +65,7 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	a.dispatcher.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, time.Now()))
 	if a.serviceBackend != nil {
 		a.dispatcher.Register("service.status", servicestatus.New(a.serviceBackend))
+		a.dispatcher.Register("service.restart", servicerestart.New(a.serviceBackend))
 	}
 
 	return a, nil
