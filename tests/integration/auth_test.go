@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestFirstRunHappyPath is Issue 04 cycle 3: a POST /auth/first-run on a
@@ -173,6 +174,95 @@ func doFirstRun(t *testing.T, baseURL, email, password, idempotencyKey string) i
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
+}
+
+// TestLoginHappyPath is Issue 04 cycle 5: after first-run bootstrap, POST
+// /auth/login with correct credentials returns 200 with a fresh token pair,
+// records last_login_at, and is audit-logged.
+func TestLoginHappyPath(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const email = "operator@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	if code := doFirstRun(t, srv.URL, email, password,
+		"00000000-0000-0000-0000-0000000000f1"); code != http.StatusCreated {
+		t.Fatalf("first-run setup: got %d want 201", code)
+	}
+
+	// Log in with mixed-case email to also exercise case-insensitive lookup.
+	const loginEmail = "Operator@AcmeCorp.test"
+	resp := doLogin(t, srv.URL, loginEmail, password, "00000000-0000-0000-0000-00000000051a")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200; body=%s", resp.StatusCode, raw)
+	}
+
+	var out struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.AccessToken == "" {
+		t.Errorf("access_token is empty")
+	}
+	if out.RefreshToken == "" {
+		t.Errorf("refresh_token is empty")
+	}
+
+	// A successful login stamps last_login_at.
+	var operatorID string
+	var lastLogin *time.Time
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT id, last_login_at FROM operators WHERE email = $1`, email,
+	).Scan(&operatorID, &lastLogin); err != nil {
+		t.Fatalf("query operator: %v", err)
+	}
+	if lastLogin == nil {
+		t.Errorf("last_login_at not set after successful login")
+	}
+
+	// first-run issued one refresh token; the login issued a second.
+	var refreshCount int
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM refresh_tokens WHERE operator_id = $1`, operatorID,
+	).Scan(&refreshCount); err != nil {
+		t.Fatalf("query refresh_tokens: %v", err)
+	}
+	if refreshCount != 2 {
+		t.Errorf("refresh_tokens rows: got %d want 2", refreshCount)
+	}
+
+	if !auditLogged(srv.Logs.String(), "audit.login", map[string]any{
+		"outcome": "success",
+		"email":   loginEmail,
+	}) {
+		t.Errorf("no audit.login success log line found.\nFull log buffer:\n%s", srv.Logs.String())
+	}
+}
+
+// doLogin POSTs /auth/login. The caller owns resp.Body.
+func doLogin(t *testing.T, baseURL, email, password, idempotencyKey string) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"email": email, "password": password})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/auth/login", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
 }
 
 // auditLogged reports whether the captured slog buffer contains a JSON line

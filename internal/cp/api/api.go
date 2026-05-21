@@ -81,6 +81,7 @@ func NewBuilderWith(d Deps) *Builder {
 	b.Post("/enrollments", enrollment.New(d.Registry))
 	if d.AuthN != nil {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
+		b.Post("/auth/login", auth.NewLogin(d.AuthN))
 	}
 	if d.DevDevicesGetEnabled {
 		b.Get("/devices/{id}", devices.NewGet(d.Registry))

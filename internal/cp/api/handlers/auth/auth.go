@@ -14,6 +14,7 @@ import (
 
 type Service interface {
 	ClaimFirstRunAdmin(ctx context.Context, email, password string) (authn.Tokens, error)
+	Login(ctx context.Context, email, password string) (authn.Tokens, error)
 }
 
 type tokensResponse struct {
@@ -55,8 +56,51 @@ func (h *FirstRunHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("audit.first_run", "outcome", "success", "email", req.Email)
 
+	writeTokens(w, http.StatusCreated, tokens)
+}
+
+// LoginHandler serves POST /auth/login.
+type LoginHandler struct {
+	svc Service
+}
+
+func NewLogin(svc Service) *LoginHandler { return &LoginHandler{svc: svc} }
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log := cplog.FromContext(r.Context())
+
+	var req loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	tokens, err := h.svc.Login(r.Context(), req.Email, req.Password)
+	if err != nil {
+		if errors.Is(err, authn.ErrInvalidCredentials) {
+			log.Info("audit.login", "outcome", "failure", "reason", "invalid_credentials", "email", req.Email)
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+		log.Error("audit.login", "outcome", "error", "email", req.Email, "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("audit.login", "outcome", "success", "email", req.Email)
+
+	writeTokens(w, http.StatusOK, tokens)
+}
+
+// writeTokens emits the standard {access_token, refresh_token} JSON body.
+func writeTokens(w http.ResponseWriter, status int, tokens authn.Tokens) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(tokensResponse{
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,

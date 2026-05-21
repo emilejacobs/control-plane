@@ -10,12 +10,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ErrSystemAlreadyInitialized is returned by ClaimFirstRunAdmin once an
 // operator row exists. Handlers translate to HTTP 410 Gone.
 var ErrSystemAlreadyInitialized = errors.New("system already initialized")
+
+// ErrInvalidCredentials is returned by Login for an unknown email or a
+// password mismatch. The two cases are deliberately indistinguishable so
+// callers can't probe for valid emails. Handlers translate to HTTP 401.
+var ErrInvalidCredentials = errors.New("invalid credentials")
 
 // Config is the per-instance AuthN configuration. SigningKey is required;
 // the TTL fields default to ADR-010 values (1h access, 24h refresh) when
@@ -86,6 +92,45 @@ func (a *AuthN) ClaimFirstRunAdmin(ctx context.Context, email, password string) 
 	}
 
 	return a.issueTokens(ctx, operatorID, email, true)
+}
+
+// Login verifies email + password and, on success, issues a fresh token
+// pair and clears the failed-login counter. An unknown email or a wrong
+// password both return ErrInvalidCredentials. Per-account lockout enforcement
+// arrives in a later slice.
+func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	var operatorID, hash string
+	var isStaff bool
+	err := a.pool.QueryRow(ctx, `
+		SELECT id, password_hash, is_staff FROM operators WHERE email = $1
+	`, email).Scan(&operatorID, &hash, &isStaff)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Tokens{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return Tokens{}, fmt.Errorf("lookup operator: %w", err)
+	}
+
+	ok, err := VerifyPassword(password, hash)
+	if err != nil {
+		return Tokens{}, fmt.Errorf("verify password: %w", err)
+	}
+	if !ok {
+		return Tokens{}, ErrInvalidCredentials
+	}
+
+	if _, err := a.pool.Exec(ctx, `
+		UPDATE operators
+		SET failed_login_count = 0, locked_until = NULL,
+		    last_login_at = now(), updated_at = now()
+		WHERE id = $1
+	`, operatorID); err != nil {
+		return Tokens{}, fmt.Errorf("clear login state: %w", err)
+	}
+
+	return a.issueTokens(ctx, operatorID, email, isStaff)
 }
 
 func (a *AuthN) issueTokens(ctx context.Context, operatorID, email string, isStaff bool) (Tokens, error) {
