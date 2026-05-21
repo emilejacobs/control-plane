@@ -1,6 +1,6 @@
 # ADR-014: Bootstrap token distribution via S3
 
-**Status:** Accepted (2026-05-18)
+**Status:** Superseded by [ADR-017](./0017-static-bootstrap-key-in-install-package.md) (2026-05-21)
 
 **Context.** Enrollment (ADR-004) is install-script-driven. The script needs a one-time bootstrap token to call `POST /enrollments`. Two distribution options:
 

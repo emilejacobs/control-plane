@@ -47,9 +47,9 @@
 │  AWS IoT Core ───── command + telemetry topics     │
 │   │  device shadow (desired/reported state)        │
 │   ▼                                                 │
-│  Lambda / ECS workers                              │
-│   ├─ command dispatcher                            │
-│   ├─ telemetry ingest                              │
+│  ECS Fargate workers (ADR-018)                     │
+│   ├─ command dispatcher (Phase 3)                  │
+│   ├─ telemetry/presence ingest (Phase 1+)          │
 │   └─ enrollment handler                            │
 │                                                     │
 │  ECS Fargate tasks                                 │

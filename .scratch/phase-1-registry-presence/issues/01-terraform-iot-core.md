@@ -26,27 +26,16 @@ Out of scope for this issue (each is its own Phase 1 issue):
 - Tailscale subnet router task.
 - A custom CA for device certs (ADR-004's install-script enrollment requires this; tracked separately).
 
-## Decisions to make in this issue
+## Decisions
 
-1. **Terraform vs CDK.** Roadmap says "Terraform/CDK"; pick one and document the choice. Recommendation: Terraform — the AWS provider has full coverage, HCL is easier to review than TypeScript-CDK output, and the team has no existing CDK assets.
-2. **State backend.** Local state is fine to start, but moves to S3 + DynamoDB lock table before any second person touches it. Either way, decide and document.
-3. **Module layout.** Suggested:
-   ```
-   infra/terraform/
-     providers.tf
-     backend.tf
-     iot/
-       policy.tf
-       README.md
-     modules/
-       device/
-         main.tf
-         variables.tf
-         outputs.tf      # cert PEM, key PEM, thing name
-     devices/
-       dev-mac-mini-emile.tf   # (or similar — one .tf per provisioned device)
-   ```
-4. **Cert handling.** `aws_iot_certificate` with `active = true` mints the cert; the private key comes back in state. State must be encrypted at rest (S3 default encryption + IAM scoped on the bucket). Alternative: out-of-band key generation + import via `aws_iot_certificate.certificate_pem` — more secure but more workflow friction.
+These four decisions originally lived in this issue. They are PRD-level (they bind the whole infra track, not just this issue) and have moved to the Phase 1 PRD draft. Listed here for traceability:
+
+1. **Terraform vs CDK** — settled in the PRD.
+2. **State backend** — settled in the PRD.
+3. **Module layout** — settled in the PRD.
+4. **Cert handling** (mint via `aws_iot_certificate` vs out-of-band import) — settled in the PRD.
+
+This issue implements against those decisions; it does not re-decide them.
 
 ## Acceptance criteria
 

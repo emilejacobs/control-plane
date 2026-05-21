@@ -18,3 +18,8 @@ Terms used throughout the design documents.
 | **Operator (staff)** | A uKnomi internal user who logs in via Entra ID and has full fleet access. |
 | **Operator (local)** | A future field-operator user with a local CP account, scoped to specific sites. |
 | **Mosyle** | Apple MDM provider used for Mac auto-enrollment. Not in the CP runtime path; only triggers the install script. |
+| **Heartbeat** | A small message the agent publishes to `devices/{id}/telemetry` every 30s. The ingest worker uses it to update the device's `last_seen` in Postgres. |
+| **Online threshold** | The freshness window for `last_seen` that makes a device count as "online" in the dashboard. Phase 1 value: 90 seconds (3× heartbeat interval). |
+| **Presence** | The online/offline state of a device as shown in the dashboard. Derived from `last_seen` against the online threshold, with IoT Core lifecycle events as a fast-path for the online → offline transition. |
+| **Recovery code** | One of ten single-use codes issued to an operator at TOTP enrollment time. Shown once, stored hashed, used to recover access if the TOTP device is lost. |
+| **First-run admin** | The bootstrap pattern by which the very first operator account is created. The dashboard exposes an account-creation flow at `/auth/first-run` if and only if no users exist in the database. After the first admin is created, the flow is permanently disabled (a `system_initialized` flag flips). |
