@@ -5,6 +5,7 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -36,6 +37,10 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	dev, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, registry.ErrDeviceNotFound) {
+			http.Error(w, "device not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

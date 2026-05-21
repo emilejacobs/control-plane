@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
@@ -21,6 +22,10 @@ import (
 // key does not match the one configured on the Registry. Handlers translate
 // it to HTTP 401 (per PRD § API contracts).
 var ErrInvalidBootstrapKey = errors.New("invalid bootstrap key")
+
+// ErrDeviceNotFound is returned by GetByID when no row matches the id.
+// Handlers translate it to HTTP 404.
+var ErrDeviceNotFound = errors.New("device not found")
 
 type Config struct {
 	BootstrapKey string
@@ -78,6 +83,9 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN, &d.EnrolledAt,
 	)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Device{}, ErrDeviceNotFound
+		}
 		return Device{}, fmt.Errorf("get device: %w", err)
 	}
 	return d, nil
