@@ -5,6 +5,7 @@ package enrollment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -54,6 +55,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		AgentVersion: req.AgentVersion,
 	})
 	if err != nil {
+		if errors.Is(err, registry.ErrInvalidBootstrapKey) {
+			http.Error(w, "invalid bootstrap key", http.StatusUnauthorized)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

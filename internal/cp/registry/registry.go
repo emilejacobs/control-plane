@@ -7,6 +7,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 )
+
+// ErrInvalidBootstrapKey is returned by Enroll when the supplied bootstrap
+// key does not match the one configured on the Registry. Handlers translate
+// it to HTTP 401 (per PRD § API contracts).
+var ErrInvalidBootstrapKey = errors.New("invalid bootstrap key")
 
 type Config struct {
 	BootstrapKey string
@@ -78,6 +84,9 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 }
 
 func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, error) {
+	if in.BootstrapKey != r.cfg.BootstrapKey {
+		return EnrollOutput{}, ErrInvalidBootstrapKey
+	}
 	deviceID := uuid.NewString()
 	cert, err := r.iot.ProvisionDevice(ctx, deviceID)
 	if err != nil {
