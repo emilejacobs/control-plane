@@ -77,3 +77,50 @@ func TestEnrollmentIdempotentReplay(t *testing.T) {
 		t.Errorf("IoT ProvisionDevice calls: got %d want 1 (replay must not mint a new cert)", calls)
 	}
 }
+
+func TestEnrollmentMissingIdempotencyKey(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	body, err := json.Marshal(map[string]any{
+		"bootstrap_key": testBootstrapKey,
+		"hostname":      "mac-mini-acme-04",
+		"hardware_uuid": "44444444-4444-4444-4444-444444444444",
+		"hardware_kind": "mac",
+		"os_version":    "macOS 15.0",
+		"agent_version": "0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/enrollments", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Deliberately no Idempotency-Key.
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 400; body=%s", resp.StatusCode, raw)
+	}
+
+	// Handler must not have run: no row, no IoT call.
+	var rowCount int
+	if err := srv.Pool.QueryRow(ctx, `SELECT count(*) FROM devices`).Scan(&rowCount); err != nil {
+		t.Fatalf("count devices: %v", err)
+	}
+	if rowCount != 0 {
+		t.Errorf("devices row count: got %d want 0 (handler must not run without Idempotency-Key)", rowCount)
+	}
+	if calls := srv.IoT.Count(); calls != 0 {
+		t.Errorf("IoT ProvisionDevice calls: got %d want 0", calls)
+	}
+}

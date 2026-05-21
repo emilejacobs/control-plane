@@ -26,7 +26,7 @@ func Idempotency(store IdempotencyStore) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := r.Header.Get("Idempotency-Key")
 			if key == "" {
-				next.ServeHTTP(w, r)
+				http.Error(w, "Idempotency-Key header is required", http.StatusBadRequest)
 				return
 			}
 
