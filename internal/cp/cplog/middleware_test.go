@@ -9,7 +9,7 @@ import (
 )
 
 func TestCorrelationMiddlewareEchoesIncomingHeader(t *testing.T) {
-	mw := cplog.Correlation()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw := cplog.Middleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -25,7 +25,7 @@ func TestCorrelationMiddlewareEchoesIncomingHeader(t *testing.T) {
 }
 
 func TestCorrelationMiddlewareGeneratesWhenAbsent(t *testing.T) {
-	mw := cplog.Correlation()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw := cplog.Middleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
