@@ -118,6 +118,16 @@ func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, erro
 		return Tokens{}, fmt.Errorf("verify password: %w", err)
 	}
 	if !ok {
+		// Count the failed attempt against this account. Lockout
+		// enforcement once the counter crosses the threshold is a
+		// later slice.
+		if _, err := a.pool.Exec(ctx, `
+			UPDATE operators
+			SET failed_login_count = failed_login_count + 1, updated_at = now()
+			WHERE id = $1
+		`, operatorID); err != nil {
+			return Tokens{}, fmt.Errorf("record failed login: %w", err)
+		}
 		return Tokens{}, ErrInvalidCredentials
 	}
 

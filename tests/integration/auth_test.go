@@ -245,6 +245,72 @@ func TestLoginHappyPath(t *testing.T) {
 	}
 }
 
+// TestLoginWrongPasswordRejected is Issue 04 cycle 6: a login with wrong
+// credentials returns 401, increments the per-account failed-login counter,
+// and is audit-logged. An unknown email is rejected the same way.
+func TestLoginWrongPasswordRejected(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const email = "operator@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	if code := doFirstRun(t, srv.URL, email, password,
+		"00000000-0000-0000-0000-0000000000f1"); code != http.StatusCreated {
+		t.Fatalf("first-run setup: got %d want 201", code)
+	}
+
+	failedCount := func() int {
+		t.Helper()
+		var n int
+		if err := srv.Pool.QueryRow(ctx,
+			`SELECT failed_login_count FROM operators WHERE email = $1`, email,
+		).Scan(&n); err != nil {
+			t.Fatalf("query failed_login_count: %v", err)
+		}
+		return n
+	}
+
+	// First wrong attempt.
+	resp := doLogin(t, srv.URL, email, "wrong-password", "00000000-0000-0000-0000-000000000601")
+	if resp.StatusCode != http.StatusUnauthorized {
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("wrong password: got %d want 401; body=%s", resp.StatusCode, raw)
+	}
+	resp.Body.Close()
+	if got := failedCount(); got != 1 {
+		t.Errorf("failed_login_count after one bad attempt: got %d want 1", got)
+	}
+
+	// Second wrong attempt — counter accumulates.
+	resp = doLogin(t, srv.URL, email, "still-wrong", "00000000-0000-0000-0000-000000000602")
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		t.Fatalf("second wrong password: got %d want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+	if got := failedCount(); got != 2 {
+		t.Errorf("failed_login_count after two bad attempts: got %d want 2", got)
+	}
+
+	// An unknown email is rejected identically — and creates no row to count.
+	resp = doLogin(t, srv.URL, "ghost@acmecorp.test", "whatever", "00000000-0000-0000-0000-000000000603")
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		t.Fatalf("unknown email: got %d want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	if !auditLogged(srv.Logs.String(), "audit.login", map[string]any{
+		"outcome": "failure",
+		"reason":  "invalid_credentials",
+		"email":   email,
+	}) {
+		t.Errorf("no audit.login failure log line found.\nFull log buffer:\n%s", srv.Logs.String())
+	}
+}
+
 // doLogin POSTs /auth/login. The caller owns resp.Body.
 func doLogin(t *testing.T, baseURL, email, password, idempotencyKey string) *http.Response {
 	t.Helper()
