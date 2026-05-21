@@ -1,6 +1,6 @@
 # Issue 03 — service.status command (Mac + Linux impls)
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 

@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -87,13 +88,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 	result, herr := h.Handle(ctx, cmd.Args)
 	if herr != nil {
 		log.Warn("handler returned error", "error", herr)
+		code, message := "handler.error", herr.Error()
+		var coded *envelope.CodedError
+		if errors.As(herr, &coded) {
+			code, message = coded.Code, coded.Message
+		}
 		return json.Marshal(envelope.Result{
 			CorrelationID: cmd.CorrelationID,
 			CommandID:     cmd.CommandID,
 			Success:       false,
 			Error: &envelope.ResultError{
-				Code:    "handler.error",
-				Message: herr.Error(),
+				Code:    code,
+				Message: message,
 			},
 		})
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/service"
 )
 
 type fakeTransport struct {
@@ -191,5 +192,63 @@ func TestAgentDispatchesCommandsAndPublishesResults(t *testing.T) {
 	}
 	if hb["device_id"] != "dev-001" {
 		t.Errorf("result.device_id: got %v, want dev-001", hb["device_id"])
+	}
+}
+
+func TestAgentDispatchesServiceStatus(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newFakeTransport()
+	backend := &service.Fake{
+		States: map[string]service.State{"nginx": service.StateRunning},
+	}
+
+	a, err := agent.New(agent.Config{
+		CertPath: cert,
+		DeviceID: "dev-001",
+		Version:  "0.1.0",
+	}, tr, agent.WithServiceBackend(backend))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	cmd := envelope.Command{
+		Type:          "service.status",
+		CorrelationID: "c1",
+		CommandID:     "x1",
+		Args:          json.RawMessage(`{"name": "nginx"}`),
+		IssuedAt:      time.Now(),
+	}
+	cmdBytes, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("marshal cmd: %v", err)
+	}
+
+	tr.deliverTo("devices/dev-001/cmd", cmdBytes)
+
+	results := tr.publishedOn("devices/dev-001/cmd-result")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result published, got %d", len(results))
+	}
+	var result envelope.Result
+	if err := json.Unmarshal(results[0], &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got: %+v", result)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(result.Result, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["state"] != "running" {
+		t.Errorf("state: got %q, want running", payload["state"])
+	}
+	if payload["name"] != "nginx" {
+		t.Errorf("name: got %q, want nginx", payload["name"])
 	}
 }

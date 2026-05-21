@@ -9,6 +9,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/config"
+	"github.com/emilejacobs/control-plane/internal/service"
 	"github.com/emilejacobs/control-plane/internal/transport"
 )
 
@@ -62,7 +63,7 @@ func main() {
 		CertPath: cfg.CertPath,
 		DeviceID: cfg.DeviceID,
 		Version:  cfg.Version,
-	}, tr, agent.WithLogger(logger))
+	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend()))
 	if err != nil {
 		logger.Error("agent", "error", err)
 		os.Exit(1)

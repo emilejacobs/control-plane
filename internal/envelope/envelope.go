@@ -27,3 +27,18 @@ type ResultError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// CodedError is an error a handler can return to surface a stable, machine-readable
+// code on the result envelope (e.g. "service.not_found"). The dispatcher unwraps it
+// via errors.As; any handler error that does not implement this contract falls back
+// to "handler.error".
+type CodedError struct {
+	Code    string
+	Message string
+}
+
+func NewCodedError(code, message string) *CodedError {
+	return &CodedError{Code: code, Message: message}
+}
+
+func (e *CodedError) Error() string { return e.Message }

@@ -204,6 +204,67 @@ func TestDispatcherCatchesHandlerPanic(t *testing.T) {
 	}
 }
 
+func TestDispatcherUsesCodedErrorCode(t *testing.T) {
+	d := dispatcher.New()
+	d.Register("coded", dispatcher.HandlerFunc(func(ctx context.Context, args json.RawMessage) (any, error) {
+		return nil, envelope.NewCodedError("widget.frobnicated", "widget was frobnicated")
+	}))
+
+	cmd := envelope.Command{
+		CorrelationID: "corr",
+		CommandID:     "cmdid",
+		Type:          "coded",
+		IssuedAt:      time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC),
+	}
+	cmdBytes, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	resultBytes, err := d.Dispatch(context.Background(), cmdBytes)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	var result envelope.Result
+	if err := json.Unmarshal(resultBytes, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.Success {
+		t.Errorf("expected success=false, got true")
+	}
+	if result.Error == nil {
+		t.Fatalf("expected error to be set")
+	}
+	if result.Error.Code != "widget.frobnicated" {
+		t.Errorf("Error.Code: got %q, want widget.frobnicated", result.Error.Code)
+	}
+	if result.Error.Message != "widget was frobnicated" {
+		t.Errorf("Error.Message: got %q, want widget was frobnicated", result.Error.Message)
+	}
+}
+
+func TestDispatcherWrapsPlainErrorAsHandlerError(t *testing.T) {
+	d := dispatcher.New()
+	d.Register("plain", dispatcher.HandlerFunc(func(ctx context.Context, args json.RawMessage) (any, error) {
+		return nil, errors.New("something broke")
+	}))
+
+	cmd := envelope.Command{Type: "plain", IssuedAt: time.Now()}
+	cmdBytes, _ := json.Marshal(cmd)
+	resultBytes, err := d.Dispatch(context.Background(), cmdBytes)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	var result envelope.Result
+	if err := json.Unmarshal(resultBytes, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.Error == nil || result.Error.Code != "handler.error" {
+		t.Errorf("expected Error.Code=handler.error, got %+v", result.Error)
+	}
+}
+
 func TestDispatcherHandlerReturnedError(t *testing.T) {
 	d := dispatcher.New()
 	d.Register("fail", dispatcher.HandlerFunc(func(ctx context.Context, args json.RawMessage) (any, error) {

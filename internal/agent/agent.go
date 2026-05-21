@@ -12,6 +12,8 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
+	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
+	"github.com/emilejacobs/control-plane/internal/service"
 )
 
 type Config struct {
@@ -27,16 +29,21 @@ type Transport interface {
 }
 
 type Agent struct {
-	transport  Transport
-	dispatcher *dispatcher.Dispatcher
-	deviceID   string
-	logger     *slog.Logger
+	transport      Transport
+	dispatcher     *dispatcher.Dispatcher
+	deviceID       string
+	logger         *slog.Logger
+	serviceBackend service.Backend
 }
 
 type Option func(*Agent)
 
 func WithLogger(l *slog.Logger) Option {
 	return func(a *Agent) { a.logger = l }
+}
+
+func WithServiceBackend(b service.Backend) Option {
+	return func(a *Agent) { a.serviceBackend = b }
 }
 
 func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
@@ -55,6 +62,9 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 
 	a.dispatcher = dispatcher.New(dispatcher.WithLogger(a.logger))
 	a.dispatcher.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, time.Now()))
+	if a.serviceBackend != nil {
+		a.dispatcher.Register("service.status", servicestatus.New(a.serviceBackend))
+	}
 
 	return a, nil
 }
