@@ -1,6 +1,6 @@
 # Issue 19 — Structured logs + correlation ID library
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 
 ## Parent
@@ -34,3 +34,37 @@ Scope:
 ## Blocked by
 
 - None — lands early so subsequent slices benefit. Can run in parallel with #03.
+
+## Comments
+
+### 2026-05-21 — landed in 6 commits (`a1e55dd`..`de4e955`)
+
+Shared `internal/cp/cplog` package + middleware wired into cp-api.
+ADR-011 baseline (ts/level/service/msg + correlation_id) emitted on
+every line; X-Correlation-Id echoed on every response. CI gate via
+`go/parser` scan of handler files prevents future regressions.
+
+- `cplog.New(w, service)` builds the base slog.Logger with ADR-011's
+  `ts` field (slog's default `time` renamed via ReplaceAttr) and the
+  service pre-bound (cycle 3).
+- `cplog.Middleware(base)` extracts X-Correlation-Id (or generates a
+  fresh UUID), echoes on response, scopes the request logger, and
+  emits one access-log line per request with
+  method/path/status/duration_ms (cycles 1, 2, 4).
+- `cplog.FromContext(ctx)` returns the request-scoped logger; falls
+  back to slog.Default() at startup paths (cycle 2).
+- CI gate: `TestHandlersDoNotImportSlogDirectly` walks
+  `internal/cp/api/handlers/` and fails on any direct `log/slog`
+  import. Paired positive test
+  (`TestSlogImportScannerCatchesViolation`) proves the scanner
+  actually catches bad files — without it a silently-broken scanner
+  would produce meaningless green runs (cycle 5).
+- End-to-end: `TestCorrelationIDFlowsEndToEnd` POSTs /enrollments
+  with X-Correlation-Id, asserts the captured access-log line carries
+  the same id through the real router + handler chain (cycle 6).
+
+**Cross-service propagation deferred** — the acceptance criterion
+mentions cp-ingest and audit-log entries, neither of which exists in
+Phase 1 yet. Both will use the same `cplog.FromContext` pattern when
+they land (#07 ingest, #20 audit log). The library is in place, the
+tests will extend.
