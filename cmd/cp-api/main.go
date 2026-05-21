@@ -32,13 +32,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := cplog.New(os.Stdout, "cp-api")
 	slog.SetDefault(logger)
 
 	if err := run(logger); err != nil {
@@ -94,6 +95,7 @@ func run(logger *slog.Logger) error {
 		Handler: api.NewRouter(api.Deps{
 			Registry:             reg,
 			IdempotencyStore:     idemStore,
+			Logger:               logger,
 			DevDevicesGetEnabled: devDevicesGet,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

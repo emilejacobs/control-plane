@@ -8,17 +8,24 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
 type Deps struct {
 	Registry         *registry.Registry
 	IdempotencyStore middleware.IdempotencyStore
+
+	// Logger is the base slog.Logger that cplog.Middleware wraps per
+	// request. nil falls back to slog.Default(); tests pass a discard
+	// logger to keep -v output clean.
+	Logger *slog.Logger
 
 	// DevDevicesGetEnabled exposes GET /devices/{id} without auth. Issue 03's
 	// dev-only escape hatch; #04 removes the flag and adds the auth middleware.
@@ -75,7 +82,8 @@ func NewBuilderWith(d Deps) *Builder {
 	return b
 }
 
-// NewRouter returns a ready-to-serve http.Handler.
+// NewRouter returns a ready-to-serve http.Handler with the cplog
+// correlation+access-log middleware wrapped around every route.
 func NewRouter(d Deps) http.Handler {
-	return NewBuilderWith(d).Handler()
+	return cplog.Middleware(d.Logger)(NewBuilderWith(d).Handler())
 }

@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
@@ -44,6 +46,7 @@ func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:             reg,
 		IdempotencyStore:     idemStore,
+		Logger:               cplog.New(io.Discard, "cp-api-test"),
 		DevDevicesGetEnabled: true,
 	}))
 	t.Cleanup(srv.Close)
