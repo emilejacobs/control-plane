@@ -1,6 +1,6 @@
 # Issue 06 — LaunchDaemon plist + systemd unit file
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 

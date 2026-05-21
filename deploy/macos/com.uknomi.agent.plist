@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.uknomi.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/uknomi-agent</string>
+        <string>--config</string>
+        <string>/etc/uknomi/agent.json</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!--
+        KeepAlive with SuccessfulExit=false: launchd will relaunch the agent only
+        if it exits non-zero (i.e. crashes). A clean SIGTERM exit (exit code 0)
+        will NOT trigger a relaunch — this lets `launchctl unload` actually stop
+        the service.
+    -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/uknomi-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/uknomi-agent.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/var/empty</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

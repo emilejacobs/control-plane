@@ -1,0 +1,25 @@
+[Unit]
+Description=uKnomi edge agent
+Documentation=https://github.com/emilejacobs/control-plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/uknomi-agent --config /etc/uknomi/agent.json
+Restart=on-failure
+RestartSec=5
+User=root
+
+# Structured JSON logs go to stderr; systemd captures them in journald.
+StandardOutput=journal
+StandardError=journal
+
+# Modest hardening. Phase 0 keeps this conservative; tighten in Phase 1 when
+# the runtime user is moved off root.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
