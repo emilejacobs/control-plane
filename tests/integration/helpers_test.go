@@ -34,11 +34,12 @@ var testSigningKey = []byte("integration-test-signing-key-zzzz-32-bytes")
 // Postgres pool for direct row assertions and a captured log buffer for
 // correlation-id tests. Tests that don't care about logs ignore Logs.
 type testServer struct {
-	URL   string
-	Pool  *pgxpool.Pool
-	IoT   *iotprovisioner.Fake
-	Logs  *syncBuffer
-	AuthN *authn.AuthN
+	URL      string
+	Pool     *pgxpool.Pool
+	IoT      *iotprovisioner.Fake
+	Logs     *syncBuffer
+	AuthN    *authn.AuthN
+	Registry *registry.Registry
 }
 
 // syncBuffer is bytes.Buffer with a mutex for the concurrent-writer case
@@ -91,7 +92,7 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 		Logger:           cplog.New(logs, "cp-api-test"),
 	}))
 	t.Cleanup(srv.Close)
-	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc}
+	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc, Registry: reg}
 }
 
 // mintAccessToken returns a freshly-signed operator access token valid for a

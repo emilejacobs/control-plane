@@ -58,9 +58,9 @@ type EnrollOutput struct {
 	MtlsCertExpiresAt time.Time
 }
 
-// Device is the static row returned by GetByID. Computed fields (is_online,
-// last_seen_ago_seconds, mtls_cert_days_remaining per PRD § API contracts)
-// land in the presence (#07) and cert-expiry (#09) slices.
+// Device is the row returned by GetByID. LastSeen is the raw last_seen
+// column (nil until the first heartbeat lands); the API derives is_online
+// and last_seen_ago_seconds from it. mtls_cert_days_remaining lands in #09.
 type Device struct {
 	ID           string
 	Hostname     string
@@ -69,6 +69,7 @@ type Device struct {
 	OSVersion    string
 	AgentVersion string
 	IoTThingARN  string
+	LastSeen     *time.Time
 	EnrolledAt   time.Time
 }
 
@@ -76,11 +77,11 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 	var d Device
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, hostname, hardware_uuid, hardware_kind,
-		       os_version, agent_version, iot_thing_arn, enrolled_at
+		       os_version, agent_version, iot_thing_arn, last_seen, enrolled_at
 		FROM devices WHERE id = $1
 	`, id).Scan(
 		&d.ID, &d.Hostname, &d.HardwareUUID, &d.HardwareKind,
-		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN, &d.EnrolledAt,
+		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN, &d.LastSeen, &d.EnrolledAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -89,6 +90,26 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		return Device{}, fmt.Errorf("get device: %w", err)
 	}
 	return d, nil
+}
+
+// UpdateLastSeen stamps a device's last_seen column. An id that matches no
+// row — including a syntactically invalid one — returns ErrDeviceNotFound,
+// so the presence ingester can route an unknown-device heartbeat to the DLQ
+// instead of looping on it.
+func (r *Registry) UpdateLastSeen(ctx context.Context, deviceID string, at time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices SET last_seen = $2, updated_at = now() WHERE id = $1
+	`, deviceID, at)
+	if err != nil {
+		return fmt.Errorf("update last_seen: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
 }
 
 func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, error) {
