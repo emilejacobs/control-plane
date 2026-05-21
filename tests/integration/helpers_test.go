@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"testing"
@@ -11,7 +12,41 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
+	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/cp/storage"
 )
+
+const testBootstrapKey = "test-bootstrap-key"
+
+// testServer bundles the live fixtures an integration test needs: an HTTP
+// server wired to a Registry + fake IoTProvisioner, plus the underlying
+// Postgres pool for direct row assertions.
+type testServer struct {
+	URL  string
+	Pool *pgxpool.Pool
+	IoT  *iotprovisioner.Fake
+}
+
+// newTestServer starts a Postgres testcontainer, applies migrations, wires the
+// CP API router with feature flags enabled, and registers t.Cleanup hooks.
+func newTestServer(t *testing.T, ctx context.Context) *testServer {
+	t.Helper()
+	pool := startPostgres(t, ctx)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	iot := iotprovisioner.NewFake()
+	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
+	srv := httptest.NewServer(api.NewRouter(api.Deps{
+		Registry:             reg,
+		DevDevicesGetEnabled: true,
+	}))
+	t.Cleanup(srv.Close)
+	return &testServer{URL: srv.URL, Pool: pool, IoT: iot}
+}
 
 func requireDocker(t *testing.T) {
 	t.Helper()

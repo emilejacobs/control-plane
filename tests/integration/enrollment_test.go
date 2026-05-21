@@ -6,31 +6,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
-
-	"github.com/emilejacobs/control-plane/internal/cp/api"
-	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
-	"github.com/emilejacobs/control-plane/internal/cp/registry"
-	"github.com/emilejacobs/control-plane/internal/cp/storage"
 )
 
 func TestEnrollmentHappyPath(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
 
-	pool := startPostgres(t, ctx)
-	if err := storage.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	iot := iotprovisioner.NewFake()
-	reg := registry.New(pool, iot, registry.Config{BootstrapKey: "test-bootstrap-key"})
-	srv := httptest.NewServer(api.NewRouter(api.Deps{Registry: reg}))
-	t.Cleanup(srv.Close)
+	srv := newTestServer(t, ctx)
 
 	body := map[string]any{
-		"bootstrap_key": "test-bootstrap-key",
+		"bootstrap_key": testBootstrapKey,
 		"hostname":      "mac-mini-acme-01",
 		"hardware_uuid": "11111111-2222-3333-4444-555555555555",
 		"hardware_kind": "mac",
@@ -42,7 +28,7 @@ func TestEnrollmentHappyPath(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", srv.URL+"/enrollments", bytes.NewReader(buf))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/enrollments", bytes.NewReader(buf))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -89,7 +75,7 @@ func TestEnrollmentHappyPath(t *testing.T) {
 	}
 
 	var hostname, hwUUID string
-	err = pool.QueryRow(ctx,
+	err = srv.Pool.QueryRow(ctx,
 		`SELECT hostname, hardware_uuid FROM devices WHERE id = $1`,
 		out.DeviceID,
 	).Scan(&hostname, &hwUUID)

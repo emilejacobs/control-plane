@@ -47,6 +47,36 @@ type EnrollOutput struct {
 	MtlsCertExpiresAt time.Time
 }
 
+// Device is the static row returned by GetByID. Computed fields (is_online,
+// last_seen_ago_seconds, mtls_cert_days_remaining per PRD § API contracts)
+// land in the presence (#07) and cert-expiry (#09) slices.
+type Device struct {
+	ID           string
+	Hostname     string
+	HardwareUUID string
+	HardwareKind string
+	OSVersion    string
+	AgentVersion string
+	IoTThingARN  string
+	EnrolledAt   time.Time
+}
+
+func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
+	var d Device
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, hostname, hardware_uuid, hardware_kind,
+		       os_version, agent_version, iot_thing_arn, enrolled_at
+		FROM devices WHERE id = $1
+	`, id).Scan(
+		&d.ID, &d.Hostname, &d.HardwareUUID, &d.HardwareKind,
+		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN, &d.EnrolledAt,
+	)
+	if err != nil {
+		return Device{}, fmt.Errorf("get device: %w", err)
+	}
+	return d, nil
+}
+
 func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, error) {
 	deviceID := uuid.NewString()
 	cert, err := r.iot.ProvisionDevice(ctx, deviceID)
