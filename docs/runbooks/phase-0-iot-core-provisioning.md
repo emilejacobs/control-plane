@@ -1,5 +1,9 @@
 # Phase 0 — Manual IoT Core provisioning
 
+> **2026-05-20: Codified in Terraform.** The Phase 0 macOS smoke session surfaced enough manual-provisioning friction to motivate scaffolding the codified version early. See [`infra/terraform/README.md`](../../infra/terraform/) — one command (`./provision-device.sh apply <device_id>`) replaces sections 1–6 of this runbook. The Terraform also uses the corrected policy shape; this manual runbook's policy does not work with `agent-cli` as written (see [Phase 0 issue 10](../../.scratch/phase-0-agent-spike/issues/10-agent-cli-iot-policy-fix.md)).
+>
+> This runbook is preserved as the manual reference and as input for the eventual `POST /enrollments` endpoint (ADR-004) that Phase 1 will land.
+
 How to provision an AWS IoT Core thing + mTLS cert for a single device, by hand. This runbook covers the manual flow used during Phase 0. Phase 1 replaces it with the `POST /enrollments` endpoint (see ADR-004) and the `mac-mini-rollout` install module.
 
 ## When to use this

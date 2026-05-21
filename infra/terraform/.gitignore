@@ -1,0 +1,10 @@
+# Terraform state contains sensitive material (cert private keys). Never
+# commit it. Move to S3 + KMS-encrypted backend before sharing this dir.
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+*.auto.tfvars
+
+# Sensitive output dumps from the provisioning helper script.
+out/
