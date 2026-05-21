@@ -51,3 +51,10 @@ func (f *Fake) ProvisionDevice(_ context.Context, deviceID string) (DeviceCert, 
 }
 
 func (f *Fake) Revoke(_ context.Context, _ string) error { return nil }
+
+// Count returns the number of successful ProvisionDevice calls. Test-only.
+func (f *Fake) Count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seq
+}

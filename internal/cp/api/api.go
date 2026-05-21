@@ -6,11 +6,13 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
+	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
 type Deps struct {
-	Registry *registry.Registry
+	Registry         *registry.Registry
+	IdempotencyStore middleware.IdempotencyStore
 
 	// DevDevicesGetEnabled exposes GET /devices/{id} without auth. Issue 03's
 	// dev-only escape hatch; #04 removes the flag and adds the auth middleware.
@@ -19,7 +21,8 @@ type Deps struct {
 
 func NewRouter(d Deps) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /enrollments", enrollment.New(d.Registry))
+	idem := middleware.Idempotency(d.IdempotencyStore)
+	mux.Handle("POST /enrollments", idem(enrollment.New(d.Registry)))
 	if d.DevDevicesGetEnabled {
 		mux.Handle("GET /devices/{id}", devices.NewGet(d.Registry))
 	}

@@ -40,8 +40,10 @@ func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	}
 	iot := iotprovisioner.NewFake()
 	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
+	idemStore := storage.NewIdempotencyStore(pool)
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:             reg,
+		IdempotencyStore:     idemStore,
 		DevDevicesGetEnabled: true,
 	}))
 	t.Cleanup(srv.Close)
