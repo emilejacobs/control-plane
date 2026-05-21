@@ -1,6 +1,6 @@
 # Issue 03 — Bench enrollment end-to-end
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 
 ## Parent
@@ -36,3 +36,43 @@ No auth, no presence, no rate limiting, no hardening — those are subsequent sl
 ## Blocked by
 
 - Issue 02 (schema migrations tooling decision).
+
+## Comments
+
+### 2026-05-21 — landed in 10 commits (`f4df496`..`8a7689d`)
+
+AFK acceptance criteria all green. Test posture: 8 integration tests
+behind testcontainers Postgres + moto IoT, ~25s total runtime.
+
+- `POST /enrollments` mints IoT thing + cert + Postgres row — verified
+  with the fake provisioner (cycle 1) and against moto end-to-end
+  (cycle 9, `TestEnrollmentAgainstMotoIoT`).
+- Idempotent replay with the same `Idempotency-Key` returns the stored
+  body and does not re-mint a cert (cycle 3,
+  `TestEnrollmentIdempotentReplay`). Replay returns 200 per PRD; first
+  is 201.
+- `GET /devices/{id}` returns the inserted row, gated behind the
+  `CP_DEV_DEVICES_GET` env var that #04 will remove (cycle 2).
+- Idempotency CI gate: `api.Builder` records every state-mutating
+  route, and `TestIdempotencyGate` probes each one without the header
+  to confirm 400 (cycle 7). A new `POST/PUT/PATCH/DELETE` registered
+  through `Builder` is wrapped by construction; bypassing `Builder`
+  requires editing `internal/cp/api/api.go` directly.
+- Error semantics: bad bootstrap key → 401 (cycle 5), missing
+  Idempotency-Key → 400 (cycle 4), unknown device → 404 (cycle 6),
+  with the 4xx-not-stored property pinned by the cycle 5 test.
+- `cmd/cp-api/main.go` (`8a7689d`) wires the binary: pgxpool +
+  on-startup goose, IoT client (`AWS_ENDPOINT_URL`-aware), graceful
+  shutdown on SIGTERM, listens on `PORT` (default 8080).
+
+**Pivot worth noting:** ADR-012 and Issue 03 said "LocalStack or
+moto" for IoT. Cycle 8 tried LocalStack first; LocalStack Community
+returned 501 (IoT is a Pro feature). Switched to `motoserver/moto:latest`.
+Stored in memory so future agents don't re-discover. Other AWS
+services (S3/KMS/Secrets/SQS) can still use LocalStack.
+
+**Open / HITL:** acceptance criterion "an agent installed with the
+returned cert can connect to IoT Core and publish to its topic" — that
+is the Wave 0 bench smoke (Issue 12), explicitly out of scope for AFK.
+The plumbing is ready for that smoke to run against real AWS once Issue
+01's Terraform is `apply`'d.
