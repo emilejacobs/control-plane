@@ -14,6 +14,9 @@ type Config struct {
 	CertPath   string `json:"cert_path"`
 	KeyPath    string `json:"key_path"`
 	CACertPath string `json:"ca_cert_path"`
+	// TelemetryInterval is parsed with time.ParseDuration (e.g. "30s"). Empty
+	// or absent means use the agent's default (30s).
+	TelemetryInterval string `json:"telemetry_interval,omitempty"`
 }
 
 func Load(path string) (*Config, error) {

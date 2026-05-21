@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
@@ -15,12 +16,16 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
+	"github.com/emilejacobs/control-plane/internal/telemetry"
 )
 
+const defaultTelemetryInterval = 30 * time.Second
+
 type Config struct {
-	CertPath string
-	DeviceID string
-	Version  string
+	CertPath          string
+	DeviceID          string
+	Version           string
+	TelemetryInterval time.Duration
 }
 
 type Transport interface {
@@ -33,8 +38,14 @@ type Agent struct {
 	transport      Transport
 	dispatcher     *dispatcher.Dispatcher
 	deviceID       string
+	version        string
 	logger         *slog.Logger
 	serviceBackend service.Backend
+	startTime      time.Time
+	telemetry      *telemetry.Publisher
+
+	pubCancel context.CancelFunc
+	pubDone   chan struct{}
 }
 
 type Option func(*Agent)
@@ -55,27 +66,61 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	a := &Agent{
 		transport: transport,
 		deviceID:  cfg.DeviceID,
+		version:   cfg.Version,
 		logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		startTime: time.Now(),
 	}
 	for _, opt := range opts {
 		opt(a)
 	}
 
 	a.dispatcher = dispatcher.New(dispatcher.WithLogger(a.logger))
-	a.dispatcher.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, time.Now()))
+	a.dispatcher.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, a.startTime))
 	if a.serviceBackend != nil {
 		a.dispatcher.Register("service.status", servicestatus.New(a.serviceBackend))
 		a.dispatcher.Register("service.restart", servicerestart.New(a.serviceBackend))
 	}
 
+	interval := cfg.TelemetryInterval
+	if interval <= 0 {
+		interval = defaultTelemetryInterval
+	}
+	a.telemetry = &telemetry.Publisher{
+		Interval:   interval,
+		DeviceID:   cfg.DeviceID,
+		Collectors: a.defaultCollectors(),
+		Transport:  transport,
+		Logger:     a.logger,
+	}
+
 	return a, nil
+}
+
+func (a *Agent) defaultCollectors() []func() map[string]any {
+	return []func() map[string]any{
+		func() map[string]any {
+			return map[string]any{
+				"device_id":      a.deviceID,
+				"version":        a.version,
+				"os":             runtime.GOOS,
+				"uptime_seconds": int64(time.Since(a.startTime).Seconds()),
+			}
+		},
+		func() map[string]any {
+			last := a.dispatcher.LastCommandAt()
+			if last.IsZero() {
+				return map[string]any{"last_command_at": nil}
+			}
+			return map[string]any{"last_command_at": last.UTC().Format(time.RFC3339)}
+		},
+	}
 }
 
 func (a *Agent) Start() error {
 	cmdTopic := "devices/" + a.deviceID + "/cmd"
 	resultTopic := "devices/" + a.deviceID + "/cmd-result"
 
-	return a.transport.Subscribe(cmdTopic, func(_ string, payload []byte) {
+	if err := a.transport.Subscribe(cmdTopic, func(_ string, payload []byte) {
 		resultBytes, err := a.dispatcher.Dispatch(context.Background(), payload)
 		if err != nil {
 			a.logger.Error("dispatch failed", "error", err)
@@ -84,10 +129,25 @@ func (a *Agent) Start() error {
 		if err := a.transport.Publish(resultTopic, resultBytes); err != nil {
 			a.logger.Error("publish result failed", "error", err)
 		}
-	})
+	}); err != nil {
+		return err
+	}
+
+	pubCtx, cancel := context.WithCancel(context.Background())
+	a.pubCancel = cancel
+	a.pubDone = make(chan struct{})
+	go func() {
+		defer close(a.pubDone)
+		a.telemetry.Run(pubCtx)
+	}()
+	return nil
 }
 
 func (a *Agent) Stop() error {
+	if a.pubCancel != nil {
+		a.pubCancel()
+		<-a.pubDone
+	}
 	return a.transport.Close()
 }
 

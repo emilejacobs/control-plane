@@ -306,3 +306,59 @@ func TestAgentDispatchesServiceRestart(t *testing.T) {
 		t.Errorf("finished_at missing or not a string: %v", payload["finished_at"])
 	}
 }
+
+func TestAgentPublishesTelemetryHeartbeats(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newFakeTransport()
+
+	a, err := agent.New(agent.Config{
+		CertPath:          cert,
+		DeviceID:          "dev-001",
+		Version:           "0.1.0",
+		TelemetryInterval: 5 * time.Millisecond,
+	}, tr)
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	topic := "devices/dev-001/telemetry"
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(tr.publishedOn(topic)) > 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	publishes := tr.publishedOn(topic)
+	if len(publishes) == 0 {
+		t.Fatalf("no telemetry publish within 1s on %s", topic)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(publishes[0], &payload); err != nil {
+		t.Fatalf("payload not JSON: %v", err)
+	}
+	if payload["device_id"] != "dev-001" {
+		t.Errorf("device_id: got %v, want dev-001", payload["device_id"])
+	}
+	if payload["version"] != "0.1.0" {
+		t.Errorf("version: got %v, want 0.1.0", payload["version"])
+	}
+	if _, ok := payload["os"].(string); !ok {
+		t.Errorf("os: got %v, want a string", payload["os"])
+	}
+	if _, ok := payload["uptime_seconds"].(float64); !ok {
+		t.Errorf("uptime_seconds: got %T, want number", payload["uptime_seconds"])
+	}
+	if v, ok := payload["last_command_at"]; !ok || v != nil {
+		t.Errorf("last_command_at: want nil (no commands yet), got %v (present=%v)", v, ok)
+	}
+	if corr, ok := payload["correlation_id"].(string); !ok || corr == "" {
+		t.Errorf("correlation_id missing or empty")
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/envelope"
 )
@@ -24,6 +26,18 @@ func (f HandlerFunc) Handle(ctx context.Context, args json.RawMessage) (any, err
 type Dispatcher struct {
 	handlers map[string]Handler
 	logger   *slog.Logger
+
+	mu            sync.RWMutex
+	lastCommandAt time.Time
+}
+
+// LastCommandAt returns the time of the most recent successfully dispatched
+// command (handler returned without error), or the zero value if no command
+// has been dispatched yet.
+func (d *Dispatcher) LastCommandAt() time.Time {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.lastCommandAt
 }
 
 type Option func(*Dispatcher)
@@ -108,6 +122,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 	if err != nil {
 		return nil, err
 	}
+
+	d.mu.Lock()
+	d.lastCommandAt = time.Now().UTC()
+	d.mu.Unlock()
 
 	log.Info("command handled")
 

@@ -1,6 +1,6 @@
 # Issue 05 — Telemetry heartbeat publisher
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/config"
@@ -59,10 +60,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	var telemetryInterval time.Duration
+	if cfg.TelemetryInterval != "" {
+		d, err := time.ParseDuration(cfg.TelemetryInterval)
+		if err != nil {
+			logger.Error("parse telemetry_interval", "value", cfg.TelemetryInterval, "error", err)
+			os.Exit(1)
+		}
+		telemetryInterval = d
+	}
+
 	a, err := agent.New(agent.Config{
-		CertPath: cfg.CertPath,
-		DeviceID: cfg.DeviceID,
-		Version:  cfg.Version,
+		CertPath:          cfg.CertPath,
+		DeviceID:          cfg.DeviceID,
+		Version:           cfg.Version,
+		TelemetryInterval: telemetryInterval,
 	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend()))
 	if err != nil {
 		logger.Error("agent", "error", err)
