@@ -85,14 +85,31 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 	authnSvc := authn.New(pool, authnCfg)
 	logs := &syncBuffer{}
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
-		Registry:             reg,
-		AuthN:                authnSvc,
-		IdempotencyStore:     idemStore,
-		Logger:               cplog.New(logs, "cp-api-test"),
-		DevDevicesGetEnabled: true,
+		Registry:         reg,
+		AuthN:            authnSvc,
+		IdempotencyStore: idemStore,
+		Logger:           cplog.New(logs, "cp-api-test"),
 	}))
 	t.Cleanup(srv.Close)
 	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc}
+}
+
+// mintAccessToken returns a freshly-signed operator access token valid for a
+// server built by newTestServer — the bearer token its Auth middleware
+// expects. It signs with testSigningKey directly, so no DB operator is
+// needed; the middleware only verifies the JWT.
+func mintAccessToken(t *testing.T) string {
+	t.Helper()
+	signer := authn.NewSigner(testSigningKey, time.Hour)
+	token, err := signer.Issue(authn.TokenClaims{
+		OperatorID: "00000000-0000-0000-0000-0000000000aa",
+		Email:      "operator@acmecorp.test",
+		IsStaff:    true,
+	})
+	if err != nil {
+		t.Fatalf("mint access token: %v", err)
+	}
+	return token
 }
 
 func requireDocker(t *testing.T) {

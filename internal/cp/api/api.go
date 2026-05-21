@@ -29,10 +29,6 @@ type Deps struct {
 	// request. nil falls back to slog.Default(); tests pass a discard
 	// logger to keep -v output clean.
 	Logger *slog.Logger
-
-	// DevDevicesGetEnabled exposes GET /devices/{id} without auth. Issue 03's
-	// dev-only escape hatch; #04 removes the flag and adds the auth middleware.
-	DevDevicesGetEnabled bool
 }
 
 // Route names a method + path pair for the CI-gate test to probe.
@@ -83,9 +79,9 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN))
 		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN))
-	}
-	if d.DevDevicesGetEnabled {
-		b.Get("/devices/{id}", devices.NewGet(d.Registry))
+		// Device read routes require a valid operator bearer token.
+		requireAuth := middleware.Auth(d.AuthN)
+		b.Get("/devices/{id}", requireAuth(devices.NewGet(d.Registry)))
 	}
 	return b
 }

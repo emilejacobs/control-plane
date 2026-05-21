@@ -553,6 +553,58 @@ func decodeTokens(t *testing.T, resp *http.Response) (access, refresh string) {
 	return out.AccessToken, out.RefreshToken
 }
 
+// TestDeviceGetRequiresAuth is Issue 04 cycle 9: GET /devices/{id} now sits
+// behind the Auth middleware. A missing, malformed, or wrongly-signed bearer
+// token is rejected with 401; a validly-signed token reaches the handler.
+func TestDeviceGetRequiresAuth(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const deviceID = "00000000-0000-0000-0000-000000000000"
+
+	// No Authorization header at all.
+	resp, err := http.Get(srv.URL + "/devices/" + deviceID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no bearer token: got %d want 401", resp.StatusCode)
+	}
+
+	// A token signed with a key the server doesn't hold.
+	wrongSigner := authn.NewSigner([]byte("a-different-signing-key-not-the-real-one"), time.Hour)
+	wrongToken, err := wrongSigner.Issue(authn.TokenClaims{
+		OperatorID: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+		Email:      "intruder@elsewhere.test",
+		IsStaff:    true,
+	})
+	if err != nil {
+		t.Fatalf("issue wrong-key token: %v", err)
+	}
+	resp = doDeviceGet(t, srv.URL, deviceID, wrongToken)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("wrong-key bearer token: got %d want 401", resp.StatusCode)
+	}
+
+	// A bearer value that isn't a JWT at all.
+	resp = doDeviceGet(t, srv.URL, deviceID, "this-is-not-a-jwt")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("malformed bearer token: got %d want 401", resp.StatusCode)
+	}
+
+	// A validly-signed token passes the middleware and reaches the handler,
+	// which 404s for this unknown id.
+	resp = doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("valid bearer token, unknown id: got %d want 404", resp.StatusCode)
+	}
+}
+
 // auditLogged reports whether the captured slog buffer contains a JSON line
 // whose msg equals wantMsg and whose fields all match want.
 func auditLogged(buf, wantMsg string, want map[string]any) bool {

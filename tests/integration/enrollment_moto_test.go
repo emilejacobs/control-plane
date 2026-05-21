@@ -46,9 +46,8 @@ func TestEnrollmentAgainstMotoIoT(t *testing.T) {
 	reg := registry.New(pool, prov, registry.Config{BootstrapKey: testBootstrapKey})
 	store := storage.NewIdempotencyStore(pool)
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
-		Registry:             reg,
-		IdempotencyStore:     store,
-		DevDevicesGetEnabled: true,
+		Registry:         reg,
+		IdempotencyStore: store,
 	}))
 	t.Cleanup(srv.Close)
 

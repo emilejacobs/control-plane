@@ -34,9 +34,8 @@ func TestIdempotencyGate(t *testing.T) {
 	store := storage.NewIdempotencyStore(pool)
 
 	builder := api.NewBuilderWith(api.Deps{
-		Registry:             reg,
-		IdempotencyStore:     store,
-		DevDevicesGetEnabled: true,
+		Registry:         reg,
+		IdempotencyStore: store,
 	})
 	srv := httptest.NewServer(builder.Handler())
 	t.Cleanup(srv.Close)

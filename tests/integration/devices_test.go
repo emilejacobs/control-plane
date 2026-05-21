@@ -57,10 +57,7 @@ func TestGetDeviceByIDReturnsInsertedRow(t *testing.T) {
 	srv := newTestServer(t, ctx)
 	deviceID := enrollForTest(t, srv, "mac-mini-acme-02", "22222222-2222-3333-4444-555555555555")
 
-	resp, err := http.Get(srv.URL + "/devices/" + deviceID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
+	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
@@ -117,13 +114,26 @@ func TestGetDeviceByIDUnknownReturns404(t *testing.T) {
 	srv := newTestServer(t, ctx)
 
 	// A syntactically-valid UUID that won't match any row.
-	resp, err := http.Get(srv.URL + "/devices/00000000-0000-0000-0000-000000000000")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
+	resp := doDeviceGet(t, srv.URL, "00000000-0000-0000-0000-000000000000", mintAccessToken(t))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status: got %d want 404; body=%s", resp.StatusCode, raw)
 	}
+}
+
+// doDeviceGet issues an authenticated GET /devices/{id}. The caller owns
+// resp.Body.
+func doDeviceGet(t *testing.T, baseURL, deviceID, token string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/devices/"+deviceID, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
 }

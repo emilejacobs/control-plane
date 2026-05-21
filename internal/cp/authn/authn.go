@@ -212,6 +212,13 @@ func (a *AuthN) Refresh(ctx context.Context, refreshToken string) (Tokens, error
 	return a.issueTokens(ctx, operatorID, email, isStaff)
 }
 
+// Authenticate verifies a bearer access token's signature and standard
+// claims, returning the operator claims it carries. Auth middleware calls
+// this on every protected request.
+func (a *AuthN) Authenticate(token string) (TokenClaims, error) {
+	return a.signer.Verify(token)
+}
+
 func (a *AuthN) issueTokens(ctx context.Context, operatorID, email string, isStaff bool) (Tokens, error) {
 	access, err := a.signer.Issue(TokenClaims{
 		OperatorID: operatorID,

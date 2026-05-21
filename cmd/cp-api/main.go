@@ -6,17 +6,18 @@
 //	DB_DSN              Postgres DSN (postgres://...)
 //	CP_BOOTSTRAP_KEY    bootstrap key the install script presents (#10 swaps this for Secrets Manager)
 //	IOT_POLICY_NAME     name of the IoT Core policy to attach to each device cert
+//	JWT_SIGNING_KEY     base64-encoded HS256 signing key, >= 32 bytes decoded (ADR-010)
 //
 // Optional env:
 //
 //	PORT                listen port (default 8080)
 //	AWS_REGION          AWS region (default from default credentials chain)
 //	AWS_ENDPOINT_URL    override the AWS service endpoint (dev/moto only)
-//	CP_DEV_DEVICES_GET  "true" to expose GET /devices/{id} without auth (Issue 03 dev escape; removed in #04)
 package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -53,6 +55,14 @@ func run(logger *slog.Logger) error {
 	bootstrapKey := mustEnv("CP_BOOTSTRAP_KEY")
 	policyName := mustEnv("IOT_POLICY_NAME")
 	port := envOr("PORT", "8080")
+
+	signingKey, err := base64.StdEncoding.DecodeString(mustEnv("JWT_SIGNING_KEY"))
+	if err != nil {
+		return fmt.Errorf("JWT_SIGNING_KEY is not valid base64: %w", err)
+	}
+	if len(signingKey) < 32 {
+		return fmt.Errorf("JWT_SIGNING_KEY must decode to at least 32 bytes, got %d", len(signingKey))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -84,19 +94,15 @@ func run(logger *slog.Logger) error {
 	prov := iotprovisioner.NewAWS(iotClient, policyName)
 	reg := registry.New(pool, prov, registry.Config{BootstrapKey: bootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
-
-	devDevicesGet := os.Getenv("CP_DEV_DEVICES_GET") == "true"
-	if devDevicesGet {
-		logger.Warn("CP_DEV_DEVICES_GET enabled — GET /devices/{id} is unauthenticated")
-	}
+	authnSvc := authn.New(pool, authn.Config{SigningKey: signingKey})
 
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
-			Registry:             reg,
-			IdempotencyStore:     idemStore,
-			Logger:               logger,
-			DevDevicesGetEnabled: devDevicesGet,
+			Registry:         reg,
+			AuthN:            authnSvc,
+			IdempotencyStore: idemStore,
+			Logger:           logger,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
