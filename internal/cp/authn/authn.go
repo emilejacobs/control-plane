@@ -23,13 +23,26 @@ var ErrSystemAlreadyInitialized = errors.New("system already initialized")
 // callers can't probe for valid emails. Handlers translate to HTTP 401.
 var ErrInvalidCredentials = errors.New("invalid credentials")
 
+// ErrAccountLocked is returned by Login while an account is inside its
+// lockout window. Handlers translate to HTTP 429.
+var ErrAccountLocked = errors.New("account locked")
+
+// Lockout policy: maxFailedAttempts consecutive failures lock the account
+// for lockoutWindow. A successful login clears both the counter and the lock.
+const (
+	maxFailedAttempts = 5
+	lockoutWindow     = 15 * time.Minute
+)
+
 // Config is the per-instance AuthN configuration. SigningKey is required;
 // the TTL fields default to ADR-010 values (1h access, 24h refresh) when
-// zero.
+// zero. Now defaults to time.Now; tests inject a fake clock to drive
+// lockout-window expiry.
 type Config struct {
 	SigningKey      []byte
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	Now             func() time.Time
 }
 
 // AuthN is the deep module for operator authentication: password handling,
@@ -38,6 +51,7 @@ type AuthN struct {
 	pool       *pgxpool.Pool
 	signer     *Signer
 	refreshTTL time.Duration
+	now        func() time.Time
 }
 
 func New(pool *pgxpool.Pool, cfg Config) *AuthN {
@@ -49,10 +63,15 @@ func New(pool *pgxpool.Pool, cfg Config) *AuthN {
 	if refreshTTL == 0 {
 		refreshTTL = 24 * time.Hour
 	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &AuthN{
 		pool:       pool,
 		signer:     NewSigner(cfg.SigningKey, accessTTL),
 		refreshTTL: refreshTTL,
+		now:        now,
 	}
 }
 
@@ -95,17 +114,20 @@ func (a *AuthN) ClaimFirstRunAdmin(ctx context.Context, email, password string) 
 }
 
 // Login verifies email + password and, on success, issues a fresh token
-// pair and clears the failed-login counter. An unknown email or a wrong
-// password both return ErrInvalidCredentials. Per-account lockout enforcement
-// arrives in a later slice.
+// pair and clears the failed-login state. An unknown email or a wrong
+// password both return ErrInvalidCredentials; an account inside its lockout
+// window returns ErrAccountLocked. maxFailedAttempts consecutive failures
+// lock the account for lockoutWindow.
 func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 
 	var operatorID, hash string
 	var isStaff bool
+	var lockedUntil *time.Time
 	err := a.pool.QueryRow(ctx, `
-		SELECT id, password_hash, is_staff FROM operators WHERE email = $1
-	`, email).Scan(&operatorID, &hash, &isStaff)
+		SELECT id, password_hash, is_staff, locked_until
+		FROM operators WHERE email = $1
+	`, email).Scan(&operatorID, &hash, &isStaff, &lockedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tokens{}, ErrInvalidCredentials
 	}
@@ -113,19 +135,30 @@ func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, erro
 		return Tokens{}, fmt.Errorf("lookup operator: %w", err)
 	}
 
+	// A locked account is refused outright: the password is not checked
+	// and the failed-attempt counter is left untouched.
+	if lockedUntil != nil && a.now().Before(*lockedUntil) {
+		return Tokens{}, ErrAccountLocked
+	}
+
 	ok, err := VerifyPassword(password, hash)
 	if err != nil {
 		return Tokens{}, fmt.Errorf("verify password: %w", err)
 	}
 	if !ok {
-		// Count the failed attempt against this account. Lockout
-		// enforcement once the counter crosses the threshold is a
-		// later slice.
+		// Count the failed attempt; the one that crosses the threshold
+		// trips the lockout, dated by the AuthN clock so tests can drive
+		// window expiry.
 		if _, err := a.pool.Exec(ctx, `
 			UPDATE operators
-			SET failed_login_count = failed_login_count + 1, updated_at = now()
+			SET failed_login_count = failed_login_count + 1,
+			    locked_until = CASE
+			        WHEN failed_login_count + 1 >= $2 THEN $3::timestamptz
+			        ELSE locked_until
+			    END,
+			    updated_at = now()
 			WHERE id = $1
-		`, operatorID); err != nil {
+		`, operatorID, maxFailedAttempts, a.now().Add(lockoutWindow)); err != nil {
 			return Tokens{}, fmt.Errorf("record failed login: %w", err)
 		}
 		return Tokens{}, ErrInvalidCredentials
@@ -160,7 +193,7 @@ func (a *AuthN) issueTokens(ctx context.Context, operatorID, email string, isSta
 	if _, err := a.pool.Exec(ctx, `
 		INSERT INTO refresh_tokens (token_hash, operator_id, expires_at)
 		VALUES ($1, $2, $3)
-	`, hashBytes, operatorID, time.Now().Add(a.refreshTTL)); err != nil {
+	`, hashBytes, operatorID, a.now().Add(a.refreshTTL)); err != nil {
 		return Tokens{}, fmt.Errorf("insert refresh token: %w", err)
 	}
 

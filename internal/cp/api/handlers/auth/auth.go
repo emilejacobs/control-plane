@@ -87,6 +87,11 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
+		if errors.Is(err, authn.ErrAccountLocked) {
+			log.Info("audit.login", "outcome", "failure", "reason", "account_locked", "email", req.Email)
+			http.Error(w, "account locked", http.StatusTooManyRequests)
+			return
+		}
 		log.Error("audit.login", "outcome", "error", "email", req.Email, "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
 )
 
 // TestFirstRunHappyPath is Issue 04 cycle 3: a POST /auth/first-run on a
@@ -309,6 +313,118 @@ func TestLoginWrongPasswordRejected(t *testing.T) {
 	}) {
 		t.Errorf("no audit.login failure log line found.\nFull log buffer:\n%s", srv.Logs.String())
 	}
+}
+
+// TestLoginLockout is Issue 04 cycle 7: five consecutive failures lock the
+// account for 15 minutes — even the correct password is then refused with
+// 429 — and the lock releases once the window elapses. A fake clock drives
+// window expiry.
+func TestLoginLockout(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	clock := newFakeClock(time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
+	srv := newTestServerCfg(t, ctx, authn.Config{Now: clock.Now})
+
+	const email = "operator@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	if code := doFirstRun(t, srv.URL, email, password,
+		"00000000-0000-0000-0000-0000000000f1"); code != http.StatusCreated {
+		t.Fatalf("first-run setup: got %d want 201", code)
+	}
+
+	// Five wrong-password attempts. Each is a bad credential (401); the
+	// fifth also trips the lockout.
+	for i := 1; i <= 5; i++ {
+		resp := doLogin(t, srv.URL, email, "wrong-password",
+			fmt.Sprintf("00000000-0000-0000-0000-0000000007%02d", i))
+		if resp.StatusCode != http.StatusUnauthorized {
+			resp.Body.Close()
+			t.Fatalf("failed attempt %d: got %d want 401", i, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	// The account is now locked: the *correct* password is refused with 429.
+	resp := doLogin(t, srv.URL, email, password, "00000000-0000-0000-0000-000000000710")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		resp.Body.Close()
+		t.Fatalf("locked account, correct password: got %d want 429", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	var lockedUntil *time.Time
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT locked_until FROM operators WHERE email = $1`, email,
+	).Scan(&lockedUntil); err != nil {
+		t.Fatalf("query locked_until: %v", err)
+	}
+	if lockedUntil == nil || !lockedUntil.After(clock.Now()) {
+		t.Fatalf("locked_until not set in the future: %v", lockedUntil)
+	}
+
+	// 14 minutes in, still inside the window — still locked.
+	clock.Advance(14 * time.Minute)
+	resp = doLogin(t, srv.URL, email, password, "00000000-0000-0000-0000-000000000711")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		resp.Body.Close()
+		t.Fatalf("14 min into lockout: got %d want 429", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Past the 15-minute window, the correct password works again.
+	clock.Advance(2 * time.Minute)
+	resp = doLogin(t, srv.URL, email, password, "00000000-0000-0000-0000-000000000712")
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("after lockout window: got %d want 200; body=%s", resp.StatusCode, raw)
+	}
+	resp.Body.Close()
+
+	// The recovered login cleared the lockout state.
+	var failedCount int
+	var clearedLock *time.Time
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT failed_login_count, locked_until FROM operators WHERE email = $1`, email,
+	).Scan(&failedCount, &clearedLock); err != nil {
+		t.Fatalf("query lockout state: %v", err)
+	}
+	if failedCount != 0 {
+		t.Errorf("failed_login_count after recovery: got %d want 0", failedCount)
+	}
+	if clearedLock != nil {
+		t.Errorf("locked_until not cleared after successful login: %v", clearedLock)
+	}
+
+	if !auditLogged(srv.Logs.String(), "audit.login", map[string]any{
+		"outcome": "failure",
+		"reason":  "account_locked",
+		"email":   email,
+	}) {
+		t.Errorf("no audit.login account_locked log line found.\nFull log buffer:\n%s", srv.Logs.String())
+	}
+}
+
+// fakeClock is a manually-advanced clock for lockout-window tests. Its Now
+// method is passed to authn.Config.Now; Advance moves it forward.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock(t time.Time) *fakeClock { return &fakeClock{now: t} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }
 
 // doLogin POSTs /auth/login. The caller owns resp.Body.

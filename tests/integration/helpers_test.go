@@ -64,7 +64,17 @@ func (s *syncBuffer) String() string {
 // newTestServer starts a Postgres testcontainer, applies migrations, wires the
 // CP API router with feature flags enabled, and registers t.Cleanup hooks.
 func newTestServer(t *testing.T, ctx context.Context) *testServer {
+	return newTestServerCfg(t, ctx, authn.Config{SigningKey: testSigningKey})
+}
+
+// newTestServerCfg is newTestServer with an explicit AuthN config — the
+// lockout test uses it to inject a fake clock. An empty SigningKey is
+// backfilled with testSigningKey so callers only set what they care about.
+func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) *testServer {
 	t.Helper()
+	if authnCfg.SigningKey == nil {
+		authnCfg.SigningKey = testSigningKey
+	}
 	pool := startPostgres(t, ctx)
 	if err := storage.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -72,7 +82,7 @@ func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	iot := iotprovisioner.NewFake()
 	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
-	authnSvc := authn.New(pool, authn.Config{SigningKey: testSigningKey})
+	authnSvc := authn.New(pool, authnCfg)
 	logs := &syncBuffer{}
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:             reg,
