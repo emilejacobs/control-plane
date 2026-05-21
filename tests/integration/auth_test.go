@@ -102,6 +102,79 @@ func TestFirstRunHappyPath(t *testing.T) {
 	}
 }
 
+// TestFirstRunSecondCallGone is Issue 04 cycle 4: once the system is
+// initialized, a second POST /auth/first-run is rejected with 410 Gone and
+// no second operator row is created.
+func TestFirstRunSecondCallGone(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// First claim succeeds.
+	if code := doFirstRun(t, srv.URL, "admin@acmecorp.test", "correct-horse-battery-staple",
+		"00000000-0000-0000-0000-0000000000f1"); code != http.StatusCreated {
+		t.Fatalf("first claim: got %d want 201", code)
+	}
+
+	// Second claim — distinct email and Idempotency-Key so it reaches the
+	// handler rather than replaying the cached first response — is denied.
+	const secondEmail = "intruder@acmecorp.test"
+	code := doFirstRun(t, srv.URL, secondEmail, "another-password-entirely",
+		"00000000-0000-0000-0000-0000000000f2")
+	if code != http.StatusGone {
+		t.Fatalf("second claim: got %d want 410", code)
+	}
+
+	// Still exactly one operator, and it is not the intruder.
+	var count int
+	if err := srv.Pool.QueryRow(ctx, `SELECT count(*) FROM operators`).Scan(&count); err != nil {
+		t.Fatalf("count operators: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("operator rows: got %d want 1", count)
+	}
+	var intruderExists bool
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT exists(SELECT 1 FROM operators WHERE email = $1)`, secondEmail,
+	).Scan(&intruderExists); err != nil {
+		t.Fatalf("check intruder: %v", err)
+	}
+	if intruderExists {
+		t.Errorf("second first-run created an operator row %q", secondEmail)
+	}
+
+	// The denied attempt is audit-logged.
+	if !auditLogged(srv.Logs.String(), "audit.first_run", map[string]any{
+		"outcome": "denied",
+		"reason":  "already_initialized",
+		"email":   secondEmail,
+	}) {
+		t.Errorf("no audit.first_run denied log line found.\nFull log buffer:\n%s", srv.Logs.String())
+	}
+}
+
+// doFirstRun POSTs /auth/first-run and returns the status code.
+func doFirstRun(t *testing.T, baseURL, email, password, idempotencyKey string) int {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"email": email, "password": password})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/auth/first-run", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
 // auditLogged reports whether the captured slog buffer contains a JSON line
 // whose msg equals wantMsg and whose fields all match want.
 func auditLogged(buf, wantMsg string, want map[string]any) bool {
