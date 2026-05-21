@@ -26,4 +26,11 @@
 - (-) `correlation_id` is now part of the signed command protocol. Protocol changes are breaking.
 - (-) No distributed tracing means latency analysis across hops requires manual log inspection. Acceptable until pain emerges.
 
-**Verification.** TBD — added at implementation. The signed-command schema test asserts `correlation_id` is required. A CI lint enforces that every log call carries a `correlation_id` field where request context is available.
+**Verification.**
+
+- Envelope schema: `internal/envelope/envelope.go` declares `CorrelationID string \`json:"correlation_id"\`` with no `omitempty`; `internal/envelope/envelope_test.go::TestCommandRoundtripsThroughJSON` verifies it survives a marshal/unmarshal roundtrip without loss.
+- Request → response propagation: `internal/dispatcher/dispatcher_test.go::TestDispatcherEchoesCorrelationAndCommandID` (success path) and `::TestDispatcherRejectsUnknownCommandType` (failure path also propagates).
+- Request → log lines: `internal/dispatcher/dispatcher_test.go::TestDispatcherLogsCorrelationID` asserts every log line emitted while dispatching a command carries the inbound envelope's `correlation_id`.
+- Telemetry heartbeats carry their own fresh `correlation_id` (independent of any inbound command, per ADR-011's "is now part of the protocol" framing): `internal/telemetry/publisher_test.go::TestPublisherEmitsOneTick`.
+- Required slog fields (`ts`, `level`, `service`, `correlation_id`, `msg`): the `ts`/`level`/`msg` fields are produced unconditionally by `slog.JSONHandler`; `correlation_id` is added via `slog.Logger.With()` at the dispatcher boundary (see `internal/dispatcher/dispatcher.go`). The `service` field convention will land with the API service in Phase 1.
+- CI lint enforcing `correlation_id` on every log call: deferred to Phase 1 (no second service exists yet to make the lint useful).

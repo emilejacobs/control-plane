@@ -23,4 +23,18 @@
 - (-) Test infrastructure (testcontainers, LocalStack) adds CI complexity and runtime.
 - (-) Faster iteration is sacrificed for safety; the right trade under AFK-agent dev.
 
-**Verification.** TBD — added at implementation. CI configuration enforces the gate. A lint or convention check verifies that every handler under `internal/api/handlers/` has at least one integration test in the parallel test directory.
+**Verification.**
+
+- CI gate: `.github/workflows/ci.yml` runs `go test ./...` and the cross-build matrix on every push and pull request. Branch protection on `main` requires the three matrix jobs (`darwin/arm64`, `darwin/amd64`, `linux/arm64`) as required status checks and requires changes to go through a pull request.
+- Local equivalent: `Makefile` `ci` target (`make ci`).
+- Dispatcher unit tests (success path, unknown-command-type, handler panic, plain-error wrap, `CodedError` unwrap, correlation_id propagation, correlation_id logging): `internal/dispatcher/dispatcher_test.go` (8 tests).
+- Transport tests against a real Mosquitto broker via `testcontainers-go` — the Phase 0 stand-in for the "fake/test IoT Core MQTT broker" requirement: `internal/transport/transport_test.go::TestTransportRoundtrip` and `::TestTransportNewFailsWhenBrokerUnreachable` (helpers in `internal/transport/helpers_test.go`).
+- Handler unit tests via the `service.Fake` (per the PRD's testing decisions — unit-mocking shell invocations is avoided):
+  - `internal/handlers/heartbeat/heartbeat_test.go::TestHeartbeatReturnsExpectedFields`
+  - `internal/handlers/servicestatus/servicestatus_test.go` (3 tests, covering Running, Stopped, and the `service.not_found` code)
+  - `internal/handlers/servicerestart/servicerestart_test.go::TestRestartReturnsTimestampsOnSuccess` and `::TestRestartFailureSurfacesAsServiceRestartFailedCode`
+- Agent end-to-end command + telemetry dispatch over fake transport: `internal/agent/agent_test.go::TestAgentDispatchesCommandsAndPublishesResults`, `::TestAgentDispatchesServiceStatus`, `::TestAgentDispatchesServiceRestart`, `::TestAgentPublishesTelemetryHeartbeats`.
+- Telemetry resilience (panicking collector does not crash the publisher; subsequent ticks still fire): `internal/telemetry/publisher_test.go::TestPublisherSurvivesPanickingCollector`.
+- Idempotency tests for mutating API endpoints (per the Decision's third bullet): **N/A in Phase 0** — no API endpoints exist yet. The convention lands with ADR-009's implementation in Phase 1.
+- Handler-coverage lint (every handler under `internal/api/handlers/` has at least one integration test in the parallel test directory): **deferred to Phase 1** — the `internal/api/handlers/` directory does not exist yet. Follow-up issue to be opened when the API service is scaffolded.
+- LocalStack KMS + testcontainers Postgres integration tests: **N/A in Phase 0** — no KMS or DB dependencies yet. Land with ADR-009 and ADR-015 implementations.

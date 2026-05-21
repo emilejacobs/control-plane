@@ -1,6 +1,6 @@
 # Issue 09 — Populate ADR Verification fields (002, 011, 012)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
