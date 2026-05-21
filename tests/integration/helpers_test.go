@@ -1,12 +1,13 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,11 +26,33 @@ const testBootstrapKey = "test-bootstrap-key"
 
 // testServer bundles the live fixtures an integration test needs: an HTTP
 // server wired to a Registry + fake IoTProvisioner, plus the underlying
-// Postgres pool for direct row assertions.
+// Postgres pool for direct row assertions and a captured log buffer for
+// correlation-id tests. Tests that don't care about logs ignore Logs.
 type testServer struct {
 	URL  string
 	Pool *pgxpool.Pool
 	IoT  *iotprovisioner.Fake
+	Logs *syncBuffer
+}
+
+// syncBuffer is bytes.Buffer with a mutex for the concurrent-writer case
+// (slog may emit from middleware goroutines). Sequential test flows don't
+// need it, but it's cheap insurance.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
 
 // newTestServer starts a Postgres testcontainer, applies migrations, wires the
@@ -43,14 +66,15 @@ func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	iot := iotprovisioner.NewFake()
 	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
+	logs := &syncBuffer{}
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:             reg,
 		IdempotencyStore:     idemStore,
-		Logger:               cplog.New(io.Discard, "cp-api-test"),
+		Logger:               cplog.New(logs, "cp-api-test"),
 		DevDevicesGetEnabled: true,
 	}))
 	t.Cleanup(srv.Close)
-	return &testServer{URL: srv.URL, Pool: pool, IoT: iot}
+	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs}
 }
 
 func requireDocker(t *testing.T) {
