@@ -15,6 +15,7 @@ import (
 type Service interface {
 	ClaimFirstRunAdmin(ctx context.Context, email, password string) (authn.Tokens, error)
 	Login(ctx context.Context, email, password string) (authn.Tokens, error)
+	Refresh(ctx context.Context, refreshToken string) (authn.Tokens, error)
 }
 
 type tokensResponse struct {
@@ -98,6 +99,43 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("audit.login", "outcome", "success", "email", req.Email)
+
+	writeTokens(w, http.StatusOK, tokens)
+}
+
+// RefreshHandler serves POST /auth/refresh.
+type RefreshHandler struct {
+	svc Service
+}
+
+func NewRefresh(svc Service) *RefreshHandler { return &RefreshHandler{svc: svc} }
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (h *RefreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log := cplog.FromContext(r.Context())
+
+	var req refreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	tokens, err := h.svc.Refresh(r.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, authn.ErrInvalidRefreshToken) {
+			log.Info("audit.refresh", "outcome", "failure", "reason", "invalid_refresh_token")
+			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+			return
+		}
+		log.Error("audit.refresh", "outcome", "error", "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("audit.refresh", "outcome", "success")
 
 	writeTokens(w, http.StatusOK, tokens)
 }

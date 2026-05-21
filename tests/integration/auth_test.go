@@ -447,6 +447,112 @@ func doLogin(t *testing.T, baseURL, email, password, idempotencyKey string) *htt
 	return resp
 }
 
+// TestRefreshRotation is Issue 04 cycle 8: POST /auth/refresh issues a fresh
+// token pair and revokes the presented refresh token, so replaying it fails
+// while the rotated-in token keeps working.
+func TestRefreshRotation(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const email = "operator@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	if code := doFirstRun(t, srv.URL, email, password,
+		"00000000-0000-0000-0000-0000000000f1"); code != http.StatusCreated {
+		t.Fatalf("first-run setup: got %d want 201", code)
+	}
+
+	// Log in to obtain the first refresh token.
+	loginResp := doLogin(t, srv.URL, email, password, "00000000-0000-0000-0000-000000000801")
+	if loginResp.StatusCode != http.StatusOK {
+		loginResp.Body.Close()
+		t.Fatalf("login setup: got %d want 200", loginResp.StatusCode)
+	}
+	_, refresh1 := decodeTokens(t, loginResp)
+	loginResp.Body.Close()
+	if refresh1 == "" {
+		t.Fatal("login returned an empty refresh token")
+	}
+
+	// Rotate it — a fresh pair comes back with a different refresh token.
+	rotateResp := doRefresh(t, srv.URL, refresh1, "00000000-0000-0000-0000-000000000802")
+	if rotateResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(rotateResp.Body)
+		rotateResp.Body.Close()
+		t.Fatalf("rotate: got %d want 200; body=%s", rotateResp.StatusCode, raw)
+	}
+	access2, refresh2 := decodeTokens(t, rotateResp)
+	rotateResp.Body.Close()
+	if access2 == "" || refresh2 == "" {
+		t.Fatal("rotation returned an empty token")
+	}
+	if refresh2 == refresh1 {
+		t.Error("rotation returned the same refresh token")
+	}
+
+	// Replaying the rotated-out token is rejected.
+	replayResp := doRefresh(t, srv.URL, refresh1, "00000000-0000-0000-0000-000000000803")
+	if replayResp.StatusCode != http.StatusUnauthorized {
+		replayResp.Body.Close()
+		t.Fatalf("replaying rotated token: got %d want 401", replayResp.StatusCode)
+	}
+	replayResp.Body.Close()
+
+	// The rotated-in token still works.
+	chainResp := doRefresh(t, srv.URL, refresh2, "00000000-0000-0000-0000-000000000804")
+	if chainResp.StatusCode != http.StatusOK {
+		chainResp.Body.Close()
+		t.Fatalf("refreshing with the rotated-in token: got %d want 200", chainResp.StatusCode)
+	}
+	chainResp.Body.Close()
+
+	// A token that was never issued is rejected, not 500'd.
+	junkResp := doRefresh(t, srv.URL, "not-a-real-token", "00000000-0000-0000-0000-000000000805")
+	if junkResp.StatusCode != http.StatusUnauthorized {
+		junkResp.Body.Close()
+		t.Fatalf("unknown token: got %d want 401", junkResp.StatusCode)
+	}
+	junkResp.Body.Close()
+
+	if !auditLogged(srv.Logs.String(), "audit.refresh", map[string]any{"outcome": "success"}) {
+		t.Errorf("no audit.refresh success log line found.\nFull log buffer:\n%s", srv.Logs.String())
+	}
+}
+
+// doRefresh POSTs /auth/refresh. The caller owns resp.Body.
+func doRefresh(t *testing.T, baseURL, refreshToken, idempotencyKey string) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"refresh_token": refreshToken})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/auth/refresh", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
+
+// decodeTokens reads the {access_token, refresh_token} body. It does not
+// close resp.Body.
+func decodeTokens(t *testing.T, resp *http.Response) (access, refresh string) {
+	t.Helper()
+	var out struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode tokens: %v", err)
+	}
+	return out.AccessToken, out.RefreshToken
+}
+
 // auditLogged reports whether the captured slog buffer contains a JSON line
 // whose msg equals wantMsg and whose fields all match want.
 func auditLogged(buf, wantMsg string, want map[string]any) bool {

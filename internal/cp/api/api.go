@@ -82,6 +82,7 @@ func NewBuilderWith(d Deps) *Builder {
 	if d.AuthN != nil {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN))
+		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN))
 	}
 	if d.DevDevicesGetEnabled {
 		b.Get("/devices/{id}", devices.NewGet(d.Registry))

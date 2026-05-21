@@ -27,6 +27,10 @@ var ErrInvalidCredentials = errors.New("invalid credentials")
 // lockout window. Handlers translate to HTTP 429.
 var ErrAccountLocked = errors.New("account locked")
 
+// ErrInvalidRefreshToken is returned by Refresh for a refresh token that is
+// unknown, already rotated, or expired. Handlers translate to HTTP 401.
+var ErrInvalidRefreshToken = errors.New("invalid refresh token")
+
 // Lockout policy: maxFailedAttempts consecutive failures lock the account
 // for lockoutWindow. A successful login clears both the counter and the lock.
 const (
@@ -171,6 +175,38 @@ func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, erro
 		WHERE id = $1
 	`, operatorID); err != nil {
 		return Tokens{}, fmt.Errorf("clear login state: %w", err)
+	}
+
+	return a.issueTokens(ctx, operatorID, email, isStaff)
+}
+
+// Refresh rotates a refresh token: the presented token is revoked and a
+// fresh access + refresh pair is issued. An unknown, already-rotated, or
+// expired token returns ErrInvalidRefreshToken. The revoke is a conditional
+// UPDATE, so a replayed token affects no rows and only one rotation can win.
+func (a *AuthN) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
+	sum := sha256.Sum256([]byte(refreshToken))
+
+	var operatorID string
+	err := a.pool.QueryRow(ctx, `
+		UPDATE refresh_tokens
+		SET revoked_at = now()
+		WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > $2
+		RETURNING operator_id
+	`, sum[:], a.now()).Scan(&operatorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Tokens{}, ErrInvalidRefreshToken
+	}
+	if err != nil {
+		return Tokens{}, fmt.Errorf("rotate refresh token: %w", err)
+	}
+
+	var email string
+	var isStaff bool
+	if err := a.pool.QueryRow(ctx, `
+		SELECT email, is_staff FROM operators WHERE id = $1
+	`, operatorID).Scan(&email, &isStaff); err != nil {
+		return Tokens{}, fmt.Errorf("lookup operator: %w", err)
 	}
 
 	return a.issueTokens(ctx, operatorID, email, isStaff)
