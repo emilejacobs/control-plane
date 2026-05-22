@@ -131,7 +131,7 @@ Calls the API service for all data and actions; no direct AWS SDK use from the b
 
 ### Storage
 
-- **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the stored `is_online` column on the `devices` row (alongside `last_seen` and `presence_changed_at`), maintained by `cp-ingest`. Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
+- **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the stored `is_online` column on the `devices` row (alongside `last_seen` and `presence_changed_at`), maintained by `cp-ingest`. The `devices` row also stores `mtls_cert_expires_at` — the per-device mTLS cert's notAfter, captured at enrollment and surfaced on `GET /devices/{id}` as the early-warning signal for cert rotation (ADR-013). Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
 - **Timestream** — time-series telemetry metrics (CPU/mem/disk, per-service uptime); planned per ADR-016. Heartbeat *presence* does not use Timestream — it is the `last_seen` column in Postgres.
 - **S3** — agent binaries (signed manifests for self-update), command stdout/stderr, camera snapshots if cached, daily audit-log mirror.
 
@@ -161,7 +161,7 @@ Control Plane packages (`internal/cp/`):
 
 | Package | Responsibility | Status |
 |---|---|---|
-| `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `UpdateLastSeen` | Built (#03, #07) |
+| `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `UpdateLastSeen` | Built (#03, #07, #08, #09) |
 | `iotprovisioner` | Wraps the AWS IoT SDK — thing + certificate minting | Built (#03) |
 | `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout | Built (#04); TOTP + recovery codes planned (#05) |
 | `presence` | Online threshold; in-memory per-device presence state and transitions (heartbeat, sweep, connect/disconnect) | Built (#07, #08) |
@@ -171,7 +171,7 @@ Control Plane packages (`internal/cp/`):
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
 | `api` | HTTP router, idempotency + bearer-auth middleware | Built (#03, #04) |
 
-Not yet built: site-scoped authorization (#06), per-device cert-expiry surfacing (#09), the Next.js dashboard (#16–#18), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
+Not yet built: site-scoped authorization (#06), the Next.js dashboard (#16–#18 — including the per-device view that renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
 ## Cloud infrastructure
 
