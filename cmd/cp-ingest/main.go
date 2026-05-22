@@ -1,12 +1,16 @@
-// Command cp-ingest is the Control Plane presence ingest worker: it consumes
-// device heartbeats from SQS and updates devices.last_seen so the API can
-// report freshness. It runs as a Fargate service (ADR-018).
+// Command cp-ingest is the Control Plane presence ingest worker. It runs
+// three components against one shared in-memory Presence model: a heartbeat
+// SQS consumer (updates last_seen), a lifecycle SQS consumer (IoT
+// connect/disconnect → is_online), and a sweeper goroutine (stale devices →
+// offline). It runs as a Fargate service (ADR-018).
 //
 // Required env:
 //
 //	DB_DSN               Postgres DSN (postgres://...)
 //	HEARTBEAT_QUEUE_URL  SQS URL of the cp-presence-heartbeats queue
 //	HEARTBEAT_DLQ_URL    SQS URL of its dead-letter queue
+//	LIFECYCLE_QUEUE_URL  SQS URL of the cp-presence-lifecycle queue
+//	LIFECYCLE_DLQ_URL    SQS URL of its dead-letter queue
 //
 // Optional env:
 //
@@ -20,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -47,8 +52,10 @@ func main() {
 
 func run(logger *slog.Logger) error {
 	dsn := mustEnv("DB_DSN")
-	queueURL := mustEnv("HEARTBEAT_QUEUE_URL")
-	dlqURL := mustEnv("HEARTBEAT_DLQ_URL")
+	heartbeatQueueURL := mustEnv("HEARTBEAT_QUEUE_URL")
+	heartbeatDLQURL := mustEnv("HEARTBEAT_DLQ_URL")
+	lifecycleQueueURL := mustEnv("LIFECYCLE_QUEUE_URL")
+	lifecycleDLQURL := mustEnv("LIFECYCLE_DLQ_URL")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -77,19 +84,44 @@ func run(logger *slog.Logger) error {
 	}
 	sqsClient := sqs.NewFromConfig(awsCfg, sqsOpts...)
 
-	// cp-ingest only updates last_seen; it never enrolls a device, so the
+	// cp-ingest only reads/updates devices; it never enrolls one, so the
 	// registry's IoT provisioner and bootstrap key are unused here.
 	reg := registry.New(pool, nil, registry.Config{})
-	ingester := ingest.NewPresenceIngester(presence.New(), reg, nil)
-	consumer := sqsconsumer.NewConsumer[ingest.Heartbeat](sqsClient, ingester.Handle, sqsconsumer.Config{
-		QueueURL: queueURL,
-		DLQURL:   dlqURL,
-		Logger:   logger,
-	})
 
-	logger.Info("cp-ingest consuming heartbeats", "queue", queueURL)
-	if err := consumer.Run(ctx); err != nil {
-		return fmt.Errorf("consumer: %w", err)
+	// One shared in-memory Presence model: heartbeats and lifecycle events
+	// feed it, the sweeper reads it.
+	pres := presence.New()
+
+	heartbeatConsumer := sqsconsumer.NewConsumer[ingest.Heartbeat](
+		sqsClient,
+		ingest.NewPresenceIngester(pres, reg, nil).Handle,
+		sqsconsumer.Config{QueueURL: heartbeatQueueURL, DLQURL: heartbeatDLQURL, Logger: logger},
+	)
+	lifecycleConsumer := sqsconsumer.NewConsumer[ingest.Lifecycle](
+		sqsClient,
+		ingest.NewLifecycleIngester(pres, reg, nil).Handle,
+		sqsconsumer.Config{QueueURL: lifecycleQueueURL, DLQURL: lifecycleDLQURL, Logger: logger},
+	)
+	sweeper := ingest.NewPresenceSweeper(pres, reg, ingest.SweeperConfig{Logger: logger})
+
+	logger.Info("cp-ingest starting",
+		"heartbeat_queue", heartbeatQueueURL, "lifecycle_queue", lifecycleQueueURL)
+
+	// Run all three until the signal context is cancelled, then wait for a
+	// clean drain. The consumers report drain errors; the sweeper does not.
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(3)
+	go func() { defer wg.Done(); errs <- heartbeatConsumer.Run(ctx) }()
+	go func() { defer wg.Done(); errs <- lifecycleConsumer.Run(ctx) }()
+	go func() { defer wg.Done(); sweeper.Run(ctx) }()
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			return fmt.Errorf("worker: %w", err)
+		}
 	}
 	logger.Info("cp-ingest stopped cleanly")
 	return nil
