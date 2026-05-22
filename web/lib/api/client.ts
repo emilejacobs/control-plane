@@ -23,9 +23,9 @@ export function currentTokens(): Tokens | null {
   return tokens;
 }
 
-// apiRequest issues a fetch to cp-api, attaching the operator's bearer token
-// when one is set and defaulting JSON bodies to application/json.
-export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
+// rawRequest issues a single fetch to cp-api, attaching the operator's bearer
+// token when one is set and defaulting JSON bodies to application/json.
+async function rawRequest(path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   if (tokens) {
     headers.set("Authorization", `Bearer ${tokens.accessToken}`);
@@ -34,4 +34,35 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
     headers.set("Content-Type", "application/json");
   }
   return fetch(`${API_BASE}${path}`, { ...init, headers });
+}
+
+// tryRefresh rotates the token pair via POST /auth/refresh. It returns false
+// — and clears the now-useless tokens — when the refresh token is rejected.
+async function tryRefresh(): Promise<boolean> {
+  if (!tokens) return false;
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: tokens.refreshToken }),
+  });
+  if (!res.ok) {
+    clearTokens();
+    return false;
+  }
+  const body = (await res.json()) as { access_token: string; refresh_token: string };
+  setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
+  return true;
+}
+
+// apiRequest issues a request to cp-api. On a 401 it transparently refreshes
+// the token pair once and retries; a failed refresh surfaces the 401.
+export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await rawRequest(path, init);
+  if (res.status !== 401 || !tokens) {
+    return res;
+  }
+  if (!(await tryRefresh())) {
+    return res;
+  }
+  return rawRequest(path, init);
 }
