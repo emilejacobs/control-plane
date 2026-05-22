@@ -54,15 +54,25 @@ async function tryRefresh(): Promise<boolean> {
   return true;
 }
 
-// apiRequest issues a request to cp-api. On a 401 it transparently refreshes
-// the token pair once and retries; a failed refresh surfaces the 401.
+// apiRequest issues a request to cp-api. A mutating request without an
+// explicit Idempotency-Key gets a generated one (cp-api's idempotency
+// middleware requires it). On a 401 it transparently refreshes the token
+// pair once and retries — reusing the same key — and a failed refresh
+// surfaces the 401.
 export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  const res = await rawRequest(path, init);
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  if (method !== "GET" && method !== "HEAD" && !headers.has("Idempotency-Key")) {
+    headers.set("Idempotency-Key", crypto.randomUUID());
+  }
+  const normalized: RequestInit = { ...init, headers };
+
+  const res = await rawRequest(path, normalized);
   if (res.status !== 401 || !tokens) {
     return res;
   }
   if (!(await tryRefresh())) {
     return res;
   }
-  return rawRequest(path, init);
+  return rawRequest(path, normalized);
 }
