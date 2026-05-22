@@ -113,3 +113,130 @@ func TestIsOnline(t *testing.T) {
 		})
 	}
 }
+
+var t0 = time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+
+// Behavior 1: a stale device is emitted by Sweep.
+func TestSweepEmitsStaleDevice(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0)
+
+	got := p.Sweep(t0.Add(OnlineThreshold + time.Second))
+	if len(got) != 1 {
+		t.Fatalf("Sweep transitions: got %d want 1", len(got))
+	}
+	if got[0].DeviceID != "dev-1" || got[0].Online || !got[0].Changed {
+		t.Errorf("transition: got %+v want dev-1 offline+changed", got[0])
+	}
+}
+
+// Behavior 2: a fresh device is not emitted.
+func TestSweepIgnoresFreshDevice(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0)
+
+	if got := p.Sweep(t0.Add(60 * time.Second)); len(got) != 0 {
+		t.Errorf("Sweep emitted a fresh device: %+v", got)
+	}
+}
+
+// Behavior 3: successive Sweeps do not re-emit an already-offline device.
+func TestSweepIsIdempotent(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0)
+
+	first := p.Sweep(t0.Add(OnlineThreshold + time.Second))
+	if len(first) != 1 {
+		t.Fatalf("first sweep: got %d transitions want 1", len(first))
+	}
+	if second := p.Sweep(t0.Add(OnlineThreshold + 2*time.Second)); len(second) != 0 {
+		t.Errorf("second sweep re-emitted an already-offline device: %+v", second)
+	}
+}
+
+// Sweep emits only the stale devices, leaving fresh ones alone.
+func TestSweepEmitsOnlyStaleDevices(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("stale", t0)
+	p.RecordHeartbeat("fresh", t0.Add(85*time.Second))
+
+	got := p.Sweep(t0.Add(OnlineThreshold + 5*time.Second)) // stale 95s, fresh 10s
+	if len(got) != 1 || got[0].DeviceID != "stale" {
+		t.Errorf("Sweep: got %+v want only [stale]", got)
+	}
+}
+
+// Behavior 4: a disconnect emits an offline transition immediately, without
+// waiting for the sweeper.
+func TestOnDisconnectEmitsImmediately(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0) // online, fresh
+
+	tr := p.OnDisconnect("dev-1", t0.Add(time.Second))
+	if tr.Online || !tr.Changed {
+		t.Errorf("disconnect of an online device: got %+v want offline+changed", tr)
+	}
+	if got := p.Sweep(t0.Add(2 * time.Second)); len(got) != 0 {
+		t.Errorf("Sweep re-emitted a device already offline via disconnect: %+v", got)
+	}
+}
+
+// A disconnect for an already-offline device is a no-op.
+func TestOnDisconnectOfOfflineDeviceIsNoOp(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0)
+	p.OnDisconnect("dev-1", t0.Add(time.Second)) // now offline
+
+	if tr := p.OnDisconnect("dev-1", t0.Add(2*time.Second)); tr.Changed {
+		t.Errorf("second disconnect reported a change: %+v", tr)
+	}
+}
+
+// Behavior 5: a reconnect emits an online transition.
+func TestOnConnectEmitsOnline(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0)
+	p.OnDisconnect("dev-1", t0.Add(time.Second)) // offline
+
+	tr := p.OnConnect("dev-1", t0.Add(2*time.Second))
+	if !tr.Online || !tr.Changed {
+		t.Errorf("reconnect of an offline device: got %+v want online+changed", tr)
+	}
+}
+
+// A device that reconnects after a long offline gap must not be immediately
+// re-swept offline — OnConnect refreshes last_seen.
+func TestOnConnectRefreshesLastSeen(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0)
+	p.OnDisconnect("dev-1", t0.Add(time.Second))
+
+	reconnectAt := t0.Add(10 * time.Minute)
+	p.OnConnect("dev-1", reconnectAt)
+	if got := p.Sweep(reconnectAt.Add(30 * time.Second)); len(got) != 0 {
+		t.Errorf("Sweep offlined a device that reconnected 30s ago: %+v", got)
+	}
+}
+
+// Behavior 6: a connect for an already-online device is a no-op.
+func TestOnConnectOfOnlineDeviceIsNoOp(t *testing.T) {
+	p := New()
+	p.RecordHeartbeat("dev-1", t0) // online
+
+	if tr := p.OnConnect("dev-1", t0.Add(time.Second)); tr.Changed {
+		t.Errorf("connect of an already-online device reported a change: %+v", tr)
+	}
+}
+
+// Behavior 7: the freshness threshold is configurable at construction.
+func TestSweepThresholdConfigurableAtConstruction(t *testing.T) {
+	p := New(WithThreshold(10 * time.Second))
+	p.RecordHeartbeat("dev-1", t0)
+
+	if got := p.Sweep(t0.Add(9 * time.Second)); len(got) != 0 {
+		t.Errorf("Sweep offlined a device inside the 10s threshold: %+v", got)
+	}
+	if got := p.Sweep(t0.Add(11 * time.Second)); len(got) != 1 {
+		t.Errorf("Sweep with 10s threshold at 11s: got %d transitions want 1", len(got))
+	}
+}
