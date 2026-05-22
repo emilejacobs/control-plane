@@ -23,6 +23,21 @@ type SiteFilter struct {
 	SiteIDs []string
 }
 
+type scopeCtxKey struct{}
+
+// ContextWithScope returns ctx carrying the operator's resolved SiteFilter.
+// The scope middleware sets it; ScopedDeviceQuery callers read it back.
+func ContextWithScope(ctx context.Context, f SiteFilter) context.Context {
+	return context.WithValue(ctx, scopeCtxKey{}, f)
+}
+
+// ScopeFromContext returns the SiteFilter the scope middleware injected. The
+// second result is false when no scope was set — callers must fail closed.
+func ScopeFromContext(ctx context.Context) (SiteFilter, bool) {
+	f, ok := ctx.Value(scopeCtxKey{}).(SiteFilter)
+	return f, ok
+}
+
 // AuthZ resolves operator site allowlists. The pool is used only for the
 // non-staff path; staff scopes resolve from the JWT claim alone.
 type AuthZ struct {
