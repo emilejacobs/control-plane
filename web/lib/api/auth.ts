@@ -31,3 +31,36 @@ export async function firstRun(email: string, password: string): Promise<void> {
   const body = (await res.json()) as TokenPair;
   setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
 }
+
+export interface LoginInput {
+  email: string;
+  password: string;
+  totpCode?: string;
+  recoveryCode?: string;
+}
+
+export interface LoginResult {
+  // requiresTotpEnrollment is true for an operator who has not yet enrolled
+  // TOTP — the dashboard routes them into enrollment before anything else.
+  requiresTotpEnrollment: boolean;
+}
+
+// login authenticates an operator. A TOTP code or, in its place, a recovery
+// code may accompany the password. On success the token pair is stored.
+export async function login(input: LoginInput): Promise<LoginResult> {
+  const res = await apiRequest("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: input.email,
+      password: input.password,
+      totp_code: input.totpCode ?? "",
+      recovery_code: input.recoveryCode ?? "",
+    }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "login failed");
+  }
+  const body = (await res.json()) as TokenPair & { requires_totp_enrollment: boolean };
+  setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
+  return { requiresTotpEnrollment: body.requires_totp_enrollment };
+}
