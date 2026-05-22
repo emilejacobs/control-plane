@@ -1,6 +1,6 @@
 # Issue 09 — Cert expiry surfaced on per-device view
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 
 ## Parent
@@ -22,8 +22,8 @@ Scope:
 
 - [x] `GET /devices/{id}` returns `mtls_cert_expires_at` and `mtls_cert_days_remaining`.
 - [x] Integration test asserts `days_remaining` is computed correctly relative to a fake "now" against a fixed cert expiry.
-- [ ] Per-device UI displays both fields with the documented color coding.
-- [ ] Test on the dashboard side verifies that a cert expiring in 10 days renders red.
+- [x] Per-device UI displays both fields with the documented color coding.
+- [x] Test on the dashboard side verifies that a cert expiring in 10 days renders red.
 - [x] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
@@ -53,6 +53,14 @@ integer.
   `devices.mtls_cert_expires_at` (nullable; every post-006 enrollment
   populates it); `Enroll` persists `cert.ExpiresAt`; `GetByID` reads it.
 - Cycle 5: docs.
+
+### 2026-05-22 — UI ACs 3–4 landed with #18; issue closed
+
+The per-device view (#18) renders `mtls_cert_expires_at` and
+`mtls_cert_days_remaining` via the `CertExpiryIndicator` component, color
+-coded green >180 / yellow 30–180 / red <30 (#18 cycle 9–10). The
+"expiring in 10 days renders red" test is `CertExpiryIndicator.test.tsx`.
+With all four ACs met, #09 moves to done.
 
 **Premise correction.** The issue said cert expiry was "already minted at
 enrollment in #03 and stored in the `devices` row." It was minted (and
