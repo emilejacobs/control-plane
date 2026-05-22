@@ -38,6 +38,12 @@ function deviceReturns(body: Record<string, unknown>) {
   );
 }
 
+// fieldValue reads the <dd> paired with the <dt> carrying the given label.
+function fieldValue(label: string): string {
+  const term = screen.getByText(label);
+  return term.nextElementSibling?.textContent ?? "";
+}
+
 describe("per-device view", () => {
   it("renders the device hostname", async () => {
     deviceReturns(device({ hostname: "mac-mini-acme-07" }));
@@ -46,5 +52,24 @@ describe("per-device view", () => {
     expect(
       await screen.findByRole("heading", { name: "mac-mini-acme-07" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows the static fields in a key/value grid", async () => {
+    deviceReturns(device());
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("Client")).toBe("Acme Corp");
+    expect(fieldValue("Site")).toBe("Acme HQ");
+    expect(fieldValue("Hardware kind")).toBe("mac");
+    expect(fieldValue("OS version")).toBe("macOS 15.0");
+    expect(fieldValue("Agent version")).toBe("0.1.0");
+    expect(fieldValue("Hardware UUID")).toBe(
+      "22222222-2222-3333-4444-555555555555",
+    );
+    expect(fieldValue("IoT Thing ARN")).toBe(
+      "arn:aws:iot:us-east-1:123:thing/dev-1",
+    );
+    expect(fieldValue("Enrolled")).toBe("2026-05-01");
   });
 });
