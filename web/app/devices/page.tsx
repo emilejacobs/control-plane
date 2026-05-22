@@ -13,9 +13,16 @@ export default function DevicesPage() {
   return (
     <main>
       <h1>Devices</h1>
-      {devices.isPending && <p>Loading…</p>}
-      {devices.isError && <p role="alert">Could not load devices.</p>}
-      {devices.data?.length === 0 && <p>No devices yet.</p>}
+      {devices.isPending && <p role="status">Loading devices…</p>}
+      {devices.isError && (
+        <div role="alert">
+          <p>Could not load devices.</p>
+          <button onClick={() => devices.refetch()}>Refresh</button>
+        </div>
+      )}
+      {devices.data?.length === 0 && (
+        <p>No devices yet — none are enrolled in the sites you can see.</p>
+      )}
       {devices.data &&
         groupDevices(devices.data).map((client) => (
           <section key={client.clientName}>

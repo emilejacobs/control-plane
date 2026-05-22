@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/server";
 import { renderWithClient } from "../../test/render";
@@ -35,6 +36,41 @@ describe("fleet view", () => {
     const z = rows.findIndex((t) => t.includes("mac-z"));
     expect(a).toBeGreaterThanOrEqual(0);
     expect(a).toBeLessThan(z);
+  });
+
+  it("shows a loading state while the first query is in flight", () => {
+    devicesReturn([]);
+    renderWithClient(<DevicesPage />);
+    // The initial render is pending, before the query resolves.
+    expect(screen.getByRole("status")).toHaveTextContent(/loading/i);
+  });
+
+  it("shows a helpful empty state when no devices are visible", async () => {
+    devicesReturn([]);
+    renderWithClient(<DevicesPage />);
+    expect(await screen.findByText(/no devices/i)).toBeInTheDocument();
+  });
+
+  it("shows an error state with a refresh button that retries", async () => {
+    let attempt = 0;
+    server.use(
+      http.get(`${API_BASE}/devices`, () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new HttpResponse(null, { status: 500 });
+        }
+        return HttpResponse.json({ devices: [] });
+      }),
+    );
+    renderWithClient(<DevicesPage />);
+
+    // The first load fails — error message + a refresh button.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not load/i);
+    const refresh = screen.getByRole("button", { name: /refresh/i });
+
+    // Refresh refetches; the retry succeeds and the empty state shows.
+    await userEvent.click(refresh);
+    expect(await screen.findByText(/no devices/i)).toBeInTheDocument();
   });
 
   it("polls GET /devices every 10 seconds", async () => {
