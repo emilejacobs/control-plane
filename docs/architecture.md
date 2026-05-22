@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** Living document. Initial design 2026-05-05; kept current as Phase 1 lands — last updated 2026-05-21, reflecting work through issue #07.
+**Status:** Living document. Initial design 2026-05-05; kept current as Phase 1 lands — last updated 2026-05-21, reflecting work through issue #08.
 **Scope:** System design covering registry, presence, commands, telemetry, and Edge UI proxy. Mobile readiness is a first-class design constraint. [Modules and implementation status](#modules-and-implementation-status) records what is built so far.
 
 ## Goals
@@ -42,8 +42,8 @@ flowchart TB
     subgraph aws["AWS — single US region"]
         alb["ALB"]
         iot["AWS IoT Core<br/>MQTT/mTLS · device shadow"]
-        rule["IoT Rule: presence-heartbeat"]
-        sqs["SQS cp-presence-heartbeats (+ DLQ)"]
+        rule["IoT Rules: heartbeat + lifecycle"]
+        sqs["SQS presence queues (+ DLQs)"]
 
         subgraph fargate["ECS Fargate"]
             api["cp-api<br/>enrollment · device reads · auth"]
@@ -73,7 +73,7 @@ flowchart TB
     tsr -.->|tailnet| tsd
 ```
 
-The data path splits in two: the **command/telemetry channel** runs over MQTT to AWS IoT Core; the **Edge UI proxy path** runs over Tailscale (ADR-003). Heartbeats reach Postgres asynchronously — IoT Core routes them through an IoT Rule into SQS, where `cp-ingest` consumes them (ADR-018).
+The data path splits in two: the **command/telemetry channel** runs over MQTT to AWS IoT Core; the **Edge UI proxy path** runs over Tailscale (ADR-003). Heartbeats and IoT lifecycle events reach Postgres asynchronously — IoT Rules route them through SQS, where `cp-ingest` consumes them (ADR-018).
 
 ## Components
 
@@ -118,8 +118,10 @@ Responsibilities:
 ECS Fargate worker, separate from `cp-api`, that consumes the MQTT-side data path (ADR-018 — Fargate, not Lambda, so a long-lived consumer can hold the SQS poll loop and drain gracefully).
 
 - Generic `SQSConsumer[T]` long-polls a queue, validates each message's `correlation_id`, dispatches to a handler, and routes poison messages (bad JSON, missing `correlation_id`, unknown device) to a dead-letter queue.
-- `PresenceIngester` is the heartbeat handler: it stamps `devices.last_seen` and records the heartbeat in the in-memory presence model.
-- Phase 1 runs one ingest topic (presence heartbeats). The IoT-Core `connected`/`disconnected` lifecycle queue is added in #08; later phases reuse `SQSConsumer[T]` for command results and other ingest concerns.
+- `PresenceIngester` is the heartbeat handler: it stamps `devices.last_seen`, marks the device online, and records the heartbeat in the in-memory presence model.
+- `LifecycleIngester` consumes a second queue fed by IoT Core `connected`/`disconnected` events — the fast-path online↔offline edge, so a device that drops shows offline within seconds rather than waiting out the freshness threshold.
+- `PresenceSweeper` is a goroutine, not an SQS consumer: every 30s it flips devices whose last heartbeat is older than the 90s threshold to offline — the backstop for a device that dies without a clean disconnect.
+- Later phases reuse `SQSConsumer[T]` for command results and other ingest concerns.
 
 ### Dashboard (Next.js)
 
@@ -129,7 +131,7 @@ Calls the API service for all data and actions; no direct AWS SDK use from the b
 
 ### Storage
 
-- **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the `last_seen` timestamp on the `devices` row. Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
+- **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the stored `is_online` column on the `devices` row (alongside `last_seen` and `presence_changed_at`), maintained by `cp-ingest`. Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
 - **Timestream** — time-series telemetry metrics (CPU/mem/disk, per-service uptime); planned per ADR-016. Heartbeat *presence* does not use Timestream — it is the `last_seen` column in Postgres.
 - **S3** — agent binaries (signed manifests for self-update), command stdout/stderr, camera snapshots if cached, daily audit-log mirror.
 
@@ -162,14 +164,14 @@ Control Plane packages (`internal/cp/`):
 | `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `UpdateLastSeen` | Built (#03, #07) |
 | `iotprovisioner` | Wraps the AWS IoT SDK — thing + certificate minting | Built (#03) |
 | `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout | Built (#04); TOTP + recovery codes planned (#05) |
-| `presence` | 90s online threshold; in-memory per-device heartbeat state | Built (#07); sweeper + connect/disconnect fast-path planned (#08) |
+| `presence` | Online threshold; in-memory per-device presence state and transitions (heartbeat, sweep, connect/disconnect) | Built (#07, #08) |
 | `sqsconsumer` | Generic `SQSConsumer[T]` — schema validation, DLQ routing, graceful drain | Built (#07) |
-| `ingest` | `PresenceIngester` heartbeat handler | Built (#07) |
+| `ingest` | Heartbeat + lifecycle SQS handlers and the presence sweeper | Built (#07, #08) |
 | `cplog` | Structured JSON logs + end-to-end correlation IDs (ADR-011) | Built (#19) |
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
 | `api` | HTTP router, idempotency + bearer-auth middleware | Built (#03, #04) |
 
-Not yet built: site-scoped authorization (#06), the presence sweeper and lifecycle fast-path (#08), per-device cert-expiry surfacing (#09), the Next.js dashboard (#16–#18), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
+Not yet built: site-scoped authorization (#06), per-device cert-expiry surfacing (#09), the Next.js dashboard (#16–#18), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
 ## Cloud infrastructure
 
@@ -191,7 +193,7 @@ flowchart TB
         end
     end
 
-    sqs["SQS: cp-presence-heartbeats + DLQ"]
+    sqs["SQS: presence queues + DLQs"]
     s3[("S3")]
     kms["KMS"]
     sm["Secrets Manager"]
@@ -200,7 +202,7 @@ flowchart TB
     internet --> alb
     alb --> api
     alb --> dash
-    iot -->|IoT Rule| sqs --> ingest
+    iot -->|IoT Rules| sqs --> ingest
     api --> iot
     api --> rds
     ingest --> rds
@@ -215,7 +217,7 @@ flowchart TB
 
 Infrastructure is Terraform, in `infra/terraform/` (ADR-015 multi-AZ Postgres, ADR-018 Fargate, ADR-021 all-CloudWatch observability). Current state:
 
-- **Built** — `modules/sqs-ingest` (SQS queue + DLQ + redrive + IoT Rule) and `modules/cp-ingest-service` (Fargate task + service + log group), both landed with #07.
+- **Built** — `modules/sqs-ingest` (SQS queue + DLQ + redrive + IoT Rule) and `modules/cp-ingest-service` (Fargate task + service + log group), landed with #07; #08 reuses `sqs-ingest` for the presence-lifecycle queue.
 - **Phase 0 spike** — the flat root in `infra/terraform/` provisions a single IoT thing + certificate for the agent spike.
 - **Pending #01** — the Phase 1 root: VPC, subnets, ALB, the RDS instance, the Fargate cluster, S3 backend + DynamoDB lock for Terraform state. The modules above are consumed by that root.
 
