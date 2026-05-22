@@ -78,6 +78,10 @@ type Device struct {
 	PresenceChangedAt *time.Time
 	MtlsCertExpiresAt *time.Time
 	EnrolledAt        time.Time
+	// SiteName and ClientName are resolved by List via the site model; nil
+	// for a device with no site assigned. GetByID leaves them nil.
+	SiteName   *string
+	ClientName *string
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -120,13 +124,17 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		return nil, nil
 	}
 	sql, args := authz.ScopedDeviceQuery(filter, `
-		SELECT id, hostname, hardware_uuid, hardware_kind,
-		       os_version, agent_version, iot_thing_arn,
-		       last_seen, is_online, presence_changed_at,
-		       mtls_cert_expires_at, enrolled_at
-		FROM devices WHERE true
+		SELECT devices.id, devices.hostname, devices.hardware_uuid, devices.hardware_kind,
+		       devices.os_version, devices.agent_version, devices.iot_thing_arn,
+		       devices.last_seen, devices.is_online, devices.presence_changed_at,
+		       devices.mtls_cert_expires_at, devices.enrolled_at,
+		       s.name AS site_name, c.name AS client_name
+		FROM devices
+		LEFT JOIN sites s ON s.id = devices.site_id
+		LEFT JOIN clients c ON c.id = s.client_id
+		WHERE true
 	`)
-	rows, err := r.pool.Query(ctx, sql+" ORDER BY hostname", args...)
+	rows, err := r.pool.Query(ctx, sql+" ORDER BY devices.hostname", args...)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
@@ -140,6 +148,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.OSVersion, &d.AgentVersion, &d.IoTThingARN,
 			&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,
 			&d.MtlsCertExpiresAt, &d.EnrolledAt,
+			&d.SiteName, &d.ClientName,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}

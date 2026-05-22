@@ -54,6 +54,10 @@ type listItem struct {
 	DeviceID string `json:"device_id"`
 	Hostname string `json:"hostname"`
 	IsOnline bool   `json:"is_online"`
+	// SiteName / ClientName are null for a device with no site assigned;
+	// the fleet view groups those under "Unassigned".
+	SiteName   *string `json:"site_name"`
+	ClientName *string `json:"client_name"`
 }
 
 type listResponse struct {
@@ -69,9 +73,11 @@ func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	items := make([]listItem, 0, len(devs))
 	for _, d := range devs {
 		items = append(items, listItem{
-			DeviceID: d.ID,
-			Hostname: d.Hostname,
-			IsOnline: d.IsOnline,
+			DeviceID:   d.ID,
+			Hostname:   d.Hostname,
+			IsOnline:   d.IsOnline,
+			SiteName:   d.SiteName,
+			ClientName: d.ClientName,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

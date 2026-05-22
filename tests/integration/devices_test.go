@@ -151,6 +151,46 @@ func TestGetDeviceByIDSurfacesCertExpiry(t *testing.T) {
 	}
 }
 
+func TestDeviceListIncludesSiteAndClient(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// A device assigned to a site, and one with no site.
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteID := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	insertDeviceAtSite(t, ctx, srv, "mac-sited", siteID)
+	enrollForTest(t, srv, "mac-unsited", "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a")
+
+	rows := doDeviceList(t, srv.URL, mintAccessToken(t, ctx, srv))
+	byHost := map[string]map[string]any{}
+	for _, r := range rows {
+		byHost[r["hostname"].(string)] = r
+	}
+
+	sited := byHost["mac-sited"]
+	if sited == nil {
+		t.Fatalf("mac-sited not in the device list")
+	}
+	if sited["site_name"] != "Acme HQ" {
+		t.Errorf("site-assigned device site_name: got %v want %q", sited["site_name"], "Acme HQ")
+	}
+	if sited["client_name"] != "Acme Corp" {
+		t.Errorf("site-assigned device client_name: got %v want %q", sited["client_name"], "Acme Corp")
+	}
+
+	unsited := byHost["mac-unsited"]
+	if unsited == nil {
+		t.Fatalf("mac-unsited not in the device list")
+	}
+	if unsited["site_name"] != nil {
+		t.Errorf("site-less device site_name: got %v want null", unsited["site_name"])
+	}
+	if unsited["client_name"] != nil {
+		t.Errorf("site-less device client_name: got %v want null", unsited["client_name"])
+	}
+}
+
 func TestGetDeviceByIDUnknownReturns404(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
