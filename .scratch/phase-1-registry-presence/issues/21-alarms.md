@@ -29,6 +29,7 @@ Scope:
 - [ ] Each alarm has a runbook entry.
 - [ ] Each alarm has been verified by deliberately triggering its condition once (e.g., posting a message directly to the DLQ).
 - [ ] Notification channel receives test events on alarm fire.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

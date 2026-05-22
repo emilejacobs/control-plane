@@ -24,6 +24,7 @@ Scope:
 - [ ] Integration test asserts `days_remaining` is computed correctly relative to a fake "now" against a fixed cert expiry.
 - [ ] Per-device UI displays both fields with the documented color coding.
 - [ ] Test on the dashboard side verifies that a cert expiring in 10 days renders red.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

@@ -28,6 +28,7 @@ Scope:
 - [ ] Each device row links to the per-device view URL (the page itself lands in #18; the link is in place here).
 - [ ] No `setInterval` in component code; polling is configured exclusively via the query hook.
 - [ ] Empty, loading, and error states render correctly (covered by component tests).
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

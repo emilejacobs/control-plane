@@ -28,6 +28,7 @@ Scope:
 - [ ] A 21st enrollment request in an hour from a single source IP returns 429.
 - [ ] An enrollment request with a hostname that doesn't match the convention regex still completes (201) but writes an audit alert.
 - [ ] Integration test confirms: unknown key → 401; rate limit trips at threshold; anomaly alert fires.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

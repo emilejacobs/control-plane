@@ -26,6 +26,7 @@ Scope:
 - [ ] Presence chip and `last_seen` ago-string update at the 10s poll cadence; ago-string also re-renders client-side every second.
 - [ ] Cert expiry days-remaining is color-coded per #09's thresholds.
 - [ ] Component tests cover the loading, error, and empty (cert-expiry near-zero) states.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

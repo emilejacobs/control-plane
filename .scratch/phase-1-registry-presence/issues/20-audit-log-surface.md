@@ -29,6 +29,7 @@ Scope:
 - [ ] DLQ entries in the ingest worker (#07 + #08) also write audit-log rows.
 - [ ] The daily S3 mirror runs and produces a tamper-resistant file (object lock retains it).
 - [ ] A test that issues a known sequence of requests and asserts the audit_log rows match by `correlation_id`.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

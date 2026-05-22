@@ -31,6 +31,7 @@ Scope:
 - [ ] A recovery code can be used in place of a TOTP code at login; the same recovery code is rejected on a second attempt.
 - [ ] No `setInterval` exists in any component file (CI check or explicit grep test).
 - [ ] Tests: minimal E2E (Playwright or equivalent) for the login → TOTP-enroll → dashboard path.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

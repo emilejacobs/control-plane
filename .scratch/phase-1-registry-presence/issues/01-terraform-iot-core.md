@@ -47,6 +47,7 @@ This issue implements against those decisions; it does not re-decide them.
 - [ ] A short README under `infra/terraform/` documents the workflow (`apply`/`destroy`, the device-onboarding pattern, the state-backend setup steps).
 - [ ] The runbook at `docs/runbooks/phase-0-iot-core-provisioning.md` gets a top-banner note: "Phase 1 codified this in `infra/terraform/`; this runbook is preserved as the manual reference."
 - [ ] The Phase 0 smoke is re-runnable end-to-end via `terraform apply` → install agent → smoke commands (no manual `aws iot ...` calls beyond what Terraform issues).
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

@@ -28,6 +28,7 @@ Scope:
 - [ ] Until TOTP enrollment is completed, all authenticated endpoints (other than `/auth/totp/enroll`) return 403 with the documented reason code.
 - [ ] TOTP secrets in the DB are encrypted at rest (test asserts the column does not contain the raw secret).
 - [ ] Unit tests cover the TOTP window behavior with a fake clock.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

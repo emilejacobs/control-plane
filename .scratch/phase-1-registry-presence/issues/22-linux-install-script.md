@@ -29,6 +29,7 @@ Scope:
 - [ ] The agent connects to IoT Core within 30s and publishes its first heartbeat.
 - [ ] Re-running the script on the same device is idempotent.
 - [ ] The bootstrap key is not visible in any log produced by the script.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

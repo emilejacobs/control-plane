@@ -29,6 +29,7 @@ Scope:
 - [ ] A reconnecting device with a fresh heartbeat is marked online and an online transition is emitted.
 - [ ] Pulling power on the dev Mac (Wave-0 manual verification) results in the device showing offline in the API within 60s.
 - [ ] All seven `Presence` behaviors from the PRD's testing decisions section are covered by unit tests with a fake clock.
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

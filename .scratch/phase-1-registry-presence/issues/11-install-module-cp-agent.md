@@ -33,6 +33,7 @@ Out of scope: re-enrollment if the cert is lost (Phase 4); cert rotation (Phase 
 - [ ] Re-running the module on the same Mac (same hardware UUID) is idempotent — no duplicate `devices` row, the existing cert is reused (the CP endpoint returns the original response from its idempotency table).
 - [ ] The bootstrap key is not visible in any log produced by the install module.
 - [ ] The module exits non-zero with a clear message if any step fails (network, auth, daemon registration).
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 

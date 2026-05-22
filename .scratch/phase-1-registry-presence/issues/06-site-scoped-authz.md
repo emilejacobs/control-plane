@@ -28,6 +28,7 @@ Scope:
 - [ ] A unit test creates a staff operator and a non-staff operator with one site grant, runs `scopedDeviceQuery`, and asserts the row counts match (staff sees all; non-staff sees only their site).
 - [ ] CI gate test fails on a deliberately-broken handler that bypasses `scopedDeviceQuery`, passes on the real handlers.
 - [ ] `GET /devices` and `GET /devices/{id}` continue to return all devices for staff (no behavioral change for Phase 1's operator set).
+- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 
