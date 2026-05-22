@@ -36,12 +36,25 @@ func NewVerifier(ctx context.Context, loader KeyLoader) (*Verifier, error) {
 	return &Verifier{loader: loader, key: key}, nil
 }
 
-// Verify reports whether presented is the current bootstrap key.
-func (v *Verifier) Verify(_ context.Context, presented string) bool {
+// Verify reports whether presented is the current bootstrap key. On a
+// mismatch it reloads the key once before rejecting — so a key rotated since
+// the cached copy was fetched is honored without a service restart.
+func (v *Verifier) Verify(ctx context.Context, presented string) bool {
 	v.mu.RLock()
 	cached := v.key
 	v.mu.RUnlock()
-	return matches(presented, cached)
+	if matches(presented, cached) {
+		return true
+	}
+
+	fresh, err := v.loader.Load(ctx)
+	if err != nil {
+		return false
+	}
+	v.mu.Lock()
+	v.key = fresh
+	v.mu.Unlock()
+	return matches(presented, fresh)
 }
 
 // matches is a constant-time comparison — bootstrap keys are secrets.

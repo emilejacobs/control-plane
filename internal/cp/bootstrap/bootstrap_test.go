@@ -39,6 +39,23 @@ func TestVerifierChecksPresentedKey(t *testing.T) {
 	}
 }
 
+func TestVerifierReloadsAndAcceptsRotatedKey(t *testing.T) {
+	// The key rotates: construction caches "old-key"; Secrets Manager now
+	// holds "new-key" (e.g. a package rebuilt after a rotation).
+	loader := &fakeLoader{keys: []string{"old-key", "new-key"}}
+	v, err := NewVerifier(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("new verifier: %v", err)
+	}
+
+	if !v.Verify(context.Background(), "new-key") {
+		t.Errorf("Verify rejected the rotated key instead of reloading")
+	}
+	if loader.calls != 2 {
+		t.Errorf("loader called %d times, want 2 (one eager + one reload)", loader.calls)
+	}
+}
+
 func TestNewVerifierFailsFastOnLoaderError(t *testing.T) {
 	_, err := NewVerifier(context.Background(), &fakeLoader{err: errors.New("secrets manager unreachable")})
 	if err == nil {
