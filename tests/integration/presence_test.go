@@ -60,6 +60,68 @@ func TestRegistryUpdateLastSeen(t *testing.T) {
 	}
 }
 
+// TestRegistrySetPresence is Issue 08 cycle 2: Registry.SetPresence stamps
+// is_online + presence_changed_at, GetByID surfaces them, and an id matching
+// no row is reported as ErrDeviceNotFound.
+func TestRegistrySetPresence(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	deviceID := enrollForTest(t, srv, "mac-mini-presence-03", "66666666-6666-6666-4444-555555555555")
+
+	// A freshly enrolled device is offline with no presence-change time.
+	dev, err := srv.Registry.GetByID(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if dev.IsOnline {
+		t.Errorf("fresh device: is_online = true, want false")
+	}
+	if dev.PresenceChangedAt != nil {
+		t.Errorf("fresh device: presence_changed_at = %v, want nil", dev.PresenceChangedAt)
+	}
+
+	// Flip online, then offline — both land in the row.
+	onlineAt := time.Date(2026, 5, 21, 13, 0, 0, 0, time.UTC)
+	if err := srv.Registry.SetPresence(ctx, deviceID, true, onlineAt); err != nil {
+		t.Fatalf("SetPresence online: %v", err)
+	}
+	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("GetByID after online: %v", err)
+	}
+	if !dev.IsOnline {
+		t.Errorf("is_online: got false want true")
+	}
+	if dev.PresenceChangedAt == nil || !dev.PresenceChangedAt.Equal(onlineAt) {
+		t.Errorf("presence_changed_at: got %v want %v", dev.PresenceChangedAt, onlineAt)
+	}
+
+	offlineAt := onlineAt.Add(5 * time.Minute)
+	if err := srv.Registry.SetPresence(ctx, deviceID, false, offlineAt); err != nil {
+		t.Fatalf("SetPresence offline: %v", err)
+	}
+	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("GetByID after offline: %v", err)
+	}
+	if dev.IsOnline {
+		t.Errorf("is_online: got true want false")
+	}
+	if dev.PresenceChangedAt == nil || !dev.PresenceChangedAt.Equal(offlineAt) {
+		t.Errorf("presence_changed_at: got %v want %v", dev.PresenceChangedAt, offlineAt)
+	}
+
+	// An unknown row, and a non-UUID id.
+	if err := srv.Registry.SetPresence(ctx, "00000000-0000-0000-0000-000000000000", true, offlineAt); !errors.Is(err, registry.ErrDeviceNotFound) {
+		t.Errorf("unknown device id: got %v want ErrDeviceNotFound", err)
+	}
+	if err := srv.Registry.SetPresence(ctx, "not-a-uuid", true, offlineAt); !errors.Is(err, registry.ErrDeviceNotFound) {
+		t.Errorf("non-uuid device id: got %v want ErrDeviceNotFound", err)
+	}
+}
+
 // TestDeviceGetReportsOnline is Issue 07 cycle 3: GET /devices/{id} derives
 // is_online and last_seen_ago_seconds from the last_seen column against the
 // 90s threshold.

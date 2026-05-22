@@ -59,29 +59,35 @@ type EnrollOutput struct {
 }
 
 // Device is the row returned by GetByID. LastSeen is the raw last_seen
-// column (nil until the first heartbeat lands); the API derives is_online
-// and last_seen_ago_seconds from it. mtls_cert_days_remaining lands in #09.
+// column (nil until the first heartbeat lands); IsOnline is the stored
+// presence state maintained by cp-ingest's ingesters and sweeper.
+// PresenceChangedAt is when IsOnline last flipped. mtls_cert_days_remaining
+// lands in #09.
 type Device struct {
-	ID           string
-	Hostname     string
-	HardwareUUID string
-	HardwareKind string
-	OSVersion    string
-	AgentVersion string
-	IoTThingARN  string
-	LastSeen     *time.Time
-	EnrolledAt   time.Time
+	ID                string
+	Hostname          string
+	HardwareUUID      string
+	HardwareKind      string
+	OSVersion         string
+	AgentVersion      string
+	IoTThingARN       string
+	LastSeen          *time.Time
+	IsOnline          bool
+	PresenceChangedAt *time.Time
+	EnrolledAt        time.Time
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 	var d Device
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, hostname, hardware_uuid, hardware_kind,
-		       os_version, agent_version, iot_thing_arn, last_seen, enrolled_at
+		       os_version, agent_version, iot_thing_arn,
+		       last_seen, is_online, presence_changed_at, enrolled_at
 		FROM devices WHERE id = $1
 	`, id).Scan(
 		&d.ID, &d.Hostname, &d.HardwareUUID, &d.HardwareKind,
-		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN, &d.LastSeen, &d.EnrolledAt,
+		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN,
+		&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt, &d.EnrolledAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -105,6 +111,28 @@ func (r *Registry) UpdateLastSeen(ctx context.Context, deviceID string, at time.
 	`, deviceID, at)
 	if err != nil {
 		return fmt.Errorf("update last_seen: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// SetPresence records a device's online/offline state and the time it
+// changed. Callers pass it only on a real transition (the Presence module
+// reports which devices changed). An id matching no row — including a
+// non-UUID — returns ErrDeviceNotFound.
+func (r *Registry) SetPresence(ctx context.Context, deviceID string, online bool, at time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET is_online = $2, presence_changed_at = $3, updated_at = now()
+		WHERE id = $1
+	`, deviceID, online, at)
+	if err != nil {
+		return fmt.Errorf("set presence: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrDeviceNotFound
