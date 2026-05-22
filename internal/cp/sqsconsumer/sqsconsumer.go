@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -41,6 +42,10 @@ func Poison(cause error) error {
 	return fmt.Errorf("%w: %w", ErrPoison, cause)
 }
 
+// ErrDrainTimeout is returned by Run when in-flight handlers do not finish
+// within DrainTimeout of shutdown.
+var ErrDrainTimeout = errors.New("timed out draining in-flight messages")
+
 // SQSClient is the subset of the AWS SQS API the consumer needs.
 // *sqs.Client satisfies it.
 type SQSClient interface {
@@ -51,22 +56,24 @@ type SQSClient interface {
 
 // Config tunes a Consumer. QueueURL is required; the rest default.
 type Config struct {
-	QueueURL    string
-	DLQURL      string
-	Logger      *slog.Logger
-	MaxMessages int32 // ReceiveMessage batch size; default 10
-	WaitSeconds int32 // long-poll seconds; default 20
+	QueueURL     string
+	DLQURL       string
+	Logger       *slog.Logger
+	MaxMessages  int32         // ReceiveMessage batch size; default 10
+	WaitSeconds  int32         // long-poll seconds; default 20
+	DrainTimeout time.Duration // shutdown drain budget; default 25s
 }
 
 // Consumer long-polls QueueURL and dispatches each message to Handler.
 type Consumer[T Correlated] struct {
-	client      SQSClient
-	handler     Handler[T]
-	queueURL    string
-	dlqURL      string
-	log         *slog.Logger
-	maxMessages int32
-	waitSeconds int32
+	client       SQSClient
+	handler      Handler[T]
+	queueURL     string
+	dlqURL       string
+	log          *slog.Logger
+	maxMessages  int32
+	waitSeconds  int32
+	drainTimeout time.Duration
 }
 
 func NewConsumer[T Correlated](client SQSClient, handler Handler[T], cfg Config) *Consumer[T] {
@@ -80,19 +87,25 @@ func NewConsumer[T Correlated](client SQSClient, handler Handler[T], cfg Config)
 	if cfg.WaitSeconds == 0 {
 		cfg.WaitSeconds = 20
 	}
+	if cfg.DrainTimeout == 0 {
+		cfg.DrainTimeout = 25 * time.Second
+	}
 	return &Consumer[T]{
-		client:      client,
-		handler:     handler,
-		queueURL:    cfg.QueueURL,
-		dlqURL:      cfg.DLQURL,
-		log:         log,
-		maxMessages: cfg.MaxMessages,
-		waitSeconds: cfg.WaitSeconds,
+		client:       client,
+		handler:      handler,
+		queueURL:     cfg.QueueURL,
+		dlqURL:       cfg.DLQURL,
+		log:          log,
+		maxMessages:  cfg.MaxMessages,
+		waitSeconds:  cfg.WaitSeconds,
+		drainTimeout: cfg.DrainTimeout,
 	}
 }
 
-// Run long-polls until ctx is cancelled, then waits for in-flight messages
-// to finish before returning.
+// Run long-polls until ctx is cancelled, then drains in-flight messages —
+// waiting up to DrainTimeout for their handlers to finish. It returns nil
+// on a clean drain and ErrDrainTimeout if handlers are still running when
+// the budget expires.
 func (c *Consumer[T]) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for ctx.Err() == nil {
@@ -116,9 +129,24 @@ func (c *Consumer[T]) Run(ctx context.Context) error {
 			}(m)
 		}
 	}
-	wg.Wait()
-	c.log.Info("sqs consumer stopped", "queue", c.queueURL)
-	return nil
+	return c.drain(&wg)
+}
+
+// drain waits for in-flight handlers, but no longer than DrainTimeout.
+func (c *Consumer[T]) drain(wg *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		c.log.Info("sqs consumer drained cleanly", "queue", c.queueURL)
+		return nil
+	case <-time.After(c.drainTimeout):
+		c.log.Warn("sqs consumer drain timed out", "queue", c.queueURL)
+		return ErrDrainTimeout
+	}
 }
 
 // processOne decodes, validates, and dispatches a single message.

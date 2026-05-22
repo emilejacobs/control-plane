@@ -212,6 +212,95 @@ func TestConsumerTransientErrorRetriedThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestConsumerGracefulShutdownDrainsInFlight(t *testing.T) {
+	fake := newFakeSQS()
+	fake.visibilityTimeout = time.Hour // never redeliver during the test
+	fake.seed("m1", `{"correlation_id":"corr-1","device_id":"dev-1"}`)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	handler := func(_ context.Context, _ testPayload) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	c := NewConsumer[testPayload](fake, handler, Config{
+		QueueURL: fake.mainURL, DLQURL: fake.dlqURL, Logger: discardLogger(),
+		DrainTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+
+	<-entered // a handler is now in flight
+	cancel()  // request shutdown mid-handler
+
+	// Run must keep draining until the in-flight handler finishes.
+	select {
+	case <-done:
+		t.Fatal("Run returned before the in-flight handler finished")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(release) // let the handler complete
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned %v, want nil (clean drain)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after the handler completed")
+	}
+
+	fake.mu.Lock()
+	deleted := fake.messages[0].deleted
+	fake.mu.Unlock()
+	if !deleted {
+		t.Error("in-flight message was not deleted after draining")
+	}
+}
+
+func TestConsumerShutdownTimesOutOnStuckHandler(t *testing.T) {
+	fake := newFakeSQS()
+	fake.visibilityTimeout = time.Hour
+	fake.seed("m1", `{"correlation_id":"corr-1","device_id":"dev-1"}`)
+
+	entered := make(chan struct{})
+	stuck := make(chan struct{}) // never closed until cleanup
+	handler := func(_ context.Context, _ testPayload) error {
+		close(entered)
+		<-stuck
+		return nil
+	}
+	c := NewConsumer[testPayload](fake, handler, Config{
+		QueueURL: fake.mainURL, DLQURL: fake.dlqURL, Logger: discardLogger(),
+		DrainTimeout: 150 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+
+	<-entered
+	cancel()
+
+	start := time.Now()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrDrainTimeout) {
+			t.Errorf("Run returned %v, want ErrDrainTimeout", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("Run took %v to give up; DrainTimeout was 150ms", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return; drain timeout not enforced")
+	}
+	close(stuck) // release the stuck handler so the test exits clean
+}
+
 func TestConsumerHandlerPoisonGoesStraightToDLQ(t *testing.T) {
 	fake := newFakeSQS()
 	fake.seed("m1", `{"correlation_id":"corr-1","device_id":"dev-1"}`)
