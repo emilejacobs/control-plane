@@ -9,7 +9,55 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
+	"github.com/pquerna/otp"
+	"github.com/pquerna/otp/totp"
 )
+
+// totpCode stands in for an authenticator app: it computes the 6-digit TOTP
+// for secret at time at.
+func totpCode(t *testing.T, secret string, at time.Time) string {
+	t.Helper()
+	code, err := totp.GenerateCodeCustom(secret, at, totp.ValidateOpts{
+		Period:    30,
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	if err != nil {
+		t.Fatalf("generate totp code: %v", err)
+	}
+	return code
+}
+
+// doLoginTotp POSTs /auth/login with optional totp_code / recovery_code
+// fields. The caller owns resp.Body.
+func doLoginTotp(t *testing.T, baseURL, email, password, totpCode, recoveryCode, idempotencyKey string) *http.Response {
+	t.Helper()
+	payload := map[string]any{"email": email, "password": password}
+	if totpCode != "" {
+		payload["totp_code"] = totpCode
+	}
+	if recoveryCode != "" {
+		payload["recovery_code"] = recoveryCode
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/auth/login", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
 
 // secretFromURI lifts the base32 TOTP secret out of an otpauth:// URI.
 func secretFromURI(t *testing.T, provisioningURI string) string {
@@ -78,6 +126,59 @@ func doTotpEnroll(t *testing.T, baseURL, token, idempotencyKey string) *http.Res
 type totpEnrollResponse struct {
 	ProvisioningURI string   `json:"provisioning_uri"`
 	RecoveryCodes   []string `json:"recovery_codes"`
+}
+
+// enrollAndSecret first-runs an admin, enrolls TOTP, and returns the email,
+// password, and the TOTP shared secret lifted from the provisioning URI.
+func enrollAndSecret(t *testing.T, srv *testServer) (email, password, secret string) {
+	t.Helper()
+	email, password = "admin@acmecorp.test", "correct-horse-battery-staple"
+	token := firstRunToken(t, srv, email, password)
+	resp := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e01")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("enroll setup: got %d want 200; body=%s", resp.StatusCode, raw)
+	}
+	var out totpEnrollResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode enroll: %v", err)
+	}
+	return email, password, secretFromURI(t, out.ProvisioningURI)
+}
+
+func TestLoginRequiresTotpAfterEnrollment(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	clock := newFakeClock(time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
+	srv := newTestServerCfg(t, ctx, authn.Config{Now: clock.Now})
+
+	email, password, secret := enrollAndSecret(t, srv)
+
+	// A valid TOTP code for the server's clock is accepted.
+	good := doLoginTotp(t, srv.URL, email, password,
+		totpCode(t, secret, clock.Now()), "", "00000000-0000-4000-8000-0000000071a1")
+	defer good.Body.Close()
+	if good.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(good.Body)
+		t.Errorf("login with valid TOTP: got %d want 200; body=%s", good.StatusCode, raw)
+	}
+
+	// A code from an hour away — far outside the ±1 window — is rejected.
+	bad := doLoginTotp(t, srv.URL, email, password,
+		totpCode(t, secret, clock.Now().Add(time.Hour)), "", "00000000-0000-4000-8000-0000000071a2")
+	defer bad.Body.Close()
+	if bad.StatusCode != http.StatusUnauthorized {
+		t.Errorf("login with stale TOTP: got %d want 401", bad.StatusCode)
+	}
+
+	// No TOTP code at all is also rejected for an enrolled operator.
+	missing := doLoginTotp(t, srv.URL, email, password, "", "", "00000000-0000-4000-8000-0000000071a3")
+	defer missing.Body.Close()
+	if missing.StatusCode != http.StatusUnauthorized {
+		t.Errorf("login with no TOTP: got %d want 401", missing.StatusCode)
+	}
 }
 
 func TestTotpSecretEncryptedAtRest(t *testing.T) {

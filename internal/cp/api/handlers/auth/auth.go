@@ -15,7 +15,7 @@ import (
 
 type Service interface {
 	ClaimFirstRunAdmin(ctx context.Context, email, password string) (authn.Tokens, error)
-	Login(ctx context.Context, email, password string) (authn.Tokens, error)
+	Login(ctx context.Context, in authn.LoginInput) (authn.Tokens, error)
 	Refresh(ctx context.Context, refreshToken string) (authn.Tokens, error)
 }
 
@@ -71,6 +71,7 @@ func NewLogin(svc Service) *LoginHandler { return &LoginHandler{svc: svc} }
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	TOTPCode string `json:"totp_code"`
 }
 
 func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -82,10 +83,19 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokens, err := h.svc.Login(r.Context(), req.Email, req.Password)
+	tokens, err := h.svc.Login(r.Context(), authn.LoginInput{
+		Email:    req.Email,
+		Password: req.Password,
+		TOTPCode: req.TOTPCode,
+	})
 	if err != nil {
 		if errors.Is(err, authn.ErrInvalidCredentials) {
 			log.Info("audit.login", "outcome", "failure", "reason", "invalid_credentials", "email", req.Email)
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+		if errors.Is(err, authn.ErrInvalidTotp) {
+			log.Info("audit.login", "outcome", "failure", "reason", "invalid_totp", "email", req.Email)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}

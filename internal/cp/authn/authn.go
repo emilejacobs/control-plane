@@ -35,6 +35,11 @@ var ErrInvalidRefreshToken = errors.New("invalid refresh token")
 // has a TOTP secret. Handlers translate to HTTP 409 Conflict.
 var ErrTotpAlreadyEnrolled = errors.New("totp already enrolled")
 
+// ErrInvalidTotp is returned by Login when an enrolled operator's password
+// is correct but the TOTP code is missing or wrong. Handlers translate to
+// HTTP 401.
+var ErrInvalidTotp = errors.New("invalid totp code")
+
 // Lockout policy: maxFailedAttempts consecutive failures lock the account
 // for lockoutWindow. A successful login clears both the counter and the lock.
 const (
@@ -132,21 +137,33 @@ func (a *AuthN) ClaimFirstRunAdmin(ctx context.Context, email, password string) 
 	return a.issueTokens(ctx, operatorID, email, true)
 }
 
-// Login verifies email + password and, on success, issues a fresh token
-// pair and clears the failed-login state. An unknown email or a wrong
-// password both return ErrInvalidCredentials; an account inside its lockout
-// window returns ErrAccountLocked. maxFailedAttempts consecutive failures
-// lock the account for lockoutWindow.
-func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+// LoginInput carries the credentials POST /auth/login submits. TOTPCode and
+// RecoveryCode are blank for an operator that has not yet enrolled TOTP.
+type LoginInput struct {
+	Email        string
+	Password     string
+	TOTPCode     string
+	RecoveryCode string
+}
+
+// Login verifies email + password — and, for an enrolled operator, a TOTP
+// code — and, on success, issues a fresh token pair and clears the
+// failed-login state. An unknown email or a wrong password both return
+// ErrInvalidCredentials; a correct password with a missing/wrong TOTP code
+// returns ErrInvalidTotp; an account inside its lockout window returns
+// ErrAccountLocked. maxFailedAttempts consecutive password failures lock the
+// account for lockoutWindow.
+func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
+	email := strings.ToLower(strings.TrimSpace(in.Email))
 
 	var operatorID, hash string
 	var isStaff bool
 	var lockedUntil *time.Time
+	var totpSecretEnc []byte
 	err := a.pool.QueryRow(ctx, `
-		SELECT id, password_hash, is_staff, locked_until
+		SELECT id, password_hash, is_staff, locked_until, totp_secret_encrypted
 		FROM operators WHERE email = $1
-	`, email).Scan(&operatorID, &hash, &isStaff, &lockedUntil)
+	`, email).Scan(&operatorID, &hash, &isStaff, &lockedUntil, &totpSecretEnc)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tokens{}, ErrInvalidCredentials
 	}
@@ -160,7 +177,7 @@ func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, erro
 		return Tokens{}, ErrAccountLocked
 	}
 
-	ok, err := VerifyPassword(password, hash)
+	ok, err := VerifyPassword(in.Password, hash)
 	if err != nil {
 		return Tokens{}, fmt.Errorf("verify password: %w", err)
 	}
@@ -181,6 +198,20 @@ func (a *AuthN) Login(ctx context.Context, email, password string) (Tokens, erro
 			return Tokens{}, fmt.Errorf("record failed login: %w", err)
 		}
 		return Tokens{}, ErrInvalidCredentials
+	}
+
+	// The password is correct. An enrolled operator must also present a
+	// valid TOTP code; a not-yet-enrolled operator skips this check and is
+	// funnelled into enrollment by the first-login gate. A bad TOTP code
+	// does not touch the failed-login counter — the password held.
+	if totpSecretEnc != nil {
+		secret, err := a.cipher.Decrypt(totpSecretEnc)
+		if err != nil {
+			return Tokens{}, fmt.Errorf("decrypt totp secret: %w", err)
+		}
+		if !validateTotp(string(secret), in.TOTPCode, a.now()) {
+			return Tokens{}, ErrInvalidTotp
+		}
 	}
 
 	if _, err := a.pool.Exec(ctx, `
