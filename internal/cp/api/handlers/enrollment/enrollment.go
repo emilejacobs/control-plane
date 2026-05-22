@@ -69,9 +69,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, registry.ErrInvalidBootstrapKey) {
+			log.Info("audit.enrollment",
+				"outcome", "failure",
+				"reason", "invalid_bootstrap_key",
+				"source_ip", sourceIP(r),
+				"hardware_uuid", req.HardwareUUID,
+				"hostname", req.Hostname,
+			)
 			http.Error(w, "invalid bootstrap key", http.StatusUnauthorized)
 			return
 		}
+		log.Error("audit.enrollment",
+			"outcome", "error",
+			"source_ip", sourceIP(r),
+			"hardware_uuid", req.HardwareUUID,
+			"hostname", req.Hostname,
+			"err", err,
+		)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

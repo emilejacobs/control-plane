@@ -87,3 +87,27 @@ func TestEnrollmentAuditsSuccess(t *testing.T) {
 		t.Errorf("no audit.enrollment success line:\n%s", logs.String())
 	}
 }
+
+func TestEnrollmentAuditsInvalidKey(t *testing.T) {
+	var logs bytes.Buffer
+	h := New(&fakeService{err: registry.ErrInvalidBootstrapKey})
+
+	rec := enroll(h, &logs, map[string]any{
+		"bootstrap_key": "wrong",
+		"hostname":      "mac-mini-acme-01",
+		"hardware_uuid": "11111111-2222-3333-4444-555555555555",
+		"hardware_kind": "mac",
+	})
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d want 401", rec.Code)
+	}
+	if !auditLogged(logs.String(), "audit.enrollment", map[string]any{
+		"outcome":   "failure",
+		"reason":    "invalid_bootstrap_key",
+		"source_ip": "192.0.2.1",
+		"hostname":  "mac-mini-acme-01",
+	}) {
+		t.Errorf("no audit.enrollment failure line:\n%s", logs.String())
+	}
+}
