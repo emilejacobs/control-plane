@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useDevices } from "../../lib/api/hooks";
 import { groupDevices } from "../../lib/fleet";
 import { PresenceChip } from "../../components/PresenceChip";
@@ -25,7 +26,8 @@ export default function DevicesPage() {
                 <ul>
                   {site.devices.map((d) => (
                     <li key={d.deviceId}>
-                      <PresenceChip online={d.isOnline} /> {d.hostname}
+                      <PresenceChip online={d.isOnline} />{" "}
+                      <Link href={`/devices/${d.deviceId}`}>{d.hostname}</Link>
                     </li>
                   ))}
                 </ul>

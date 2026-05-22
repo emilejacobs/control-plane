@@ -37,6 +37,16 @@ describe("fleet view", () => {
     expect(a).toBeLessThan(z);
   });
 
+  it("links each device row to its per-device view", async () => {
+    devicesReturn([
+      { device_id: "dev-123", hostname: "mac-a", is_online: true, site_name: "HQ", client_name: "Acme" },
+    ]);
+    renderWithClient(<DevicesPage />);
+
+    const link = await screen.findByRole("link", { name: /mac-a/ });
+    expect(link).toHaveAttribute("href", "/devices/dev-123");
+  });
+
   it("shows a presence chip reflecting each device's online state", async () => {
     devicesReturn([
       { device_id: "d1", hostname: "mac-on", is_online: true, site_name: "HQ", client_name: "Acme" },
