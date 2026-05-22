@@ -72,4 +72,13 @@ describe("per-device view", () => {
     );
     expect(fieldValue("Enrolled")).toBe("2026-05-01");
   });
+
+  it("shows Unassigned for a device with no site or client", async () => {
+    deviceReturns(device({ site_name: null, client_name: null }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("Client")).toBe("Unassigned");
+    expect(fieldValue("Site")).toBe("Unassigned");
+  });
 });

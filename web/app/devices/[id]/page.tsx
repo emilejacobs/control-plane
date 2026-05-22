@@ -2,6 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useDevice } from "../../../lib/api/hooks";
+import { UNASSIGNED } from "../../../lib/fleet";
 
 // DevicePage is the per-device view: the static record, live presence, and
 // the mTLS cert expiry for one device, polled every 10s (Issue 18).
@@ -17,9 +18,9 @@ export default function DevicePage() {
           <h1>{d.hostname}</h1>
           <dl>
             <dt>Client</dt>
-            <dd>{d.clientName}</dd>
+            <dd>{d.clientName ?? UNASSIGNED}</dd>
             <dt>Site</dt>
-            <dd>{d.siteName}</dd>
+            <dd>{d.siteName ?? UNASSIGNED}</dd>
             <dt>Hardware kind</dt>
             <dd>{d.hardwareKind}</dd>
             <dt>OS version</dt>
