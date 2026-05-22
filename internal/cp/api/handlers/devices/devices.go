@@ -39,6 +39,10 @@ type response struct {
 	MtlsCertExpiresAt     *string `json:"mtls_cert_expires_at"`
 	MtlsCertDaysRemaining *int    `json:"mtls_cert_days_remaining"`
 	EnrolledAt            string  `json:"enrolled_at"`
+	// SiteName / ClientName are null for a device with no site assigned;
+	// the per-device view shows "Unassigned" for those.
+	SiteName   *string `json:"site_name"`
+	ClientName *string `json:"client_name"`
 }
 
 // ListHandler serves GET /devices — the site-scoped fleet list. It runs
@@ -132,5 +136,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		MtlsCertExpiresAt:     certExpiresAt,
 		MtlsCertDaysRemaining: certDaysRemaining,
 		EnrolledAt:            dev.EnrolledAt.UTC().Format(time.RFC3339),
+		SiteName:              dev.SiteName,
+		ClientName:            dev.ClientName,
 	})
 }

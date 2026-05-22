@@ -105,3 +105,39 @@ func TestGetDeviceReturnsCertExpiresAt(t *testing.T) {
 		t.Errorf("mtls_cert_expires_at: got %q want %q", got, want)
 	}
 }
+
+func TestGetDeviceSurfacesSiteAndClient(t *testing.T) {
+	site := "Acme HQ"
+	client := "Acme Corp"
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:         "dev-1",
+		EnrolledAt: time.Now(),
+		SiteName:   &site,
+		ClientName: &client,
+	}})
+
+	out := getDevice(t, h)
+
+	if got := out["site_name"]; got != site {
+		t.Errorf("site_name: got %v want %q", got, site)
+	}
+	if got := out["client_name"]; got != client {
+		t.Errorf("client_name: got %v want %q", got, client)
+	}
+}
+
+func TestGetDeviceSiteAndClientAreNullWhenUnassigned(t *testing.T) {
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:         "dev-1",
+		EnrolledAt: time.Now(),
+	}})
+
+	out := getDevice(t, h)
+
+	if got, ok := out["site_name"]; !ok || got != nil {
+		t.Errorf("site_name: got %v want null", got)
+	}
+	if got, ok := out["client_name"]; !ok || got != nil {
+		t.Errorf("client_name: got %v want null", got)
+	}
+}

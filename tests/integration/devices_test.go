@@ -191,6 +191,53 @@ func TestDeviceListIncludesSiteAndClient(t *testing.T) {
 	}
 }
 
+func TestGetDeviceByIDIncludesSiteAndClient(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// A device assigned to a site, and one with no site.
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteID := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	sitedID := insertDeviceAtSite(t, ctx, srv, "mac-sited", siteID)
+	unsitedID := enrollForTest(t, srv, "mac-unsited", "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b")
+
+	token := mintAccessToken(t, ctx, srv)
+
+	sited := decodeDeviceGet(t, srv.URL, sitedID, token)
+	if sited["site_name"] != "Acme HQ" {
+		t.Errorf("site-assigned device site_name: got %v want %q", sited["site_name"], "Acme HQ")
+	}
+	if sited["client_name"] != "Acme Corp" {
+		t.Errorf("site-assigned device client_name: got %v want %q", sited["client_name"], "Acme Corp")
+	}
+
+	unsited := decodeDeviceGet(t, srv.URL, unsitedID, token)
+	if unsited["site_name"] != nil {
+		t.Errorf("site-less device site_name: got %v want null", unsited["site_name"])
+	}
+	if unsited["client_name"] != nil {
+		t.Errorf("site-less device client_name: got %v want null", unsited["client_name"])
+	}
+}
+
+// decodeDeviceGet issues an authenticated GET /devices/{id} and returns the
+// decoded JSON object.
+func decodeDeviceGet(t *testing.T, baseURL, deviceID, token string) map[string]any {
+	t.Helper()
+	resp := doDeviceGet(t, baseURL, deviceID, token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /devices/%s: got %d want 200; body=%s", deviceID, resp.StatusCode, raw)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return out
+}
+
 func TestGetDeviceByIDUnknownReturns404(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
