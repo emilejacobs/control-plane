@@ -43,7 +43,7 @@ func TestEnrollmentAgainstMotoIoT(t *testing.T) {
 	seedIoTPolicy(t, ctx, iotClient, policyName)
 
 	prov := iotprovisioner.NewAWS(iotClient, policyName)
-	reg := registry.New(pool, prov, registry.Config{BootstrapKey: testBootstrapKey})
+	reg := registry.New(pool, prov, registry.Config{BootstrapVerifier: testBootstrapVerifier(t, ctx)})
 	store := storage.NewIdempotencyStore(pool)
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:         reg,

@@ -20,16 +20,23 @@ import (
 )
 
 // ErrInvalidBootstrapKey is returned by Enroll when the supplied bootstrap
-// key does not match the one configured on the Registry. Handlers translate
-// it to HTTP 401 (per PRD § API contracts).
+// key is rejected by the verifier. Handlers translate it to HTTP 401 (per
+// PRD § API contracts).
 var ErrInvalidBootstrapKey = errors.New("invalid bootstrap key")
 
 // ErrDeviceNotFound is returned by GetByID when no row matches the id.
 // Handlers translate it to HTTP 404.
 var ErrDeviceNotFound = errors.New("device not found")
 
+// BootstrapVerifier validates the enrollment bootstrap key. The registry
+// depends on the interface; bootstrap.Verifier is the implementation, which
+// refreshes the key from Secrets Manager on a mismatch (ADR-017).
+type BootstrapVerifier interface {
+	Verify(ctx context.Context, presented string) bool
+}
+
 type Config struct {
-	BootstrapKey string
+	BootstrapVerifier BootstrapVerifier
 }
 
 type Registry struct {
@@ -215,7 +222,7 @@ func (r *Registry) SetPresence(ctx context.Context, deviceID string, online bool
 }
 
 func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, error) {
-	if in.BootstrapKey != r.cfg.BootstrapKey {
+	if !r.cfg.BootstrapVerifier.Verify(ctx, in.BootstrapKey) {
 		return EnrollOutput{}, ErrInvalidBootstrapKey
 	}
 	deviceID := uuid.NewString()

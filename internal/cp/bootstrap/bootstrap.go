@@ -18,6 +18,12 @@ type KeyLoader interface {
 	Load(ctx context.Context) (string, error)
 }
 
+// FixedKey is a KeyLoader that always yields the same key. It backs tests
+// and never rotates.
+type FixedKey string
+
+func (k FixedKey) Load(context.Context) (string, error) { return string(k), nil }
+
 // Verifier checks a presented bootstrap key against the key loaded from the
 // store.
 type Verifier struct {

@@ -30,7 +30,7 @@ func TestIdempotencyGate(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	iot := iotprovisioner.NewFake()
-	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
+	reg := registry.New(pool, iot, registry.Config{BootstrapVerifier: testBootstrapVerifier(t, ctx)})
 	store := storage.NewIdempotencyStore(pool)
 
 	builder := api.NewBuilderWith(api.Deps{

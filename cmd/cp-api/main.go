@@ -4,16 +4,16 @@
 // Required env:
 //
 //	DB_DSN              Postgres DSN (postgres://...)
-//	CP_BOOTSTRAP_KEY    bootstrap key the install script presents (#10 swaps this for Secrets Manager)
 //	IOT_POLICY_NAME     name of the IoT Core policy to attach to each device cert
 //	JWT_SIGNING_KEY     base64-encoded HS256 signing key, >= 32 bytes decoded (ADR-010)
 //	TOTP_ENCRYPTION_KEY base64-encoded AES-256 key, exactly 32 bytes decoded (TOTP secret at rest)
 //
 // Optional env:
 //
-//	PORT                listen port (default 8080)
-//	AWS_REGION          AWS region (default from default credentials chain)
-//	AWS_ENDPOINT_URL    override the AWS service endpoint (dev/moto only)
+//	PORT                    listen port (default 8080)
+//	CP_BOOTSTRAP_SECRET_ID  Secrets Manager id of the bootstrap key (default uknomi/cp/bootstrap-key)
+//	AWS_REGION              AWS region (default from default credentials chain)
+//	AWS_ENDPOINT_URL        override the AWS service endpoint (dev/moto only)
 package main
 
 import (
@@ -31,11 +31,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
+	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -54,8 +56,8 @@ func main() {
 
 func run(logger *slog.Logger) error {
 	dsn := mustEnv("DB_DSN")
-	bootstrapKey := mustEnv("CP_BOOTSTRAP_KEY")
 	policyName := mustEnv("IOT_POLICY_NAME")
+	bootstrapSecretID := envOr("CP_BOOTSTRAP_SECRET_ID", "uknomi/cp/bootstrap-key")
 	port := envOr("PORT", "8080")
 
 	signingKey, err := base64.StdEncoding.DecodeString(mustEnv("JWT_SIGNING_KEY"))
@@ -93,16 +95,30 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("aws config: %w", err)
 	}
 	var iotOpts []func(*iot.Options)
+	var smOpts []func(*secretsmanager.Options)
 	if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
 		logger.Info("AWS_ENDPOINT_URL override active", "endpoint", endpoint)
 		iotOpts = append(iotOpts, func(o *iot.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 		})
+		smOpts = append(smOpts, func(o *secretsmanager.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+		})
 	}
 	iotClient := iot.NewFromConfig(awsCfg, iotOpts...)
 
+	// The bootstrap key's store of record is Secrets Manager (ADR-017). The
+	// verifier loads it eagerly — a key store it cannot reach fails startup.
+	smClient := secretsmanager.NewFromConfig(awsCfg, smOpts...)
+	bootstrapLoader := bootstrap.NewSecretsManagerLoader(smClient, bootstrapSecretID)
+	bootstrapVerifier, err := bootstrap.NewVerifier(ctx, bootstrapLoader)
+	if err != nil {
+		return fmt.Errorf("bootstrap key: %w", err)
+	}
+	logger.Info("bootstrap key loaded", "secret_id", bootstrapSecretID)
+
 	prov := iotprovisioner.NewAWS(iotClient, policyName)
-	reg := registry.New(pool, prov, registry.Config{BootstrapKey: bootstrapKey})
+	reg := registry.New(pool, prov, registry.Config{BootstrapVerifier: bootstrapVerifier})
 	idemStore := storage.NewIdempotencyStore(pool)
 	authnSvc := authn.New(pool, authn.Config{SigningKey: signingKey, TotpEncryptionKey: totpKey})
 	authzSvc := authz.New(pool)

@@ -19,6 +19,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
+	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -90,6 +91,18 @@ func newTracedTestServer(t *testing.T, ctx context.Context) (*testServer, *query
 	return buildTestServer(t, ctx, startPostgres(t, ctx, rec), authn.Config{}), rec
 }
 
+// testBootstrapVerifier builds a bootstrap-key verifier that accepts
+// testBootstrapKey — the integration-test equivalent of the Secrets
+// Manager-backed verifier production wires in.
+func testBootstrapVerifier(t *testing.T, ctx context.Context) *bootstrap.Verifier {
+	t.Helper()
+	v, err := bootstrap.NewVerifier(ctx, bootstrap.FixedKey(testBootstrapKey))
+	if err != nil {
+		t.Fatalf("bootstrap verifier: %v", err)
+	}
+	return v
+}
+
 // buildTestServer migrates the pool, wires the CP API router, and registers
 // cleanup. An empty SigningKey / TotpEncryptionKey is backfilled with the
 // test keys.
@@ -105,7 +118,7 @@ func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, auth
 		t.Fatalf("migrate: %v", err)
 	}
 	iot := iotprovisioner.NewFake()
-	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
+	reg := registry.New(pool, iot, registry.Config{BootstrapVerifier: testBootstrapVerifier(t, ctx)})
 	idemStore := storage.NewIdempotencyStore(pool)
 	authnSvc := authn.New(pool, authnCfg)
 	authzSvc := authz.New(pool)
