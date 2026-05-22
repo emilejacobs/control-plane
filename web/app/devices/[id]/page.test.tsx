@@ -89,4 +89,12 @@ describe("per-device view", () => {
 
     expect(screen.getByText("Online")).toBeInTheDocument();
   });
+
+  it("shows last_seen as an ago-string", async () => {
+    deviceReturns(device({ last_seen_ago_seconds: 125 }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(screen.getByText("2 minutes ago")).toBeInTheDocument();
+  });
 });

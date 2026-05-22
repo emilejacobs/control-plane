@@ -48,6 +48,11 @@ export interface Device {
   agentVersion: string;
   iotThingArn: string;
   isOnline: boolean;
+  // lastSeenAt is the absolute instant of the last heartbeat, anchored from
+  // the server's relative last_seen_ago_seconds at fetch time so the
+  // per-device view can recompute a ticking ago-string between polls. Null
+  // for a device that has never reported.
+  lastSeenAt: Date | null;
   enrolledAt: string;
   siteName: string | null;
   clientName: string | null;
@@ -62,6 +67,7 @@ interface DeviceWire {
   agent_version: string;
   iot_thing_arn: string;
   is_online: boolean;
+  last_seen_ago_seconds: number | null;
   enrolled_at: string;
   site_name: string | null;
   client_name: string | null;
@@ -83,6 +89,10 @@ export async function getDevice(id: string): Promise<Device> {
     agentVersion: d.agent_version,
     iotThingArn: d.iot_thing_arn,
     isOnline: d.is_online,
+    lastSeenAt:
+      d.last_seen_ago_seconds == null
+        ? null
+        : new Date(Date.now() - d.last_seen_ago_seconds * 1000),
     enrolledAt: d.enrolled_at,
     siteName: d.site_name,
     clientName: d.client_name,
