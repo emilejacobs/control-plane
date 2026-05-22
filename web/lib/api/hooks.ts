@@ -3,7 +3,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { firstRun, login, type LoginInput } from "./auth";
+import { firstRun, login, enrollTotp, type LoginInput } from "./auth";
 
 interface Credentials {
   email: string;
@@ -22,5 +22,12 @@ export function useFirstRun() {
 export function useLogin() {
   return useMutation({
     mutationFn: (input: LoginInput) => login(input),
+  });
+}
+
+// useEnrollTotp mints the TOTP secret + recovery codes for the operator.
+export function useEnrollTotp() {
+  return useMutation({
+    mutationFn: () => enrollTotp(),
   });
 }

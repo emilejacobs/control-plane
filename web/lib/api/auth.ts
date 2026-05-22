@@ -64,3 +64,26 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
   return { requiresTotpEnrollment: body.requires_totp_enrollment };
 }
+
+export interface TotpEnrollment {
+  provisioningUri: string;
+  recoveryCodes: string[];
+}
+
+// enrollTotp mints the operator's TOTP secret and recovery codes. The
+// provisioning URI is rendered as a QR code; the recovery codes are shown
+// exactly once. Requires an authenticated session.
+export async function enrollTotp(): Promise<TotpEnrollment> {
+  const res = await apiRequest("/auth/totp/enroll", { method: "POST" });
+  if (!res.ok) {
+    throw new ApiError(res.status, "totp enrollment failed");
+  }
+  const body = (await res.json()) as {
+    provisioning_uri: string;
+    recovery_codes: string[];
+  };
+  return {
+    provisioningUri: body.provisioning_uri,
+    recoveryCodes: body.recovery_codes,
+  };
+}
