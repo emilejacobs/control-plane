@@ -35,3 +35,28 @@ export async function getDevices(): Promise<DeviceSummary[]> {
     clientName: d.client_name,
   }));
 }
+
+// Device is the full per-device record GET /devices/{id} returns — the
+// per-device view (Issue 18) renders it.
+export interface Device {
+  deviceId: string;
+  hostname: string;
+}
+
+interface DeviceWire {
+  device_id: string;
+  hostname: string;
+}
+
+// getDevice fetches one device's full record from GET /devices/{id}.
+export async function getDevice(id: string): Promise<Device> {
+  const res = await apiRequest(`/devices/${id}`);
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to load device");
+  }
+  const d = (await res.json()) as DeviceWire;
+  return {
+    deviceId: d.device_id,
+    hostname: d.hostname,
+  };
+}
