@@ -86,6 +86,10 @@ func TestEnrollmentAuditsSuccess(t *testing.T) {
 	}) {
 		t.Errorf("no audit.enrollment success line:\n%s", logs.String())
 	}
+	// A convention-conforming hostname raises no anomaly alert.
+	if strings.Contains(logs.String(), "audit.enrollment.anomaly") {
+		t.Errorf("conventional hostname raised an anomaly alert:\n%s", logs.String())
+	}
 }
 
 func TestEnrollmentAlertsOnHostnameAnomaly(t *testing.T) {
