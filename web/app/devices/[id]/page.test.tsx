@@ -106,6 +106,21 @@ describe("per-device view", () => {
     expect(screen.getByText(/last seen never/i)).toBeInTheDocument();
   });
 
+  it("shows the mTLS cert expiry with days remaining", async () => {
+    deviceReturns(
+      device({
+        mtls_cert_expires_at: "2027-01-15T12:00:00Z",
+        mtls_cert_days_remaining: 365,
+      }),
+    );
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    const cert = screen.getByText(/certificate expires/i);
+    expect(cert).toHaveTextContent("2027-01-15");
+    expect(cert).toHaveTextContent("365 days");
+  });
+
   it("re-renders the ago-string every second between polls", async () => {
     vi.useFakeTimers();
     try {

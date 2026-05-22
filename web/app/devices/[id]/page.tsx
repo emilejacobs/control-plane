@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useDevice, useNow } from "../../../lib/api/hooks";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
+import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { formatAgo } from "../../../lib/ago";
 
 // DevicePage is the per-device view: the static record, live presence, and
@@ -28,6 +29,10 @@ export default function DevicePage() {
               "Never"
             )}
           </p>
+          <CertExpiryIndicator
+            expiresAt={d.certExpiresAt}
+            daysRemaining={d.certDaysRemaining}
+          />
           <dl>
             <dt>Client</dt>
             <dd>{d.clientName ?? UNASSIGNED}</dd>

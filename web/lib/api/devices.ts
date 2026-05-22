@@ -53,6 +53,11 @@ export interface Device {
   // per-device view can recompute a ticking ago-string between polls. Null
   // for a device that has never reported.
   lastSeenAt: Date | null;
+  // mTLS cert expiry — the ISO timestamp and the whole days remaining,
+  // computed server-side (#09). Both null only for rows predating the
+  // migration that began persisting the cert notAfter.
+  certExpiresAt: string | null;
+  certDaysRemaining: number | null;
   enrolledAt: string;
   siteName: string | null;
   clientName: string | null;
@@ -68,6 +73,8 @@ interface DeviceWire {
   iot_thing_arn: string;
   is_online: boolean;
   last_seen_ago_seconds: number | null;
+  mtls_cert_expires_at: string | null;
+  mtls_cert_days_remaining: number | null;
   enrolled_at: string;
   site_name: string | null;
   client_name: string | null;
@@ -93,6 +100,8 @@ export async function getDevice(id: string): Promise<Device> {
       d.last_seen_ago_seconds == null
         ? null
         : new Date(Date.now() - d.last_seen_ago_seconds * 1000),
+    certExpiresAt: d.mtls_cert_expires_at,
+    certDaysRemaining: d.mtls_cert_days_remaining,
     enrolledAt: d.enrolled_at,
     siteName: d.site_name,
     clientName: d.client_name,
