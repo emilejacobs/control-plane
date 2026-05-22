@@ -11,11 +11,11 @@ Terms used throughout the design documents.
 | **Tailnet** | The uKnomi Tailscale network. All edge devices and the CP's Tailscale subnet router are members. |
 | **Subnet router** | A Tailscale node that advertises a route, allowing other tailnet members to reach hosts behind it. The CP runs one as a Fargate task to give the API service tailnet access without enrolling clients. |
 | **Device shadow** | An IoT Core feature representing desired and reported state of a thing as JSON documents. CP uses it for service-state tracking. |
-| **Bootstrap token** | A short-lived, one-time-use credential the install script uses to enroll a device with the CP. |
+| **Bootstrap key** | A static shared secret bundled into the device install package; the install script presents it to `POST /enrollments`. Static-key approach per ADR-017, which superseded the short-lived per-device S3 token of ADR-014. |
 | **Enrollment** | The one-time process of registering a new device with the CP and provisioning its mTLS cert. |
 | **Signed command** | A command payload signed with the CP's Ed25519 key (held in KMS) before being sent to a device. The agent verifies the signature before executing. |
 | **Site** | A physical client location. One client may have multiple sites. |
-| **Operator (staff)** | A uKnomi internal user who logs in via Entra ID and has full fleet access. |
+| **Operator (staff)** | A uKnomi internal user with full fleet access. Authenticates with local credentials — password + TOTP (ADR-010, which dropped Entra ID); carries the `'*'` site allowlist via the `is_staff` flag. |
 | **Operator (local)** | A future field-operator user with a local CP account, scoped to specific sites. |
 | **Mosyle** | Apple MDM provider used for Mac auto-enrollment. Not in the CP runtime path; only triggers the install script. |
 | **Heartbeat** | A small message the agent publishes to `devices/{id}/telemetry` every 30s. The ingest worker uses it to update the device's `last_seen` in Postgres. |

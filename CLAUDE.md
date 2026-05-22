@@ -1,6 +1,6 @@
 # Claude session notes
 
-This repo is in the **design phase** as of 2026-05-05. No code yet — the contents are design and decision documents intended for team circulation.
+This repo is in **active implementation** as of 2026-05-21. The Phase 0 agent spike and Phase 1 issues #02–#04, #07, and #19 have landed — there is a Go codebase under `cmd/` and `internal/`. The design and decision documents under `docs/` still anchor the work; read them before changing anything.
 
 ## Before doing anything
 
@@ -21,7 +21,7 @@ Centralized AWS-hosted control plane for managing ~63 edge devices (25 Macs + 36
 
 ## Don't
 
-- Don't write code unless explicitly asked. Design phase.
+- Don't write code unless the task calls for it — an assigned issue or an explicit request. Many sessions here are still design, planning, or docs work.
 - Don't add features outside the scope listed in `docs/architecture.md` § Goals/Non-goals.
 - Don't propose Zabbix integrations — explicitly de-prioritized.
 - Don't suggest investing in Pi/Radxa-specific features — those platforms are being phased out (failed Pis are replaced with Macs).
