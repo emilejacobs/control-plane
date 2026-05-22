@@ -84,12 +84,14 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, hostname, hardware_uuid, hardware_kind,
 		       os_version, agent_version, iot_thing_arn,
-		       last_seen, is_online, presence_changed_at, enrolled_at
+		       last_seen, is_online, presence_changed_at,
+		       mtls_cert_expires_at, enrolled_at
 		FROM devices WHERE id = $1
 	`, id).Scan(
 		&d.ID, &d.Hostname, &d.HardwareUUID, &d.HardwareKind,
 		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN,
-		&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt, &d.EnrolledAt,
+		&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,
+		&d.MtlsCertExpiresAt, &d.EnrolledAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -161,11 +163,13 @@ func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, er
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO devices (
 			id, hostname, hardware_uuid, hardware_kind,
-			os_version, agent_version, iot_thing_arn, mtls_cert_arn
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			os_version, agent_version, iot_thing_arn, mtls_cert_arn,
+			mtls_cert_expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`,
 		deviceID, in.Hostname, in.HardwareUUID, in.HardwareKind,
 		in.OSVersion, in.AgentVersion, cert.ThingARN, cert.CertARN,
+		cert.ExpiresAt,
 	)
 	if err != nil {
 		_ = r.iot.Revoke(ctx, cert.CertARN)

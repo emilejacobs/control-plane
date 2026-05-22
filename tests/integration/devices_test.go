@@ -108,6 +108,49 @@ func TestGetDeviceByIDReturnsInsertedRow(t *testing.T) {
 	}
 }
 
+func TestGetDeviceByIDSurfacesCertExpiry(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "mac-mini-acme-09", "09090909-0909-4909-8909-090909090909")
+
+	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200; body=%s", resp.StatusCode, raw)
+	}
+
+	var out struct {
+		MtlsCertExpiresAt     *string `json:"mtls_cert_expires_at"`
+		MtlsCertDaysRemaining *int    `json:"mtls_cert_days_remaining"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// The cert expiry minted at enrollment must round-trip through the
+	// devices row and back out on the read endpoint.
+	if out.MtlsCertExpiresAt == nil {
+		t.Fatalf("mtls_cert_expires_at is null — not persisted at enrollment")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, *out.MtlsCertExpiresAt)
+	if err != nil {
+		t.Fatalf("mtls_cert_expires_at not RFC3339: %v", err)
+	}
+	// The fake provisioner mints a 365-day cert.
+	if until := time.Until(expiresAt); until < 360*24*time.Hour || until > 366*24*time.Hour {
+		t.Errorf("mtls_cert_expires_at %v not ~365d out (%v remaining)", expiresAt, until)
+	}
+	if out.MtlsCertDaysRemaining == nil {
+		t.Fatalf("mtls_cert_days_remaining is null")
+	}
+	if d := *out.MtlsCertDaysRemaining; d < 363 || d > 365 {
+		t.Errorf("mtls_cert_days_remaining: got %d want ~365", d)
+	}
+}
+
 func TestGetDeviceByIDUnknownReturns404(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
