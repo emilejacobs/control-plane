@@ -6,9 +6,24 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
+
+// secretFromURI lifts the base32 TOTP secret out of an otpauth:// URI.
+func secretFromURI(t *testing.T, provisioningURI string) string {
+	t.Helper()
+	u, err := url.Parse(provisioningURI)
+	if err != nil {
+		t.Fatalf("parse provisioning_uri %q: %v", provisioningURI, err)
+	}
+	secret := u.Query().Get("secret")
+	if secret == "" {
+		t.Fatalf("provisioning_uri carries no secret: %q", provisioningURI)
+	}
+	return secret
+}
 
 // firstRunToken does POST /auth/first-run and returns the access token of the
 // freshly-created admin operator — the bearer token for authenticated calls.
@@ -63,6 +78,41 @@ func doTotpEnroll(t *testing.T, baseURL, token, idempotencyKey string) *http.Res
 type totpEnrollResponse struct {
 	ProvisioningURI string   `json:"provisioning_uri"`
 	RecoveryCodes   []string `json:"recovery_codes"`
+}
+
+func TestTotpSecretEncryptedAtRest(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const email = "admin@acmecorp.test"
+	token := firstRunToken(t, srv, email, "correct-horse-battery-staple")
+
+	resp := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e01")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("enroll: got %d want 200", resp.StatusCode)
+	}
+	var out totpEnrollResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	rawSecret := secretFromURI(t, out.ProvisioningURI)
+
+	// The stored column must be ciphertext: the raw shared secret must not
+	// appear in it verbatim.
+	var stored []byte
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT totp_secret_encrypted FROM operators WHERE email = $1`, email,
+	).Scan(&stored); err != nil {
+		t.Fatalf("query totp_secret_encrypted: %v", err)
+	}
+	if len(stored) == 0 {
+		t.Fatal("totp_secret_encrypted is empty")
+	}
+	if bytes.Contains(stored, []byte(rawSecret)) {
+		t.Errorf("totp_secret_encrypted contains the raw secret in plaintext")
+	}
 }
 
 func TestTotpEnrollSecondCallConflicts(t *testing.T) {
