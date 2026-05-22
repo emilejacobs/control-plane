@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useDevice } from "../../../lib/api/hooks";
+import { useDevice, useNow } from "../../../lib/api/hooks";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { formatAgo } from "../../../lib/ago";
@@ -11,6 +11,7 @@ import { formatAgo } from "../../../lib/ago";
 export default function DevicePage() {
   const { id } = useParams<{ id: string }>();
   const device = useDevice(id);
+  const now = useNow();
   const d = device.data;
 
   return (
@@ -22,7 +23,7 @@ export default function DevicePage() {
           <p>
             Last seen{" "}
             {d.lastSeenAt ? (
-              <time>{formatAgo(d.lastSeenAt, new Date())}</time>
+              <time>{formatAgo(d.lastSeenAt, now)}</time>
             ) : (
               "Never"
             )}

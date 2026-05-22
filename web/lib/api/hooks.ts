@@ -56,3 +56,17 @@ export function useDevice(id: string) {
     refetchInterval: devicePollInterval,
   });
 }
+
+// useNow returns the current time, re-rendering every intervalMs. The clock
+// runs through TanStack Query's refetchInterval — not a setInterval — so the
+// per-device view's last_seen ago-string ticks every second between the 10s
+// polls without breaking the structural no-setInterval rule.
+export function useNow(intervalMs = 1_000): Date {
+  const { data } = useQuery({
+    queryKey: ["now", intervalMs],
+    queryFn: () => Date.now(),
+    refetchInterval: intervalMs,
+    initialData: () => Date.now(),
+  });
+  return new Date(data);
+}

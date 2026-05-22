@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, act } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../test/server";
 import { renderWithClient } from "../../../test/render";
@@ -104,5 +104,30 @@ describe("per-device view", () => {
     await screen.findByRole("heading", { name: "mac-mini-acme-01" });
 
     expect(screen.getByText(/last seen never/i)).toBeInTheDocument();
+  });
+
+  it("re-renders the ago-string every second between polls", async () => {
+    vi.useFakeTimers();
+    try {
+      deviceReturns(device({ last_seen_ago_seconds: 12 }));
+      renderWithClient(<DevicePage />);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0); // flush the initial queries
+      });
+      expect(screen.getByText("12 seconds ago")).toBeInTheDocument();
+
+      // Advance the client clock 5s — inside the 10s poll window, so the
+      // server is never re-queried. The ago-string still climbs ~5s on its
+      // own: it is recomputed from useNow every second, not frozen at the
+      // value the last poll returned.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.queryByText("12 seconds ago")).not.toBeInTheDocument();
+      expect(screen.getByText(/^1[5-7] seconds ago$/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
