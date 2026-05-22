@@ -3,7 +3,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { firstRun } from "./auth";
+import { firstRun, login, type LoginInput } from "./auth";
 
 interface Credentials {
   email: string;
@@ -14,5 +14,13 @@ interface Credentials {
 export function useFirstRun() {
   return useMutation({
     mutationFn: ({ email, password }: Credentials) => firstRun(email, password),
+  });
+}
+
+// useLogin authenticates an operator; its result carries the
+// requires_totp_enrollment flag the login page branches on.
+export function useLogin() {
+  return useMutation({
+    mutationFn: (input: LoginInput) => login(input),
   });
 }
