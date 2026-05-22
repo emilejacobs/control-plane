@@ -61,6 +61,27 @@ func TestGetDeviceComputesCertDaysRemaining(t *testing.T) {
 	}
 }
 
+func TestGetDeviceExpiredCertHasNegativeDaysRemaining(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	expiry := now.Add(-5 * 24 * time.Hour) // expired 5 days ago
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:                "dev-1",
+		EnrolledAt:        now.Add(-365 * 24 * time.Hour),
+		MtlsCertExpiresAt: &expiry,
+	}})
+	h.now = func() time.Time { return now }
+
+	out := getDevice(t, h)
+
+	got, ok := out["mtls_cert_days_remaining"].(float64)
+	if !ok {
+		t.Fatalf("mtls_cert_days_remaining: got %v (%T) want a number", out["mtls_cert_days_remaining"], out["mtls_cert_days_remaining"])
+	}
+	if want := -5; int(got) != want {
+		t.Errorf("mtls_cert_days_remaining: got %d want %d", int(got), want)
+	}
+}
+
 func TestGetDeviceReturnsCertExpiresAt(t *testing.T) {
 	expiry := time.Date(2027, 1, 15, 12, 0, 0, 0, time.UTC)
 	h := NewGet(fakeService{dev: registry.Device{
