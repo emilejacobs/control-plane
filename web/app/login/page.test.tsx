@@ -49,4 +49,29 @@ describe("login page", () => {
 
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/totp-enroll"));
   });
+
+  it("can sign in with a recovery code instead of a TOTP code", async () => {
+    let captured: Request | undefined;
+    server.use(
+      http.post(`${API_BASE}/auth/login`, ({ request }) => {
+        captured = request.clone();
+        return HttpResponse.json({
+          access_token: "a",
+          refresh_token: "r",
+          requires_totp_enrollment: false,
+        });
+      }),
+    );
+    renderWithClient(<LoginPage />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: /use a recovery code/i }));
+    await user.type(screen.getByLabelText(/email/i), "op@acmecorp.test");
+    await user.type(screen.getByLabelText(/password/i), "correct-horse-battery-staple");
+    await user.type(screen.getByLabelText(/recovery code/i), "abcd-efgh");
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
+
+    await waitFor(() => expect(captured).toBeDefined());
+    expect(await captured!.json()).toMatchObject({ recovery_code: "abcd-efgh" });
+  });
 });
