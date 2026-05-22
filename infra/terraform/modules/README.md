@@ -9,7 +9,7 @@ Phase 0 single-device spike.
 
 One ingest topic: a main SQS queue, its dead-letter queue (with redrive
 policy), and the IoT topic rule that feeds the queue. Reused per ingest
-topic — presence heartbeats now, lifecycle events in #08.
+topic — presence heartbeats and lifecycle events.
 
 The presence-heartbeat wiring (issue 07):
 
@@ -25,6 +25,23 @@ module "presence_heartbeats" {
 
 `topic(2)` is the `{id}` segment of `devices/{id}/telemetry`; the rule adds
 it to the message as `device_id`, which `cp-ingest` reads.
+
+The presence-lifecycle wiring (issue 08):
+
+```hcl
+module "presence_lifecycle" {
+  source = "./modules/sqs-ingest"
+
+  name          = "cp-presence-lifecycle"
+  iot_rule_name = "presence_lifecycle"
+  iot_sql       = "SELECT *, newuuid() as correlation_id FROM '$aws/events/presence/+/+'"
+}
+```
+
+`$aws/events/presence/+/+` matches IoT Core's `connected`/`disconnected`
+events; their payload already carries `clientId` and `eventType`. AWS
+lifecycle events have no `correlation_id`, so the rule mints one with
+`newuuid()` — `SQSConsumer[T]` requires it per ADR-011.
 
 ## `cp-ingest-service`
 
@@ -45,10 +62,12 @@ module "cp_ingest" {
   task_role_arn       = module.iam.cp_ingest_task_role_arn
   heartbeat_queue_url = module.presence_heartbeats.queue_url
   heartbeat_dlq_url   = module.presence_heartbeats.dlq_url
+  lifecycle_queue_url = module.presence_lifecycle.queue_url
+  lifecycle_dlq_url   = module.presence_lifecycle.dlq_url
   db_dsn_secret_arn   = module.secrets.db_dsn_arn
 }
 ```
 
 The `cp_ingest_task_role` must allow `sqs:ReceiveMessage`,
-`sqs:DeleteMessage`, and `sqs:GetQueueAttributes` on the heartbeat queue
-and `sqs:SendMessage` on its DLQ.
+`sqs:DeleteMessage`, and `sqs:GetQueueAttributes` on both the heartbeat and
+lifecycle queues, and `sqs:SendMessage` on each of their DLQs.

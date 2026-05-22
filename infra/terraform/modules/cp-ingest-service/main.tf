@@ -38,6 +38,8 @@ resource "aws_ecs_task_definition" "this" {
       environment = [
         { name = "HEARTBEAT_QUEUE_URL", value = var.heartbeat_queue_url },
         { name = "HEARTBEAT_DLQ_URL", value = var.heartbeat_dlq_url },
+        { name = "LIFECYCLE_QUEUE_URL", value = var.lifecycle_queue_url },
+        { name = "LIFECYCLE_DLQ_URL", value = var.lifecycle_dlq_url },
       ]
 
       # The DSN carries the DB password — injected from Secrets Manager,

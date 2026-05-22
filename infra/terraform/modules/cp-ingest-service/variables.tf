@@ -43,6 +43,16 @@ variable "heartbeat_dlq_url" {
   type        = string
 }
 
+variable "lifecycle_queue_url" {
+  description = "SQS URL of the presence-lifecycle queue (sqs-ingest module output queue_url)."
+  type        = string
+}
+
+variable "lifecycle_dlq_url" {
+  description = "SQS URL of the presence-lifecycle dead-letter queue (sqs-ingest module output dlq_url)."
+  type        = string
+}
+
 variable "db_dsn_secret_arn" {
   description = "Secrets Manager ARN holding the Postgres DSN."
   type        = string
