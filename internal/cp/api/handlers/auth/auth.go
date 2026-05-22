@@ -1,5 +1,5 @@
 // Package auth serves /auth/* endpoints: first-run admin bootstrap,
-// login, refresh. TOTP arrives in Issue 05.
+// login, refresh, and TOTP enrollment.
 package auth
 
 import (
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 )
@@ -138,6 +139,50 @@ func (h *RefreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info("audit.refresh", "outcome", "success")
 
 	writeTokens(w, http.StatusOK, tokens)
+}
+
+// TotpEnroller is the AuthN surface the enrollment handler needs.
+type TotpEnroller interface {
+	EnrollTotp(ctx context.Context, operatorID string) (authn.TotpEnrollment, error)
+}
+
+// TotpEnrollHandler serves POST /auth/totp/enroll. It runs behind the Auth
+// middleware, so the operator identity is read from the request context.
+type TotpEnrollHandler struct {
+	svc TotpEnroller
+}
+
+func NewTotpEnroll(svc TotpEnroller) *TotpEnrollHandler { return &TotpEnrollHandler{svc: svc} }
+
+type totpEnrollResponse struct {
+	ProvisioningURI string   `json:"provisioning_uri"`
+	RecoveryCodes   []string `json:"recovery_codes"`
+}
+
+func (h *TotpEnrollHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log := cplog.FromContext(r.Context())
+
+	claims, ok := middleware.OperatorFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+
+	enrollment, err := h.svc.EnrollTotp(r.Context(), claims.OperatorID)
+	if err != nil {
+		log.Error("audit.totp_enroll", "outcome", "error", "operator_id", claims.OperatorID, "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("audit.totp_enroll", "outcome", "success", "operator_id", claims.OperatorID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(totpEnrollResponse{
+		ProvisioningURI: enrollment.ProvisioningURI,
+		RecoveryCodes:   enrollment.RecoveryCodes,
+	})
 }
 
 // writeTokens emits the standard {access_token, refresh_token} JSON body.

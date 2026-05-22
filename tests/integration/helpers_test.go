@@ -29,6 +29,10 @@ const testBootstrapKey = "test-bootstrap-key"
 // deployments load this from JWT_SIGNING_KEY (base64-encoded 32+ bytes).
 var testSigningKey = []byte("integration-test-signing-key-zzzz-32-bytes")
 
+// testTotpKey is the fixed 32-byte AES-256 key for TOTP-secret encryption in
+// integration tests. Real deployments load this from TOTP_ENCRYPTION_KEY.
+var testTotpKey = []byte("uknomi-cp-integration-totp-key!!")
+
 // testServer bundles the live fixtures an integration test needs: an HTTP
 // server wired to a Registry + fake IoTProvisioner, plus the underlying
 // Postgres pool for direct row assertions and a captured log buffer for
@@ -75,6 +79,9 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 	t.Helper()
 	if authnCfg.SigningKey == nil {
 		authnCfg.SigningKey = testSigningKey
+	}
+	if authnCfg.TotpEncryptionKey == nil {
+		authnCfg.TotpEncryptionKey = testTotpKey
 	}
 	pool := startPostgres(t, ctx)
 	if err := storage.Migrate(ctx, pool); err != nil {

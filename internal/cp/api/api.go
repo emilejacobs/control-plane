@@ -79,8 +79,9 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN))
 		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN))
-		// Device read routes require a valid operator bearer token.
+		// Authenticated routes require a valid operator bearer token.
 		requireAuth := middleware.Auth(d.AuthN)
+		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN)))
 		b.Get("/devices/{id}", requireAuth(devices.NewGet(d.Registry)))
 	}
 	return b

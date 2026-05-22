@@ -7,6 +7,7 @@
 //	CP_BOOTSTRAP_KEY    bootstrap key the install script presents (#10 swaps this for Secrets Manager)
 //	IOT_POLICY_NAME     name of the IoT Core policy to attach to each device cert
 //	JWT_SIGNING_KEY     base64-encoded HS256 signing key, >= 32 bytes decoded (ADR-010)
+//	TOTP_ENCRYPTION_KEY base64-encoded AES-256 key, exactly 32 bytes decoded (TOTP secret at rest)
 //
 // Optional env:
 //
@@ -64,6 +65,14 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("JWT_SIGNING_KEY must decode to at least 32 bytes, got %d", len(signingKey))
 	}
 
+	totpKey, err := base64.StdEncoding.DecodeString(mustEnv("TOTP_ENCRYPTION_KEY"))
+	if err != nil {
+		return fmt.Errorf("TOTP_ENCRYPTION_KEY is not valid base64: %w", err)
+	}
+	if len(totpKey) != 32 {
+		return fmt.Errorf("TOTP_ENCRYPTION_KEY must decode to exactly 32 bytes, got %d", len(totpKey))
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -94,7 +103,7 @@ func run(logger *slog.Logger) error {
 	prov := iotprovisioner.NewAWS(iotClient, policyName)
 	reg := registry.New(pool, prov, registry.Config{BootstrapKey: bootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
-	authnSvc := authn.New(pool, authn.Config{SigningKey: signingKey})
+	authnSvc := authn.New(pool, authn.Config{SigningKey: signingKey, TotpEncryptionKey: totpKey})
 
 	srv := &http.Server{
 		Addr: ":" + port,

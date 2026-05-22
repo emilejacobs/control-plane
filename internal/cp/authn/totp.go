@@ -3,6 +3,8 @@ package authn
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/pquerna/otp"
@@ -14,6 +16,7 @@ import (
 const (
 	totpPeriod = 30
 	totpSkew   = 1
+	totpIssuer = "uKnomi"
 )
 
 // totpValidateOpts is the shared parameter set for code generation and
@@ -43,4 +46,22 @@ func totpCodeAt(secret string, t time.Time) (string, error) {
 func validateTotp(secret, code string, t time.Time) bool {
 	ok, _ := totp.ValidateCustom(code, secret, t, totpValidateOpts)
 	return ok
+}
+
+// totpProvisioningURI builds the otpauth:// URI an authenticator app renders
+// as a QR code, labelled "uKnomi:<account>".
+func totpProvisioningURI(secret, account string) string {
+	q := url.Values{}
+	q.Set("secret", secret)
+	q.Set("issuer", totpIssuer)
+	q.Set("algorithm", "SHA1")
+	q.Set("digits", "6")
+	q.Set("period", strconv.Itoa(totpPeriod))
+	u := url.URL{
+		Scheme:   "otpauth",
+		Host:     "totp",
+		Path:     "/" + totpIssuer + ":" + account,
+		RawQuery: q.Encode(),
+	}
+	return u.String()
 }

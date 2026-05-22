@@ -38,26 +38,32 @@ const (
 	lockoutWindow     = 15 * time.Minute
 )
 
-// Config is the per-instance AuthN configuration. SigningKey is required;
-// the TTL fields default to ADR-010 values (1h access, 24h refresh) when
-// zero. Now defaults to time.Now; tests inject a fake clock to drive
-// lockout-window expiry.
+// Config is the per-instance AuthN configuration. SigningKey and
+// TotpEncryptionKey (exactly 32 bytes, AES-256) are required; the TTL fields
+// default to ADR-010 values (1h access, 24h refresh) when zero. Now defaults
+// to time.Now; tests inject a fake clock to drive lockout-window expiry and
+// TOTP-window behavior.
 type Config struct {
-	SigningKey      []byte
-	AccessTokenTTL  time.Duration
-	RefreshTokenTTL time.Duration
-	Now             func() time.Time
+	SigningKey        []byte
+	TotpEncryptionKey []byte
+	AccessTokenTTL    time.Duration
+	RefreshTokenTTL   time.Duration
+	Now               func() time.Time
 }
 
 // AuthN is the deep module for operator authentication: password handling,
-// JWT issuance, refresh-token lifecycle, first-run-admin bootstrap, lockout.
+// JWT issuance, refresh-token lifecycle, first-run-admin bootstrap, lockout,
+// and mandatory TOTP with recovery codes.
 type AuthN struct {
 	pool       *pgxpool.Pool
 	signer     *Signer
+	cipher     *aeadCipher
 	refreshTTL time.Duration
 	now        func() time.Time
 }
 
+// New builds an AuthN. It panics if TotpEncryptionKey is not a valid 32-byte
+// AES-256 key — a deploy-time misconfiguration that should fail fast.
 func New(pool *pgxpool.Pool, cfg Config) *AuthN {
 	accessTTL := cfg.AccessTokenTTL
 	if accessTTL == 0 {
@@ -71,9 +77,14 @@ func New(pool *pgxpool.Pool, cfg Config) *AuthN {
 	if now == nil {
 		now = time.Now
 	}
+	cipher, err := newCipher(cfg.TotpEncryptionKey)
+	if err != nil {
+		panic(fmt.Sprintf("authn.New: %v", err))
+	}
 	return &AuthN{
 		pool:       pool,
 		signer:     NewSigner(cfg.SigningKey, accessTTL),
+		cipher:     cipher,
 		refreshTTL: refreshTTL,
 		now:        now,
 	}
@@ -217,6 +228,50 @@ func (a *AuthN) Refresh(ctx context.Context, refreshToken string) (Tokens, error
 // this on every protected request.
 func (a *AuthN) Authenticate(token string) (TokenClaims, error) {
 	return a.signer.Verify(token)
+}
+
+// TotpEnrollment is the one-time result of EnrollTotp: the otpauth:// URI an
+// authenticator app renders as a QR code, and the single-use recovery codes.
+// Both are shown to the operator exactly once and never recoverable after.
+type TotpEnrollment struct {
+	ProvisioningURI string
+	RecoveryCodes   []string
+}
+
+// EnrollTotp mints a TOTP shared secret and recoveryCodeCount recovery codes
+// for an operator, persisting the AES-256-GCM-encrypted secret and the
+// Argon2id-hashed codes. It returns the provisioning URI and the plaintext
+// recovery codes for one-time display.
+func (a *AuthN) EnrollTotp(ctx context.Context, operatorID string) (TotpEnrollment, error) {
+	var email string
+	if err := a.pool.QueryRow(ctx,
+		`SELECT email FROM operators WHERE id = $1`, operatorID,
+	).Scan(&email); err != nil {
+		return TotpEnrollment{}, fmt.Errorf("lookup operator: %w", err)
+	}
+
+	secret := newTotpSecret()
+	encrypted, err := a.cipher.Encrypt([]byte(secret))
+	if err != nil {
+		return TotpEnrollment{}, fmt.Errorf("encrypt totp secret: %w", err)
+	}
+	codes, hashes, err := newRecoveryCodes()
+	if err != nil {
+		return TotpEnrollment{}, err
+	}
+
+	if _, err := a.pool.Exec(ctx, `
+		UPDATE operators
+		SET totp_secret_encrypted = $2, recovery_codes_hashed = $3, updated_at = now()
+		WHERE id = $1
+	`, operatorID, encrypted, hashes); err != nil {
+		return TotpEnrollment{}, fmt.Errorf("persist totp enrollment: %w", err)
+	}
+
+	return TotpEnrollment{
+		ProvisioningURI: totpProvisioningURI(secret, email),
+		RecoveryCodes:   codes,
+	}, nil
 }
 
 func (a *AuthN) issueTokens(ctx context.Context, operatorID, email string, isStaff bool) (Tokens, error) {
