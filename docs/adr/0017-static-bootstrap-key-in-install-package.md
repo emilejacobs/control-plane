@@ -42,9 +42,10 @@ Concrete shape:
 - (-) Pollution attacks are possible. The mitigations (rate limit, anomaly alert, wave-engineer's dashboard-vs-spreadsheet check) are detection, not prevention. Acceptable given blast radius.
 - (-) Operationally: the secret-fetching CI step adds a dependency between `mac-mini-rollout` CI and Secrets Manager. CI needs IAM creds scoped to read that one secret.
 
-**Verification.** TBD — added at implementation. Integration tests cover:
+**Verification.** Implemented in #10. Integration tests (`tests/integration/bootstrap_key_test.go`):
 
-- `tests/integration/enrollment_test.go::TestEnrollmentRejectsUnknownBootstrapKey` — 401 on wrong key.
-- `tests/integration/enrollment_test.go::TestEnrollmentRateLimitTrips` — 21st request in an hour from a single source IP returns 429.
-- `tests/integration/enrollment_test.go::TestEnrollmentAnomalyAlertOnBadHostname` — hostname not matching the naming-convention regex logs an alert event.
-- `tests/integration/enrollment_test.go::TestEnrollmentMintsDeviceScopedCert` — successful enrollment returns a cert ARN, and the cert's policy binds to the newly-created thing only.
+- `TestEnrollmentRejectsUnknownBootstrapKey` — 401 on a wrong key; no device row, no IoT call.
+- `TestEnrollmentRateLimitTrips` — the 21st request in the hour window from a single source IP returns 429.
+- `TestEnrollmentAnomalyAlertOnBadHostname` — a hostname off the naming-convention regex still enrols (201) and logs an `audit.enrollment.anomaly` alert.
+
+Unit tests cover the components beneath those flows: `internal/cp/bootstrap` (key verification and refresh-on-rotation against a fake loader; the Secrets Manager loader against a fake SDK client), `internal/cp/api/middleware/ratelimit_test.go` (fixed-window per-IP counting, window reset, IP isolation), and `internal/cp/api/handlers/enrollment/enrollment_test.go` (the audit lines for each enrollment outcome).

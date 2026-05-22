@@ -165,7 +165,8 @@ Control Plane packages (`internal/cp/`):
 
 | Package | Responsibility | Status |
 |---|---|---|
-| `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `List`, `UpdateLastSeen`; device reads are site-scoped | Built (#03, #06, #07, #08, #09) |
+| `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `List`, `UpdateLastSeen`; device reads are site-scoped | Built (#03, #06, #07, #08, #09, #10) |
+| `bootstrap` | Enrollment bootstrap-key verification — Secrets Manager loader, cached key, refresh-on-rotation (ADR-017) | Built (#10) |
 | `iotprovisioner` | Wraps the AWS IoT SDK — thing + certificate minting | Built (#03) |
 | `authz` | Site-scoped authorization — operator `SiteFilter` resolution, the `ScopedDeviceQuery` chokepoint, and the CI gate | Built (#06) |
 | `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout, mandatory TOTP + recovery codes | Built (#04, #05) |
@@ -174,7 +175,7 @@ Control Plane packages (`internal/cp/`):
 | `ingest` | Heartbeat + lifecycle SQS handlers and the presence sweeper | Built (#07, #08) |
 | `cplog` | Structured JSON logs + end-to-end correlation IDs (ADR-011) | Built (#19) |
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
-| `api` | HTTP router; idempotency, bearer-auth, forced-TOTP-enrollment, and site-scope middleware | Built (#03, #04, #05, #06) |
+| `api` | HTTP router; idempotency, bearer-auth, forced-TOTP-enrollment, site-scope, and per-IP enrollment rate-limit middleware | Built (#03, #04, #05, #06, #10) |
 
 The dashboard scaffold + auth flow (#16), fleet view (#17), and per-device view (#18) landed (see § Dashboard). Not yet built: the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
@@ -223,7 +224,7 @@ flowchart TB
 Infrastructure is Terraform, in `infra/terraform/` (ADR-015 multi-AZ Postgres, ADR-018 Fargate, ADR-021 all-CloudWatch observability). Current state:
 
 - **Built** — `modules/sqs-ingest` (SQS queue + DLQ + redrive + IoT Rule) and `modules/cp-ingest-service` (Fargate task + service + log group), landed with #07; #08 reuses `sqs-ingest` for the presence-lifecycle queue.
-- **Phase 0 spike** — the flat root in `infra/terraform/` provisions a single IoT thing + certificate for the agent spike.
+- **Phase 0 spike** — the flat root in `infra/terraform/` provisions a single IoT thing + certificate for the agent spike, plus (with #10) the `uknomi/cp/bootstrap-key` Secrets Manager secret and the scoped IAM role the `mac-mini-rollout` CI assumes to read it.
 - **Pending #01** — the Phase 1 root: VPC, subnets, ALB, the RDS instance, the Fargate cluster, S3 backend + DynamoDB lock for Terraform state. The modules above are consumed by that root.
 
 ## Key flows
@@ -231,6 +232,8 @@ Infrastructure is Terraform, in `infra/terraform/` (ADR-015 multi-AZ Postgres, A
 ### Enrollment
 
 A device enrolls once, on first install. The install package carries a static **bootstrap key** (ADR-017 — a shared secret bundled at build time; superseded the per-device S3 token of ADR-014). `POST /enrollments` is idempotent on `hardware_uuid` (ADR-012), so a retried install over a flaky link does not double-register.
+
+The bootstrap key's store of record is AWS Secrets Manager (`uknomi/cp/bootstrap-key`, provisioned by Terraform; the `mac-mini-rollout` CI reads it at build time via a scoped IAM role and bakes it into the install package). cp-api loads the key at startup through the `bootstrap` package — failing fast if the key store is unreachable — and the `bootstrap.Verifier` re-fetches it on a key mismatch, so a key rotated mid-deploy is honoured without a restart. ADR-017's enrollment hardening also lands here: a per-source-IP rate limit (20 requests/hour → `429`) wraps `POST /enrollments`; every request is audit-logged (source IP, hardware UUID, hostname, outcome); and a hostname off the project naming convention still enrolls but raises an `audit.enrollment.anomaly` alert (a sanity check, not an allowlist).
 
 ```mermaid
 sequenceDiagram
