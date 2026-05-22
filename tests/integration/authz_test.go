@@ -165,6 +165,28 @@ func TestDeviceListIsSiteScoped(t *testing.T) {
 	}
 }
 
+func TestFirstRunAdminHasFullSiteAccess(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteA := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	siteB := insertSite(t, ctx, srv, clientID, "Acme Warehouse")
+	insertDeviceAtSite(t, ctx, srv, "mac-a", siteA)
+	insertDeviceAtSite(t, ctx, srv, "mac-b", siteB)
+
+	// The first-run admin (#04) is staff, so it gets full-fleet access with
+	// no operator_sites grants. It must clear the TOTP gate to reach a route.
+	token := firstRunToken(t, srv, "admin@acmecorp.test", "correct-horse-battery-staple")
+	enroll := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e01")
+	enroll.Body.Close()
+
+	if got := doDeviceList(t, srv.URL, token); len(got) != 2 {
+		t.Errorf("first-run admin GET /devices: got %d devices want 2 (full access)", len(got))
+	}
+}
+
 func TestDeviceGetIsSiteScoped(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
