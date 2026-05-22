@@ -108,6 +108,33 @@ func TestScopedDeviceQueryStaffSeesAllDevices(t *testing.T) {
 	}
 }
 
+func TestScopedDeviceQueryNonStaffSeesOnlyGrantedSites(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteA := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	siteB := insertSite(t, ctx, srv, clientID, "Acme Warehouse")
+	insertDeviceAtSite(t, ctx, srv, "mac-a1", siteA)
+	insertDeviceAtSite(t, ctx, srv, "mac-a2", siteA)
+	insertDeviceAtSite(t, ctx, srv, "mac-b1", siteB)
+
+	// A non-staff operator granted only site A sees only site A's two devices.
+	scopedSQL, scopedArgs := authz.ScopedDeviceQuery(
+		authz.SiteFilter{SiteIDs: []string{siteA}}, "SELECT id FROM devices WHERE true")
+	if n := countDeviceQuery(t, ctx, srv, scopedSQL, scopedArgs); n != 2 {
+		t.Errorf("non-staff scoped query (site A): got %d devices want 2", n)
+	}
+
+	// Staff sees all three — the contrast AC3 asks for.
+	staffSQL, staffArgs := authz.ScopedDeviceQuery(
+		authz.SiteFilter{All: true}, "SELECT id FROM devices WHERE true")
+	if n := countDeviceQuery(t, ctx, srv, staffSQL, staffArgs); n != 3 {
+		t.Errorf("staff scoped query: got %d devices want 3", n)
+	}
+}
+
 func TestScopeForNonStaffOperatorListsGrantedSites(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
