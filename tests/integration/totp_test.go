@@ -65,6 +65,28 @@ type totpEnrollResponse struct {
 	RecoveryCodes   []string `json:"recovery_codes"`
 }
 
+func TestTotpEnrollSecondCallConflicts(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	token := firstRunToken(t, srv, "admin@acmecorp.test", "correct-horse-battery-staple")
+
+	first := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e01")
+	first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first enroll: got %d want 200", first.StatusCode)
+	}
+
+	// A distinct Idempotency-Key, so this reaches the handler rather than
+	// replaying the cached first response.
+	second := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e02")
+	second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("second enroll: got %d want 409", second.StatusCode)
+	}
+}
+
 func TestTotpEnrollHappyPath(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()

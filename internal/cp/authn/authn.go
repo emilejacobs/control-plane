@@ -31,6 +31,10 @@ var ErrAccountLocked = errors.New("account locked")
 // unknown, already rotated, or expired. Handlers translate to HTTP 401.
 var ErrInvalidRefreshToken = errors.New("invalid refresh token")
 
+// ErrTotpAlreadyEnrolled is returned by EnrollTotp when the operator already
+// has a TOTP secret. Handlers translate to HTTP 409 Conflict.
+var ErrTotpAlreadyEnrolled = errors.New("totp already enrolled")
+
 // Lockout policy: maxFailedAttempts consecutive failures lock the account
 // for lockoutWindow. A successful login clears both the counter and the lock.
 const (
@@ -244,10 +248,15 @@ type TotpEnrollment struct {
 // recovery codes for one-time display.
 func (a *AuthN) EnrollTotp(ctx context.Context, operatorID string) (TotpEnrollment, error) {
 	var email string
+	var alreadyEnrolled bool
 	if err := a.pool.QueryRow(ctx,
-		`SELECT email FROM operators WHERE id = $1`, operatorID,
-	).Scan(&email); err != nil {
+		`SELECT email, totp_secret_encrypted IS NOT NULL FROM operators WHERE id = $1`,
+		operatorID,
+	).Scan(&email, &alreadyEnrolled); err != nil {
 		return TotpEnrollment{}, fmt.Errorf("lookup operator: %w", err)
+	}
+	if alreadyEnrolled {
+		return TotpEnrollment{}, ErrTotpAlreadyEnrolled
 	}
 
 	secret := newTotpSecret()
@@ -260,12 +269,18 @@ func (a *AuthN) EnrollTotp(ctx context.Context, operatorID string) (TotpEnrollme
 		return TotpEnrollment{}, err
 	}
 
-	if _, err := a.pool.Exec(ctx, `
+	// The IS NULL guard makes the write idempotent under a concurrent
+	// re-enrollment race: only the first UPDATE affects a row.
+	tag, err := a.pool.Exec(ctx, `
 		UPDATE operators
 		SET totp_secret_encrypted = $2, recovery_codes_hashed = $3, updated_at = now()
-		WHERE id = $1
-	`, operatorID, encrypted, hashes); err != nil {
+		WHERE id = $1 AND totp_secret_encrypted IS NULL
+	`, operatorID, encrypted, hashes)
+	if err != nil {
 		return TotpEnrollment{}, fmt.Errorf("persist totp enrollment: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return TotpEnrollment{}, ErrTotpAlreadyEnrolled
 	}
 
 	return TotpEnrollment{

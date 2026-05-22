@@ -170,6 +170,11 @@ func (h *TotpEnrollHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	enrollment, err := h.svc.EnrollTotp(r.Context(), claims.OperatorID)
 	if err != nil {
+		if errors.Is(err, authn.ErrTotpAlreadyEnrolled) {
+			log.Info("audit.totp_enroll", "outcome", "denied", "reason", "already_enrolled", "operator_id", claims.OperatorID)
+			http.Error(w, "totp already enrolled", http.StatusConflict)
+			return
+		}
 		log.Error("audit.totp_enroll", "outcome", "error", "operator_id", claims.OperatorID, "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
