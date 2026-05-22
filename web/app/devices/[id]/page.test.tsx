@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { screen, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../test/server";
 import { renderWithClient } from "../../../test/render";
@@ -104,6 +105,39 @@ describe("per-device view", () => {
     await screen.findByRole("heading", { name: "mac-mini-acme-01" });
 
     expect(screen.getByText(/last seen never/i)).toBeInTheDocument();
+  });
+
+  it("shows a loading state while the first query is in flight", () => {
+    deviceReturns(device());
+    renderWithClient(<DevicePage />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/loading/i);
+  });
+
+  it("shows an error state with a refresh button that retries", async () => {
+    let attempt = 0;
+    server.use(
+      http.get(`${API_BASE}/devices/dev-1`, () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new HttpResponse(null, { status: 500 });
+        }
+        return HttpResponse.json(device());
+      }),
+    );
+    renderWithClient(<DevicePage />);
+
+    // The first load fails — error message + a refresh button.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not load/i,
+    );
+    const refresh = screen.getByRole("button", { name: /refresh/i });
+
+    // Refresh refetches; the retry succeeds and the device page renders.
+    await userEvent.click(refresh);
+    expect(
+      await screen.findByRole("heading", { name: "mac-mini-acme-01" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the mTLS cert expiry with days remaining", async () => {

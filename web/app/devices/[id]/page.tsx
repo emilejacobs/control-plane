@@ -17,6 +17,13 @@ export default function DevicePage() {
 
   return (
     <main>
+      {device.isPending && <p role="status">Loading device…</p>}
+      {device.isError && (
+        <div role="alert">
+          <p>Could not load device.</p>
+          <button onClick={() => device.refetch()}>Refresh</button>
+        </div>
+      )}
       {d && (
         <>
           <h1>{d.hostname}</h1>
