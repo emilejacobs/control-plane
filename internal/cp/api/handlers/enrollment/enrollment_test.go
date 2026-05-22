@@ -88,6 +88,31 @@ func TestEnrollmentAuditsSuccess(t *testing.T) {
 	}
 }
 
+func TestEnrollmentAlertsOnHostnameAnomaly(t *testing.T) {
+	var logs bytes.Buffer
+	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}})
+
+	rec := enroll(h, &logs, map[string]any{
+		"bootstrap_key": "k",
+		"hostname":      "rogue-laptop", // not <kind>-<site>-<NN>
+		"hardware_uuid": "11111111-2222-3333-4444-555555555555",
+		"hardware_kind": "mac",
+	})
+
+	// The convention is a sanity check, not an allowlist (ADR-017): the
+	// enrollment still completes.
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: got %d want 201", rec.Code)
+	}
+	if !auditLogged(logs.String(), "audit.enrollment.anomaly", map[string]any{
+		"alert":     "hostname_convention",
+		"hostname":  "rogue-laptop",
+		"source_ip": "192.0.2.1",
+	}) {
+		t.Errorf("no hostname-anomaly alert line:\n%s", logs.String())
+	}
+}
+
 func TestEnrollmentAuditsInvalidKey(t *testing.T) {
 	var logs bytes.Buffer
 	h := New(&fakeService{err: registry.ErrInvalidBootstrapKey})

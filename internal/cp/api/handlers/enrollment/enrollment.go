@@ -8,11 +8,17 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
+
+// hostnameConvention is the project device-naming pattern (ADR-017). A
+// hostname that does not match still enrolls — the regex is a sanity check
+// that raises an audit alert, not an allowlist that blocks.
+var hostnameConvention = regexp.MustCompile(`^(mac-mini|pi|radxa)-[a-z0-9-]+-\d{2}$`)
 
 // sourceIP is the client address an enrollment request arrived from, without
 // the port — the audit log keys anomaly detection on it (ADR-017).
@@ -96,6 +102,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"hostname", req.Hostname,
 		"device_id", out.DeviceID,
 	)
+	if !hostnameConvention.MatchString(req.Hostname) {
+		log.Warn("audit.enrollment.anomaly",
+			"alert", "hostname_convention",
+			"source_ip", sourceIP(r),
+			"hardware_uuid", req.HardwareUUID,
+			"hostname", req.Hostname,
+			"device_id", out.DeviceID,
+		)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
