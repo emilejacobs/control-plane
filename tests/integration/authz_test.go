@@ -2,11 +2,35 @@ package integration_test
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"testing"
+	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 )
+
+// enrolledOperator inserts a TOTP-enrolled operator (so it clears the
+// first-login gate) and returns its id and a signed access token.
+func enrolledOperator(t *testing.T, ctx context.Context, srv *testServer, email string, isStaff bool) (id, token string) {
+	t.Helper()
+	if err := srv.Pool.QueryRow(ctx, `
+		INSERT INTO operators (email, password_hash, is_staff, totp_secret_encrypted)
+		VALUES ($1, 'unused-hash', $2, $3) RETURNING id
+	`, email, isStaff, []byte("totp-secret-ciphertext")).Scan(&id); err != nil {
+		t.Fatalf("insert operator: %v", err)
+	}
+	tok, err := authn.NewSigner(testSigningKey, time.Hour).Issue(authn.TokenClaims{
+		OperatorID: id,
+		Email:      email,
+		IsStaff:    isStaff,
+	})
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	return id, tok
+}
 
 // insertClient inserts a clients row and returns its id.
 func insertClient(t *testing.T, ctx context.Context, srv *testServer, name string) string {
@@ -87,6 +111,33 @@ func countDeviceQuery(t *testing.T, ctx context.Context, srv *testServer, sql st
 		t.Fatalf("iterate scoped query: %v", err)
 	}
 	return n
+}
+
+func TestDeviceGetIsSiteScoped(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteA := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	siteB := insertSite(t, ctx, srv, clientID, "Acme Warehouse")
+	deviceID := insertDeviceAtSite(t, ctx, srv, "mac-a", siteA)
+
+	// Staff still sees the device — AC5, no behavioral change for Phase 1.
+	staff := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t, ctx, srv))
+	staff.Body.Close()
+	if staff.StatusCode != http.StatusOK {
+		t.Errorf("staff GET device: got %d want 200", staff.StatusCode)
+	}
+
+	// A non-staff operator granted only site B cannot see a site-A device.
+	opID, token := enrolledOperator(t, ctx, srv, "field-op@acme.test", false)
+	grantSite(t, ctx, srv, opID, siteB)
+	scoped := doDeviceGet(t, srv.URL, deviceID, token)
+	scoped.Body.Close()
+	if scoped.StatusCode != http.StatusNotFound {
+		t.Errorf("out-of-scope GET device: got %d want 404", scoped.StatusCode)
+	}
 }
 
 func TestScopedDeviceQueryStaffSeesAllDevices(t *testing.T) {

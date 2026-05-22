@@ -25,7 +25,7 @@ func TestRegistryUpdateLastSeen(t *testing.T) {
 	deviceID := enrollForTest(t, srv, "mac-mini-presence-01", "33333333-3333-3333-4444-555555555555")
 
 	// A freshly enrolled device has never been seen.
-	dev, err := srv.Registry.GetByID(ctx, deviceID)
+	dev, err := srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestRegistryUpdateLastSeen(t *testing.T) {
 	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, at); err != nil {
 		t.Fatalf("UpdateLastSeen: %v", err)
 	}
-	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	dev, err = srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID after update: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestRegistrySetPresence(t *testing.T) {
 	deviceID := enrollForTest(t, srv, "mac-mini-presence-03", "66666666-6666-6666-4444-555555555555")
 
 	// A freshly enrolled device is offline with no presence-change time.
-	dev, err := srv.Registry.GetByID(ctx, deviceID)
+	dev, err := srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestRegistrySetPresence(t *testing.T) {
 	if err := srv.Registry.SetPresence(ctx, deviceID, true, onlineAt); err != nil {
 		t.Fatalf("SetPresence online: %v", err)
 	}
-	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	dev, err = srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID after online: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestRegistrySetPresence(t *testing.T) {
 	if err := srv.Registry.SetPresence(ctx, deviceID, false, offlineAt); err != nil {
 		t.Fatalf("SetPresence offline: %v", err)
 	}
-	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	dev, err = srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID after offline: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestUpdateLastSeenBringsDeviceOnline(t *testing.T) {
 	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, hb1); err != nil {
 		t.Fatalf("UpdateLastSeen 1: %v", err)
 	}
-	dev, err := srv.Registry.GetByID(ctx, deviceID)
+	dev, err := srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestUpdateLastSeenBringsDeviceOnline(t *testing.T) {
 	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, hb2); err != nil {
 		t.Fatalf("UpdateLastSeen 2: %v", err)
 	}
-	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	dev, err = srv.Registry.GetByID(staffCtx(ctx), deviceID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestPresenceSweeperMarksStaleDeviceOffline(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		dev, err := srv.Registry.GetByID(ctx, deviceID)
+		dev, err := srv.Registry.GetByID(staffCtx(ctx), deviceID)
 		if err != nil {
 			t.Fatalf("GetByID: %v", err)
 		}

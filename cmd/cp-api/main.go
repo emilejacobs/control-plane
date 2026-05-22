@@ -35,6 +35,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
+	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -104,12 +105,14 @@ func run(logger *slog.Logger) error {
 	reg := registry.New(pool, prov, registry.Config{BootstrapKey: bootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
 	authnSvc := authn.New(pool, authn.Config{SigningKey: signingKey, TotpEncryptionKey: totpKey})
+	authzSvc := authz.New(pool)
 
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
 			Registry:         reg,
 			AuthN:            authnSvc,
+			AuthZ:            authzSvc,
 			IdempotencyStore: idemStore,
 			Logger:           logger,
 		}),

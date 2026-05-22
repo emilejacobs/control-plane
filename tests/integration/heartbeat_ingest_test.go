@@ -66,7 +66,7 @@ func TestHeartbeatIngestEndToEnd(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSeen *time.Time
 	for time.Now().Before(deadline) {
-		dev, err := srv.Registry.GetByID(ctx, deviceID)
+		dev, err := srv.Registry.GetByID(staffCtx(ctx), deviceID)
 		if err != nil {
 			t.Fatalf("GetByID: %v", err)
 		}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
+	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -43,6 +44,7 @@ type testServer struct {
 	IoT      *iotprovisioner.Fake
 	Logs     *syncBuffer
 	AuthN    *authn.AuthN
+	AuthZ    *authz.AuthZ
 	Registry *registry.Registry
 }
 
@@ -91,15 +93,17 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 	reg := registry.New(pool, iot, registry.Config{BootstrapKey: testBootstrapKey})
 	idemStore := storage.NewIdempotencyStore(pool)
 	authnSvc := authn.New(pool, authnCfg)
+	authzSvc := authz.New(pool)
 	logs := &syncBuffer{}
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:         reg,
 		AuthN:            authnSvc,
+		AuthZ:            authzSvc,
 		IdempotencyStore: idemStore,
 		Logger:           cplog.New(logs, "cp-api-test"),
 	}))
 	t.Cleanup(srv.Close)
-	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc, Registry: reg}
+	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc, AuthZ: authzSvc, Registry: reg}
 }
 
 // mintAccessToken inserts a TOTP-enrolled staff operator and returns a signed
@@ -127,6 +131,13 @@ func mintAccessToken(t *testing.T, ctx context.Context, srv *testServer) string 
 		t.Fatalf("mint access token: %v", err)
 	}
 	return token
+}
+
+// staffCtx returns ctx carrying a staff (full-fleet) authz scope. Tests that
+// call registry.GetByID directly — as a staff observer checking device state
+// — need it, since device reads are site-scoped and fail closed without one.
+func staffCtx(ctx context.Context) context.Context {
+	return authz.ContextWithScope(ctx, authz.SiteFilter{All: true})
 }
 
 func requireDocker(t *testing.T) {

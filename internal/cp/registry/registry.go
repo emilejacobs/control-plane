@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 )
 
@@ -80,14 +81,22 @@ type Device struct {
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
-	var d Device
-	err := r.pool.QueryRow(ctx, `
+	// Every device read is site-scoped (PRD § AuthZ): the scope middleware
+	// resolves the operator's SiteFilter into context. A read with no scope
+	// fails closed — it sees nothing.
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return Device{}, ErrDeviceNotFound
+	}
+	sql, args := authz.ScopedDeviceQuery(filter, `
 		SELECT id, hostname, hardware_uuid, hardware_kind,
 		       os_version, agent_version, iot_thing_arn,
 		       last_seen, is_online, presence_changed_at,
 		       mtls_cert_expires_at, enrolled_at
 		FROM devices WHERE id = $1
-	`, id).Scan(
+	`, id)
+	var d Device
+	err := r.pool.QueryRow(ctx, sql, args...).Scan(
 		&d.ID, &d.Hostname, &d.HardwareUUID, &d.HardwareKind,
 		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN,
 		&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,

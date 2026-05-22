@@ -16,6 +16,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
+	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
@@ -23,6 +24,7 @@ import (
 type Deps struct {
 	Registry         *registry.Registry
 	AuthN            *authn.AuthN
+	AuthZ            *authz.AuthZ
 	IdempotencyStore middleware.IdempotencyStore
 
 	// Logger is the base slog.Logger that cplog.Middleware wraps per
@@ -81,11 +83,13 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN))
 		// Authenticated routes require a valid operator bearer token.
 		// Every authenticated route except enrollment itself also sits
-		// behind the forced-TOTP-enrollment gate.
+		// behind the forced-TOTP-enrollment gate; device reads additionally
+		// run through the site-scope middleware.
 		requireAuth := middleware.Auth(d.AuthN)
 		requireEnrolled := middleware.RequireTotpEnrolled(d.AuthN)
+		requireScope := middleware.Scope(d.AuthZ)
 		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN)))
-		b.Get("/devices/{id}", requireAuth(requireEnrolled(devices.NewGet(d.Registry))))
+		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
 	}
 	return b
 }
