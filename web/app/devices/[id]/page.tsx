@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useDevice } from "../../../lib/api/hooks";
 import { UNASSIGNED } from "../../../lib/fleet";
+import { PresenceChip } from "../../../components/PresenceChip";
 
 // DevicePage is the per-device view: the static record, live presence, and
 // the mTLS cert expiry for one device, polled every 10s (Issue 18).
@@ -16,6 +17,7 @@ export default function DevicePage() {
       {d && (
         <>
           <h1>{d.hostname}</h1>
+          <PresenceChip online={d.isOnline} />
           <dl>
             <dt>Client</dt>
             <dd>{d.clientName ?? UNASSIGNED}</dd>

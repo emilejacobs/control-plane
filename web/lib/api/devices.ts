@@ -47,6 +47,7 @@ export interface Device {
   osVersion: string;
   agentVersion: string;
   iotThingArn: string;
+  isOnline: boolean;
   enrolledAt: string;
   siteName: string | null;
   clientName: string | null;
@@ -60,6 +61,7 @@ interface DeviceWire {
   os_version: string;
   agent_version: string;
   iot_thing_arn: string;
+  is_online: boolean;
   enrolled_at: string;
   site_name: string | null;
   client_name: string | null;
@@ -80,6 +82,7 @@ export async function getDevice(id: string): Promise<Device> {
     osVersion: d.os_version,
     agentVersion: d.agent_version,
     iotThingArn: d.iot_thing_arn,
+    isOnline: d.is_online,
     enrolledAt: d.enrolled_at,
     siteName: d.site_name,
     clientName: d.client_name,

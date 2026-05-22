@@ -81,4 +81,12 @@ describe("per-device view", () => {
     expect(fieldValue("Client")).toBe("Unassigned");
     expect(fieldValue("Site")).toBe("Unassigned");
   });
+
+  it("shows a presence chip reflecting the device's online state", async () => {
+    deviceReturns(device({ is_online: true }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(screen.getByText("Online")).toBeInTheDocument();
+  });
 });
