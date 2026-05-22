@@ -137,7 +137,7 @@ func (c *Consumer[T]) processOne(m types.Message) {
 		return
 	}
 
-	switch err := c.handler(ctx, payload); {
+	switch err := c.invoke(ctx, payload); {
 	case err == nil:
 		c.deleteMsg(ctx, m)
 	case errors.Is(err, ErrPoison):
@@ -149,6 +149,18 @@ func (c *Consumer[T]) processOne(m types.Message) {
 		c.log.Error("handler error; leaving message for redelivery",
 			"err", err, "correlation_id", corrID, "queue", c.queueURL)
 	}
+}
+
+// invoke calls the handler, converting a panic into an ordinary (non-poison)
+// error. A buggy handler therefore triggers redelivery rather than crashing
+// the consumer goroutine.
+func (c *Consumer[T]) invoke(ctx context.Context, payload T) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("handler panicked: %v", r)
+		}
+	}()
+	return c.handler(ctx, payload)
 }
 
 // toDLQ records the rejection, copies the message to the DLQ, and deletes it

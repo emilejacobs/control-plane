@@ -2,6 +2,7 @@ package sqsconsumer
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -141,5 +142,102 @@ func TestConsumerMissingCorrelationIDToDLQ(t *testing.T) {
 	}
 	if dlq := fake.dlqBodies(); dlq[0] != `{"device_id":"dev-1"}` {
 		t.Errorf("DLQ body: got %q, want the original message", dlq[0])
+	}
+}
+
+func TestConsumerHandlerPanicRedeliversThenDLQ(t *testing.T) {
+	fake := newFakeSQS()
+	fake.maxReceiveCount = 3
+	fake.seed("m1", `{"correlation_id":"corr-1","device_id":"dev-1"}`)
+
+	var mu sync.Mutex
+	calls := 0
+	handler := func(_ context.Context, _ testPayload) error {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		panic("handler boom")
+	}
+	c := NewConsumer[testPayload](fake, handler, Config{
+		QueueURL: fake.mainURL, DLQURL: fake.dlqURL, Logger: discardLogger(),
+	})
+	stop := runConsumer(t, c)
+	defer stop()
+
+	// A panicking handler must not crash the consumer: the message is
+	// redelivered up to maxReceiveCount times, then redriven to the DLQ.
+	waitFor(t, "panicking message redriven to DLQ", func() bool {
+		return len(fake.dlqBodies()) == 1
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 3 {
+		t.Errorf("handler call count: got %d want 3 (maxReceiveCount)", calls)
+	}
+}
+
+func TestConsumerTransientErrorRetriedThenSucceeds(t *testing.T) {
+	fake := newFakeSQS()
+	fake.seed("m1", `{"correlation_id":"corr-1","device_id":"dev-1"}`)
+
+	var mu sync.Mutex
+	calls := 0
+	handler := func(_ context.Context, _ testPayload) error {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls < 3 {
+			return errors.New("transient blip")
+		}
+		return nil
+	}
+	c := NewConsumer[testPayload](fake, handler, Config{
+		QueueURL: fake.mainURL, DLQURL: fake.dlqURL, Logger: discardLogger(),
+	})
+	stop := runConsumer(t, c)
+	defer stop()
+
+	waitFor(t, "message deleted after a successful retry", func() bool {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return fake.messages[0].deleted
+	})
+	if dlq := fake.dlqBodies(); len(dlq) != 0 {
+		t.Errorf("DLQ should be empty after recovery, got %v", dlq)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 3 {
+		t.Errorf("handler calls: got %d want 3 (two failures then success)", calls)
+	}
+}
+
+func TestConsumerHandlerPoisonGoesStraightToDLQ(t *testing.T) {
+	fake := newFakeSQS()
+	fake.seed("m1", `{"correlation_id":"corr-1","device_id":"dev-1"}`)
+
+	var mu sync.Mutex
+	calls := 0
+	handler := func(_ context.Context, _ testPayload) error {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return Poison(errors.New("unknown device"))
+	}
+	c := NewConsumer[testPayload](fake, handler, Config{
+		QueueURL: fake.mainURL, DLQURL: fake.dlqURL, Logger: discardLogger(),
+	})
+	stop := runConsumer(t, c)
+	defer stop()
+
+	waitFor(t, "poison message routed to DLQ", func() bool {
+		return len(fake.dlqBodies()) == 1
+	})
+	// Poison is a permanent failure — routed to the DLQ on the first try,
+	// never redelivered.
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Errorf("handler calls: got %d want 1 (poison is not retried)", calls)
 	}
 }
