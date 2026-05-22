@@ -20,13 +20,48 @@ Scope:
 
 ## Acceptance criteria
 
-- [ ] `GET /devices/{id}` returns `mtls_cert_expires_at` and `mtls_cert_days_remaining`.
-- [ ] Integration test asserts `days_remaining` is computed correctly relative to a fake "now" against a fixed cert expiry.
+- [x] `GET /devices/{id}` returns `mtls_cert_expires_at` and `mtls_cert_days_remaining`.
+- [x] Integration test asserts `days_remaining` is computed correctly relative to a fake "now" against a fixed cert expiry.
 - [ ] Per-device UI displays both fields with the documented color coding.
 - [ ] Test on the dashboard side verifies that a cert expiring in 10 days renders red.
-- [ ] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
+- [x] **Documentation updated.** `docs/architecture.md` reflects any module, component, key flow, or cloud-infra change; `docs/CONTEXT.md` reflects any new or changed domain term; a hard-to-reverse decision is captured as an ADR. If the issue touches none of these, say so explicitly in the completion comment.
 
 ## Blocked by
 
 - Issue 07 (`GET /devices/{id}` exists and returns presence-derived fields).
 - Issue 18 (per-device UI exists to display the field).
+
+## Comments
+
+### 2026-05-21 — API slice landed in 5 cycles (`a9e2208`..`bfcb923`); UI ACs await #18
+
+The server side of cert-expiry is done. Two unchecked ACs (per-device UI
++ the dashboard "renders red" test) are genuinely blocked by #18 — the
+per-device view doesn't exist yet — so this issue stays open and an agent
+picks up ACs 3–4 once #18 lands. The colour thresholds (green >180,
+yellow 30–180, red <30) are a pure UI concern; the API just emits the
+integer.
+
+- Cycle 1: `GET /devices/{id}` surfaces `mtls_cert_expires_at`.
+- Cycle 2: `mtls_cert_days_remaining`, computed at response time from an
+  injectable clock — whole days, truncated toward zero.
+- Cycle 3: regression test — an expired cert yields a negative
+  days-remaining (the value the red colour-coding keys on). Green on
+  arrival; cycle 2's signed arithmetic already covered it.
+- Cycle 4: persistence. The cert `notAfter` was minted at enrollment but
+  discarded — only `mtls_cert_arn` was stored. Migration `006` adds
+  `devices.mtls_cert_expires_at` (nullable; every post-006 enrollment
+  populates it); `Enroll` persists `cert.ExpiresAt`; `GetByID` reads it.
+- Cycle 5: docs.
+
+**Premise correction.** The issue said cert expiry was "already minted at
+enrollment in #03 and stored in the `devices` row." It was minted (and
+returned to the enrolling device) but *not* persisted — hence the
+migration + `Enroll` change in cycle 4.
+
+**Documentation criterion.** Discharged — `architecture.md` (Storage
+section, module table, "not yet built" list) updated in cycle 5.
+`CONTEXT.md` unchanged: cert TTL is an existing concept owned by ADR-013;
+no new domain term. No ADR — ADR-013 already settles the 1-year TTL and
+names expiry visibility as the early-warning signal; #09 only implements
+it.
