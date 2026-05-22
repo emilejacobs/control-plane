@@ -39,6 +39,28 @@ func getDevice(t *testing.T, h *GetHandler) map[string]any {
 	return out
 }
 
+func TestGetDeviceComputesCertDaysRemaining(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	expiry := now.Add(30 * 24 * time.Hour)
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:                "dev-1",
+		EnrolledAt:        now,
+		MtlsCertExpiresAt: &expiry,
+	}})
+	h.now = func() time.Time { return now }
+
+	out := getDevice(t, h)
+
+	// JSON numbers decode into map[string]any as float64.
+	got, ok := out["mtls_cert_days_remaining"].(float64)
+	if !ok {
+		t.Fatalf("mtls_cert_days_remaining: got %v (%T) want a number", out["mtls_cert_days_remaining"], out["mtls_cert_days_remaining"])
+	}
+	if want := 30; int(got) != want {
+		t.Errorf("mtls_cert_days_remaining: got %d want %d", int(got), want)
+	}
+}
+
 func TestGetDeviceReturnsCertExpiresAt(t *testing.T) {
 	expiry := time.Date(2027, 1, 15, 12, 0, 0, 0, time.UTC)
 	h := NewGet(fakeService{dev: registry.Device{
