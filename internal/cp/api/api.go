@@ -89,6 +89,7 @@ func NewBuilderWith(d Deps) *Builder {
 		requireEnrolled := middleware.RequireTotpEnrolled(d.AuthN)
 		requireScope := middleware.Scope(d.AuthZ)
 		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN)))
+		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
 	}
 	return b

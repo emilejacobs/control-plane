@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"testing"
@@ -111,6 +112,57 @@ func countDeviceQuery(t *testing.T, ctx context.Context, srv *testServer, sql st
 		t.Fatalf("iterate scoped query: %v", err)
 	}
 	return n
+}
+
+// doDeviceList issues an authenticated GET /devices and returns the decoded
+// device summaries.
+func doDeviceList(t *testing.T, baseURL, token string) []map[string]any {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/devices", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /devices: got %d want 200", resp.StatusCode)
+	}
+	var out struct {
+		Devices []map[string]any `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return out.Devices
+}
+
+func TestDeviceListIsSiteScoped(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteA := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	siteB := insertSite(t, ctx, srv, clientID, "Acme Warehouse")
+	insertDeviceAtSite(t, ctx, srv, "mac-a1", siteA)
+	insertDeviceAtSite(t, ctx, srv, "mac-a2", siteA)
+	insertDeviceAtSite(t, ctx, srv, "mac-b1", siteB)
+
+	// Staff sees the whole fleet (AC5 — no behavioral change for Phase 1).
+	if got := doDeviceList(t, srv.URL, mintAccessToken(t, ctx, srv)); len(got) != 3 {
+		t.Errorf("staff GET /devices: got %d devices want 3", len(got))
+	}
+
+	// A non-staff operator granted only site A sees that site's two devices.
+	opID, token := enrolledOperator(t, ctx, srv, "field-op@acme.test", false)
+	grantSite(t, ctx, srv, opID, siteA)
+	if got := doDeviceList(t, srv.URL, token); len(got) != 2 {
+		t.Errorf("site-A operator GET /devices: got %d devices want 2", len(got))
+	}
 }
 
 func TestDeviceGetIsSiteScoped(t *testing.T) {

@@ -111,6 +111,46 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 	return d, nil
 }
 
+// List returns the devices visible to the operator whose SiteFilter is in
+// ctx, ordered by hostname. A read with no resolved scope fails closed,
+// returning an empty list.
+func (r *Registry) List(ctx context.Context) ([]Device, error) {
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return nil, nil
+	}
+	sql, args := authz.ScopedDeviceQuery(filter, `
+		SELECT id, hostname, hardware_uuid, hardware_kind,
+		       os_version, agent_version, iot_thing_arn,
+		       last_seen, is_online, presence_changed_at,
+		       mtls_cert_expires_at, enrolled_at
+		FROM devices WHERE true
+	`)
+	rows, err := r.pool.Query(ctx, sql+" ORDER BY hostname", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	defer rows.Close()
+
+	var devices []Device
+	for rows.Next() {
+		var d Device
+		if err := rows.Scan(
+			&d.ID, &d.Hostname, &d.HardwareUUID, &d.HardwareKind,
+			&d.OSVersion, &d.AgentVersion, &d.IoTThingARN,
+			&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,
+			&d.MtlsCertExpiresAt, &d.EnrolledAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan device: %w", err)
+		}
+		devices = append(devices, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate devices: %w", err)
+	}
+	return devices, nil
+}
+
 // UpdateLastSeen records a heartbeat: it stamps last_seen and marks the
 // device online, moving presence_changed_at only when the device was
 // previously offline — a steady-state heartbeat does not disturb it. An id

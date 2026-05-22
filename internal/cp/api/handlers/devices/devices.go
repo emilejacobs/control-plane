@@ -14,6 +14,7 @@ import (
 
 type Service interface {
 	GetByID(ctx context.Context, id string) (registry.Device, error)
+	List(ctx context.Context) ([]registry.Device, error)
 }
 
 type GetHandler struct {
@@ -38,6 +39,43 @@ type response struct {
 	MtlsCertExpiresAt     *string `json:"mtls_cert_expires_at"`
 	MtlsCertDaysRemaining *int    `json:"mtls_cert_days_remaining"`
 	EnrolledAt            string  `json:"enrolled_at"`
+}
+
+// ListHandler serves GET /devices — the site-scoped fleet list. It runs
+// behind the scope middleware; registry.List filters by the operator's
+// SiteFilter.
+type ListHandler struct {
+	svc Service
+}
+
+func NewList(svc Service) *ListHandler { return &ListHandler{svc: svc} }
+
+type listItem struct {
+	DeviceID string `json:"device_id"`
+	Hostname string `json:"hostname"`
+	IsOnline bool   `json:"is_online"`
+}
+
+type listResponse struct {
+	Devices []listItem `json:"devices"`
+}
+
+func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	devs, err := h.svc.List(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	items := make([]listItem, 0, len(devs))
+	for _, d := range devs {
+		items = append(items, listItem{
+			DeviceID: d.ID,
+			Hostname: d.Hostname,
+			IsOnline: d.IsOnline,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(listResponse{Devices: items})
 }
 
 func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
