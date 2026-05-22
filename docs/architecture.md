@@ -129,6 +129,8 @@ Operator-facing web UI, deployed on ECS Fargate. Thin client: posts username + p
 
 Calls the API service for all data and actions; no direct AWS SDK use from the browser.
 
+The dashboard lives in `web/` (Next.js App Router, TypeScript; built #16). All cp-api access goes through `lib/api` — `apiRequest` attaches the bearer token, auto-generates an `Idempotency-Key` on mutations, and transparently refreshes the token pair on a 401. Server state flows only through TanStack Query hooks (`useDevices`, `useLogin`, `useFirstRun`, `useEnrollTotp`); a CI test forbids `setInterval` in components. The auth flow — first-run admin claim, login, mandatory TOTP enrollment with QR + once-shown recovery codes — is built; fleet view (#17) and per-device view (#18) follow. Tested with Vitest + React Testing Library + MSW (cp-api mocked at the network layer).
+
 ### Storage
 
 - **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the stored `is_online` column on the `devices` row (alongside `last_seen` and `presence_changed_at`), maintained by `cp-ingest`. A device's `site_id` ties it to a `sites` row, which the `authz` module filters on; `operator_sites` grants a non-staff operator access to specific sites. The `devices` row also stores `mtls_cert_expires_at` — the per-device mTLS cert's notAfter, captured at enrollment and surfaced on `GET /devices/{id}` as the early-warning signal for cert rotation (ADR-013). Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
@@ -174,7 +176,7 @@ Control Plane packages (`internal/cp/`):
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
 | `api` | HTTP router; idempotency, bearer-auth, forced-TOTP-enrollment, and site-scope middleware | Built (#03, #04, #05, #06) |
 
-Not yet built: the Next.js dashboard (#16–#18 — including the per-device view that renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
+The dashboard scaffold + auth flow landed in #16 (see § Dashboard). Not yet built: the dashboard fleet view (#17) and per-device view (#18 — which renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
 ## Cloud infrastructure
 
