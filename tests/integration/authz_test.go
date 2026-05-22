@@ -55,6 +55,59 @@ func grantSite(t *testing.T, ctx context.Context, srv *testServer, operatorID, s
 	}
 }
 
+// insertDeviceAtSite inserts a devices row tied to a site and returns its id.
+func insertDeviceAtSite(t *testing.T, ctx context.Context, srv *testServer, hostname, siteID string) string {
+	t.Helper()
+	var id string
+	if err := srv.Pool.QueryRow(ctx, `
+		INSERT INTO devices (hostname, hardware_uuid, hardware_kind, os_version,
+		                     agent_version, iot_thing_arn, mtls_cert_arn, site_id)
+		VALUES ($1, $2, 'mac', 'macOS 15.0', '0.1.0', 'arn:thing', 'arn:cert', $3)
+		RETURNING id
+	`, hostname, "hw-"+hostname, siteID).Scan(&id); err != nil {
+		t.Fatalf("insert device at site: %v", err)
+	}
+	return id
+}
+
+// countDeviceQuery runs a (sql, args) pair from ScopedDeviceQuery and returns
+// the number of device rows it yields.
+func countDeviceQuery(t *testing.T, ctx context.Context, srv *testServer, sql string, args []any) int {
+	t.Helper()
+	rows, err := srv.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		t.Fatalf("run scoped query: %v", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate scoped query: %v", err)
+	}
+	return n
+}
+
+func TestScopedDeviceQueryStaffSeesAllDevices(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteA := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	siteB := insertSite(t, ctx, srv, clientID, "Acme Warehouse")
+	insertDeviceAtSite(t, ctx, srv, "mac-a", siteA)
+	insertDeviceAtSite(t, ctx, srv, "mac-b", siteB)
+
+	// A staff filter imposes no restriction — every device is visible.
+	sql, args := authz.ScopedDeviceQuery(authz.SiteFilter{All: true},
+		"SELECT id FROM devices WHERE true")
+	if n := countDeviceQuery(t, ctx, srv, sql, args); n != 2 {
+		t.Errorf("staff scoped query: got %d devices want 2", n)
+	}
+}
+
 func TestScopeForNonStaffOperatorListsGrantedSites(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
