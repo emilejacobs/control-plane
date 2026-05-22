@@ -33,11 +33,16 @@ export function useEnrollTotp() {
   });
 }
 
-// useDevices loads the operator's site-scoped fleet. The fleet view (#17)
-// builds on it; #16 ships only the empty Devices shell.
+// devicePollInterval is the fleet-view poll cadence (PRD: 10s polling, no
+// WebSocket in Phase 1). Presence transitions surface within one cycle.
+const devicePollInterval = 10_000;
+
+// useDevices loads the operator's site-scoped fleet and re-polls every 10s,
+// so the fleet view stays current without any setInterval in components.
 export function useDevices() {
   return useQuery({
     queryKey: ["devices"],
     queryFn: getDevices,
+    refetchInterval: devicePollInterval,
   });
 }

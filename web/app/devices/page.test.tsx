@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/server";
@@ -35,6 +35,28 @@ describe("fleet view", () => {
     const z = rows.findIndex((t) => t.includes("mac-z"));
     expect(a).toBeGreaterThanOrEqual(0);
     expect(a).toBeLessThan(z);
+  });
+
+  it("polls GET /devices every 10 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      server.use(
+        http.get(`${API_BASE}/devices`, () => {
+          calls += 1;
+          return HttpResponse.json({ devices: [] });
+        }),
+      );
+      renderWithClient(<DevicesPage />);
+
+      await vi.advanceTimersByTimeAsync(0); // flush the initial query
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(10_000); // one poll cycle
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("links each device row to its per-device view", async () => {
