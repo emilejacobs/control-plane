@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/ingest"
+	"github.com/emilejacobs/control-plane/internal/cp/presence"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
@@ -166,6 +168,51 @@ func TestUpdateLastSeenBringsDeviceOnline(t *testing.T) {
 	if dev.LastSeen == nil || !dev.LastSeen.Equal(hb2) {
 		t.Errorf("last_seen: got %v want %v", dev.LastSeen, hb2)
 	}
+}
+
+// TestPresenceSweeperMarksStaleDeviceOffline is Issue 08 cycle 9: the
+// PresenceSweeper, wired to the real Registry, flips a stale device's
+// is_online to false in Postgres (AC 1 — the sweeper backstop).
+func TestPresenceSweeperMarksStaleDeviceOffline(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	deviceID := enrollForTest(t, srv, "mac-mini-presence-05", "99999999-9999-9999-4444-555555555555")
+
+	// The device is online, with a heartbeat recorded in the in-memory model.
+	t0 := time.Now().UTC()
+	if err := srv.Registry.SetPresence(ctx, deviceID, true, t0); err != nil {
+		t.Fatalf("seed online: %v", err)
+	}
+	p := presence.New()
+	p.RecordHeartbeat(deviceID, t0)
+
+	// Run the sweeper with a clock well past the freshness threshold.
+	sweeper := ingest.NewPresenceSweeper(p, srv.Registry, ingest.SweeperConfig{
+		Interval: 10 * time.Millisecond,
+		Now:      func() time.Time { return t0.Add(presence.OnlineThreshold + time.Minute) },
+	})
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { sweeper.Run(runCtx); close(done) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		dev, err := srv.Registry.GetByID(ctx, deviceID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if !dev.IsOnline {
+			return // swept offline — pass
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("sweeper did not mark the stale device offline within 5s")
 }
 
 // TestDeviceGetReportsOnline is Issue 08 cycle 3: GET /devices/{id} returns
