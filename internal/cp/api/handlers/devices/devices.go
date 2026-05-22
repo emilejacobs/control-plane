@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emilejacobs/control-plane/internal/cp/presence"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
@@ -48,14 +47,12 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Derive presence from the raw last_seen column. A device that has
-	// never reported a heartbeat is offline with a null ago-seconds.
-	now := time.Now()
-	var lastSeen time.Time
+	// is_online is the stored presence state maintained by cp-ingest;
+	// last_seen_ago_seconds is derived from the raw last_seen column and is
+	// null for a device that has never reported a heartbeat.
 	var agoSeconds *int64
 	if dev.LastSeen != nil {
-		lastSeen = *dev.LastSeen
-		s := int64(now.Sub(lastSeen).Seconds())
+		s := int64(time.Since(*dev.LastSeen).Seconds())
 		agoSeconds = &s
 	}
 
@@ -68,7 +65,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		OSVersion:          dev.OSVersion,
 		AgentVersion:       dev.AgentVersion,
 		IoTThingARN:        dev.IoTThingARN,
-		IsOnline:           presence.IsOnline(lastSeen, now),
+		IsOnline:           dev.IsOnline,
 		LastSeenAgoSeconds: agoSeconds,
 		EnrolledAt:         dev.EnrolledAt.UTC().Format(time.RFC3339),
 	})

@@ -98,16 +98,23 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 	return d, nil
 }
 
-// UpdateLastSeen stamps a device's last_seen column. An id that matches no
-// row — including a syntactically invalid one — returns ErrDeviceNotFound,
-// so the presence ingester can route an unknown-device heartbeat to the DLQ
-// instead of looping on it.
+// UpdateLastSeen records a heartbeat: it stamps last_seen and marks the
+// device online, moving presence_changed_at only when the device was
+// previously offline — a steady-state heartbeat does not disturb it. An id
+// that matches no row — including a non-UUID — returns ErrDeviceNotFound, so
+// the presence ingester can DLQ an unknown-device heartbeat instead of
+// looping on it.
 func (r *Registry) UpdateLastSeen(ctx context.Context, deviceID string, at time.Time) error {
 	if _, err := uuid.Parse(deviceID); err != nil {
 		return ErrDeviceNotFound
 	}
 	tag, err := r.pool.Exec(ctx, `
-		UPDATE devices SET last_seen = $2, updated_at = now() WHERE id = $1
+		UPDATE devices
+		SET last_seen = $2,
+		    is_online = true,
+		    presence_changed_at = CASE WHEN is_online THEN presence_changed_at ELSE $2 END,
+		    updated_at = now()
+		WHERE id = $1
 	`, deviceID, at)
 	if err != nil {
 		return fmt.Errorf("update last_seen: %w", err)

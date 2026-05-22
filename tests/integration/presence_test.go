@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emilejacobs/control-plane/internal/cp/presence"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
@@ -122,9 +121,56 @@ func TestRegistrySetPresence(t *testing.T) {
 	}
 }
 
-// TestDeviceGetReportsOnline is Issue 07 cycle 3: GET /devices/{id} derives
-// is_online and last_seen_ago_seconds from the last_seen column against the
-// 90s threshold.
+// TestUpdateLastSeenBringsDeviceOnline is Issue 08 cycle 3: a heartbeat
+// marks the device online and stamps presence_changed_at on the first one;
+// a steady-state heartbeat keeps it online without disturbing that stamp.
+func TestUpdateLastSeenBringsDeviceOnline(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	deviceID := enrollForTest(t, srv, "mac-mini-presence-04", "77777777-7777-7777-4444-555555555555")
+
+	// First heartbeat: offline → online, presence_changed_at stamped.
+	hb1 := time.Date(2026, 5, 21, 14, 0, 0, 0, time.UTC)
+	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, hb1); err != nil {
+		t.Fatalf("UpdateLastSeen 1: %v", err)
+	}
+	dev, err := srv.Registry.GetByID(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !dev.IsOnline {
+		t.Errorf("after first heartbeat: is_online false, want true")
+	}
+	if dev.PresenceChangedAt == nil || !dev.PresenceChangedAt.Equal(hb1) {
+		t.Errorf("presence_changed_at: got %v want %v", dev.PresenceChangedAt, hb1)
+	}
+
+	// Second heartbeat: still online, presence_changed_at must not move —
+	// nothing transitioned.
+	hb2 := hb1.Add(30 * time.Second)
+	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, hb2); err != nil {
+		t.Fatalf("UpdateLastSeen 2: %v", err)
+	}
+	dev, err = srv.Registry.GetByID(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !dev.IsOnline {
+		t.Errorf("after second heartbeat: is_online false, want true")
+	}
+	if dev.PresenceChangedAt == nil || !dev.PresenceChangedAt.Equal(hb1) {
+		t.Errorf("presence_changed_at moved on a steady-state heartbeat: got %v want %v", dev.PresenceChangedAt, hb1)
+	}
+	if dev.LastSeen == nil || !dev.LastSeen.Equal(hb2) {
+		t.Errorf("last_seen: got %v want %v", dev.LastSeen, hb2)
+	}
+}
+
+// TestDeviceGetReportsOnline is Issue 08 cycle 3: GET /devices/{id} returns
+// the stored is_online column, decoupled from last_seen freshness, so the
+// disconnect/sweeper path can show offline while last_seen is still recent.
 func TestDeviceGetReportsOnline(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
@@ -156,28 +202,28 @@ func TestDeviceGetReportsOnline(t *testing.T) {
 		t.Errorf("never-seen device: online=%v ago=%v want false/nil", online, ago)
 	}
 
-	// Seen just now → online.
+	// A heartbeat brings the device online; ago-seconds is small.
 	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, time.Now().UTC()); err != nil {
-		t.Fatalf("UpdateLastSeen now: %v", err)
+		t.Fatalf("UpdateLastSeen: %v", err)
 	}
 	online, ago := get()
 	if !online {
-		t.Errorf("just-seen device: is_online=false want true")
+		t.Errorf("after heartbeat: is_online=false want true")
 	}
 	if ago == nil || *ago < 0 || *ago > 60 {
-		t.Errorf("just-seen device: last_seen_ago_seconds=%v want small non-negative", ago)
+		t.Errorf("after heartbeat: last_seen_ago_seconds=%v want small non-negative", ago)
 	}
 
-	// Seen well past the 90s threshold → offline, with a real ago-seconds.
-	stale := time.Now().UTC().Add(-(presence.OnlineThreshold + 30*time.Second))
-	if err := srv.Registry.UpdateLastSeen(ctx, deviceID, stale); err != nil {
-		t.Fatalf("UpdateLastSeen stale: %v", err)
+	// The presence column is the source of truth: SetPresence(false) makes
+	// the API report offline even though last_seen is still recent.
+	if err := srv.Registry.SetPresence(ctx, deviceID, false, time.Now().UTC()); err != nil {
+		t.Fatalf("SetPresence: %v", err)
 	}
 	online, ago = get()
 	if online {
-		t.Errorf("stale device: is_online=true want false")
+		t.Errorf("after SetPresence(false): is_online=true want false")
 	}
-	if ago == nil || *ago < 110 {
-		t.Errorf("stale device: last_seen_ago_seconds=%v want >= 110", ago)
+	if ago == nil || *ago < 0 || *ago > 60 {
+		t.Errorf("last_seen_ago_seconds should still reflect the recent last_seen: got %v", ago)
 	}
 }
