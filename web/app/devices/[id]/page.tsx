@@ -19,11 +19,14 @@ export default function DevicePage() {
         <>
           <h1>{d.hostname}</h1>
           <PresenceChip online={d.isOnline} />
-          {d.lastSeenAt && (
-            <p>
-              Last seen <time>{formatAgo(d.lastSeenAt, new Date())}</time>
-            </p>
-          )}
+          <p>
+            Last seen{" "}
+            {d.lastSeenAt ? (
+              <time>{formatAgo(d.lastSeenAt, new Date())}</time>
+            ) : (
+              "Never"
+            )}
+          </p>
           <dl>
             <dt>Client</dt>
             <dd>{d.clientName ?? UNASSIGNED}</dd>

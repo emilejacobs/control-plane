@@ -97,4 +97,12 @@ describe("per-device view", () => {
 
     expect(screen.getByText("2 minutes ago")).toBeInTheDocument();
   });
+
+  it("shows Never when the device has never reported a heartbeat", async () => {
+    deviceReturns(device({ last_seen_ago_seconds: null }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(screen.getByText(/last seen never/i)).toBeInTheDocument();
+  });
 });
