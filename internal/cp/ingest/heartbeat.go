@@ -1,6 +1,7 @@
-// Package ingest holds the SQS ingest handlers that feed the Presence
-// model. PresenceIngester turns a heartbeat message into a last-seen
-// update; the lifecycle ingester arrives with the sweeper in #08.
+// Package ingest holds cp-ingest's worker components: the SQS ingest
+// handlers (PresenceIngester for heartbeats, LifecycleIngester for IoT
+// connect/disconnect events) and the PresenceSweeper goroutine. All three
+// feed the in-memory Presence model and persist its transitions.
 package ingest
 
 import (
