@@ -9,7 +9,9 @@ package authz
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,10 +32,20 @@ type AuthZ struct {
 func New(pool *pgxpool.Pool) *AuthZ { return &AuthZ{pool: pool} }
 
 // ScopeForOperator resolves the operator's SiteFilter. A staff operator gets
-// the All grant; a non-staff operator gets the sites listed in operator_sites.
+// the All grant; a non-staff operator gets the sites listed in operator_sites
+// — an empty list if none, which fails closed.
 func (z *AuthZ) ScopeForOperator(ctx context.Context, operatorID string, isStaff bool) (SiteFilter, error) {
 	if isStaff {
 		return SiteFilter{All: true}, nil
 	}
-	return SiteFilter{}, nil
+	rows, err := z.pool.Query(ctx,
+		`SELECT site_id::text FROM operator_sites WHERE operator_id = $1`, operatorID)
+	if err != nil {
+		return SiteFilter{}, fmt.Errorf("query operator sites: %w", err)
+	}
+	siteIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return SiteFilter{}, fmt.Errorf("collect operator sites: %w", err)
+	}
+	return SiteFilter{SiteIDs: siteIDs}, nil
 }

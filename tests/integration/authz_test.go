@@ -1,0 +1,86 @@
+package integration_test
+
+import (
+	"context"
+	"sort"
+	"testing"
+
+	"github.com/emilejacobs/control-plane/internal/cp/authz"
+)
+
+// insertClient inserts a clients row and returns its id.
+func insertClient(t *testing.T, ctx context.Context, srv *testServer, name string) string {
+	t.Helper()
+	var id string
+	if err := srv.Pool.QueryRow(ctx,
+		`INSERT INTO clients (name) VALUES ($1) RETURNING id`, name,
+	).Scan(&id); err != nil {
+		t.Fatalf("insert client: %v", err)
+	}
+	return id
+}
+
+// insertSite inserts a sites row and returns its id.
+func insertSite(t *testing.T, ctx context.Context, srv *testServer, clientID, name string) string {
+	t.Helper()
+	var id string
+	if err := srv.Pool.QueryRow(ctx,
+		`INSERT INTO sites (client_id, name) VALUES ($1, $2) RETURNING id`, clientID, name,
+	).Scan(&id); err != nil {
+		t.Fatalf("insert site: %v", err)
+	}
+	return id
+}
+
+// insertNonStaffOperator inserts a non-staff operator and returns its id.
+func insertNonStaffOperator(t *testing.T, ctx context.Context, srv *testServer, email string) string {
+	t.Helper()
+	var id string
+	if err := srv.Pool.QueryRow(ctx,
+		`INSERT INTO operators (email, password_hash, is_staff) VALUES ($1, 'unused-hash', false) RETURNING id`,
+		email,
+	).Scan(&id); err != nil {
+		t.Fatalf("insert non-staff operator: %v", err)
+	}
+	return id
+}
+
+// grantSite grants an operator access to a site.
+func grantSite(t *testing.T, ctx context.Context, srv *testServer, operatorID, siteID string) {
+	t.Helper()
+	if _, err := srv.Pool.Exec(ctx,
+		`INSERT INTO operator_sites (operator_id, site_id) VALUES ($1, $2)`, operatorID, siteID,
+	); err != nil {
+		t.Fatalf("grant site: %v", err)
+	}
+}
+
+func TestScopeForNonStaffOperatorListsGrantedSites(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteA := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	siteB := insertSite(t, ctx, srv, clientID, "Acme Warehouse")
+	insertSite(t, ctx, srv, clientID, "Acme Annex") // not granted
+
+	operatorID := insertNonStaffOperator(t, ctx, srv, "field-op@acme.test")
+	grantSite(t, ctx, srv, operatorID, siteA)
+	grantSite(t, ctx, srv, operatorID, siteB)
+
+	f, err := authz.New(srv.Pool).ScopeForOperator(ctx, operatorID, false)
+	if err != nil {
+		t.Fatalf("ScopeForOperator: %v", err)
+	}
+	if f.All {
+		t.Errorf("non-staff operator: All = true, want false")
+	}
+	got := append([]string(nil), f.SiteIDs...)
+	want := []string{siteA, siteB}
+	sort.Strings(got)
+	sort.Strings(want)
+	if len(got) != len(want) || (len(got) == 2 && (got[0] != want[0] || got[1] != want[1])) {
+		t.Errorf("SiteIDs = %v, want the two granted sites %v", f.SiteIDs, want)
+	}
+}
