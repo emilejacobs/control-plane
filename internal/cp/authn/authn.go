@@ -146,14 +146,23 @@ type LoginInput struct {
 	RecoveryCode string
 }
 
+// LoginResult is what Login returns: the issued token pair plus whether the
+// operator must still complete TOTP enrollment before the session is fully
+// usable — every other authenticated route is gated until they do.
+type LoginResult struct {
+	Tokens                 Tokens
+	RequiresTotpEnrollment bool
+}
+
 // Login verifies email + password — and, for an enrolled operator, a TOTP
-// code — and, on success, issues a fresh token pair and clears the
-// failed-login state. An unknown email or a wrong password both return
-// ErrInvalidCredentials; a correct password with a missing/wrong TOTP code
-// returns ErrInvalidTotp; an account inside its lockout window returns
-// ErrAccountLocked. maxFailedAttempts consecutive password failures lock the
-// account for lockoutWindow.
-func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
+// code (or a single-use recovery code) — and, on success, issues a fresh
+// token pair and clears the failed-login state. A not-yet-enrolled operator
+// still logs in, with RequiresTotpEnrollment set. An unknown email or a wrong
+// password both return ErrInvalidCredentials; a correct password with a
+// missing/wrong second factor returns ErrInvalidTotp; an account inside its
+// lockout window returns ErrAccountLocked. maxFailedAttempts consecutive
+// password failures lock the account for lockoutWindow.
+func (a *AuthN) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 
 	var operatorID, hash string
@@ -165,21 +174,21 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
 		FROM operators WHERE email = $1
 	`, email).Scan(&operatorID, &hash, &isStaff, &lockedUntil, &totpSecretEnc)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Tokens{}, ErrInvalidCredentials
+		return LoginResult{}, ErrInvalidCredentials
 	}
 	if err != nil {
-		return Tokens{}, fmt.Errorf("lookup operator: %w", err)
+		return LoginResult{}, fmt.Errorf("lookup operator: %w", err)
 	}
 
 	// A locked account is refused outright: the password is not checked
 	// and the failed-attempt counter is left untouched.
 	if lockedUntil != nil && a.now().Before(*lockedUntil) {
-		return Tokens{}, ErrAccountLocked
+		return LoginResult{}, ErrAccountLocked
 	}
 
 	ok, err := VerifyPassword(in.Password, hash)
 	if err != nil {
-		return Tokens{}, fmt.Errorf("verify password: %w", err)
+		return LoginResult{}, fmt.Errorf("verify password: %w", err)
 	}
 	if !ok {
 		// Count the failed attempt; the one that crosses the threshold
@@ -195,9 +204,9 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
 			    updated_at = now()
 			WHERE id = $1
 		`, operatorID, maxFailedAttempts, a.now().Add(lockoutWindow)); err != nil {
-			return Tokens{}, fmt.Errorf("record failed login: %w", err)
+			return LoginResult{}, fmt.Errorf("record failed login: %w", err)
 		}
-		return Tokens{}, ErrInvalidCredentials
+		return LoginResult{}, ErrInvalidCredentials
 	}
 
 	// The password is correct. An enrolled operator must also present a
@@ -209,18 +218,18 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
 		if in.RecoveryCode != "" {
 			used, err := a.consumeRecoveryCode(ctx, operatorID, in.RecoveryCode)
 			if err != nil {
-				return Tokens{}, err
+				return LoginResult{}, err
 			}
 			if !used {
-				return Tokens{}, ErrInvalidTotp
+				return LoginResult{}, ErrInvalidTotp
 			}
 		} else {
 			secret, err := a.cipher.Decrypt(totpSecretEnc)
 			if err != nil {
-				return Tokens{}, fmt.Errorf("decrypt totp secret: %w", err)
+				return LoginResult{}, fmt.Errorf("decrypt totp secret: %w", err)
 			}
 			if !validateTotp(string(secret), in.TOTPCode, a.now()) {
-				return Tokens{}, ErrInvalidTotp
+				return LoginResult{}, ErrInvalidTotp
 			}
 		}
 	}
@@ -231,10 +240,17 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
 		    last_login_at = now(), updated_at = now()
 		WHERE id = $1
 	`, operatorID); err != nil {
-		return Tokens{}, fmt.Errorf("clear login state: %w", err)
+		return LoginResult{}, fmt.Errorf("clear login state: %w", err)
 	}
 
-	return a.issueTokens(ctx, operatorID, email, isStaff)
+	tokens, err := a.issueTokens(ctx, operatorID, email, isStaff)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return LoginResult{
+		Tokens:                 tokens,
+		RequiresTotpEnrollment: totpSecretEnc == nil,
+	}, nil
 }
 
 // Refresh rotates a refresh token: the presented token is revoked and a

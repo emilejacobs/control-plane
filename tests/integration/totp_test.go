@@ -181,6 +181,66 @@ func TestLoginRequiresTotpAfterEnrollment(t *testing.T) {
 	}
 }
 
+func TestLoginFlagsTotpEnrollmentRequired(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	clock := newFakeClock(time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
+	srv := newTestServerCfg(t, ctx, authn.Config{Now: clock.Now})
+
+	const email = "admin@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	if code := doFirstRun(t, srv.URL, email, password,
+		"00000000-0000-4000-8000-00000000f001"); code != http.StatusCreated {
+		t.Fatalf("first-run setup: got %d want 201", code)
+	}
+
+	// A not-yet-enrolled operator logs in with just email+password; the
+	// response flags that TOTP enrollment is still required.
+	pre := doLoginTotp(t, srv.URL, email, password, "", "", "00000000-0000-4000-8000-0000000073a1")
+	if pre.StatusCode != http.StatusOK {
+		pre.Body.Close()
+		t.Fatalf("pre-enrollment login: got %d want 200", pre.StatusCode)
+	}
+	var preOut struct {
+		AccessToken            string `json:"access_token"`
+		RequiresTotpEnrollment bool   `json:"requires_totp_enrollment"`
+	}
+	if err := json.NewDecoder(pre.Body).Decode(&preOut); err != nil {
+		t.Fatalf("decode pre-enrollment login: %v", err)
+	}
+	pre.Body.Close()
+	if !preOut.RequiresTotpEnrollment {
+		t.Errorf("requires_totp_enrollment: got false want true before enrollment")
+	}
+
+	// Enroll, then log in again with a valid TOTP code — the flag clears.
+	enroll := doTotpEnroll(t, srv.URL, preOut.AccessToken, "00000000-0000-4000-8000-000000000e01")
+	var enr totpEnrollResponse
+	if err := json.NewDecoder(enroll.Body).Decode(&enr); err != nil {
+		t.Fatalf("decode enroll: %v", err)
+	}
+	enroll.Body.Close()
+	secret := secretFromURI(t, enr.ProvisioningURI)
+
+	post := doLoginTotp(t, srv.URL, email, password,
+		totpCode(t, secret, clock.Now()), "", "00000000-0000-4000-8000-0000000073a2")
+	if post.StatusCode != http.StatusOK {
+		post.Body.Close()
+		t.Fatalf("post-enrollment login: got %d want 200", post.StatusCode)
+	}
+	var postOut struct {
+		RequiresTotpEnrollment bool `json:"requires_totp_enrollment"`
+	}
+	if err := json.NewDecoder(post.Body).Decode(&postOut); err != nil {
+		t.Fatalf("decode post-enrollment login: %v", err)
+	}
+	post.Body.Close()
+	if postOut.RequiresTotpEnrollment {
+		t.Errorf("requires_totp_enrollment: got true want false after enrollment")
+	}
+}
+
 func TestForcedTotpEnrollmentGate(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()

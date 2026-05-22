@@ -15,13 +15,22 @@ import (
 
 type Service interface {
 	ClaimFirstRunAdmin(ctx context.Context, email, password string) (authn.Tokens, error)
-	Login(ctx context.Context, in authn.LoginInput) (authn.Tokens, error)
+	Login(ctx context.Context, in authn.LoginInput) (authn.LoginResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authn.Tokens, error)
 }
 
 type tokensResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+// loginResponse is the POST /auth/login body. It adds requires_totp_enrollment
+// to the token pair — true when the operator must still enroll TOTP, which
+// the client uses to route into the enrollment flow.
+type loginResponse struct {
+	AccessToken            string `json:"access_token"`
+	RefreshToken           string `json:"refresh_token"`
+	RequiresTotpEnrollment bool   `json:"requires_totp_enrollment"`
 }
 
 type FirstRunHandler struct {
@@ -84,7 +93,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokens, err := h.svc.Login(r.Context(), authn.LoginInput{
+	result, err := h.svc.Login(r.Context(), authn.LoginInput{
 		Email:        req.Email,
 		Password:     req.Password,
 		TOTPCode:     req.TOTPCode,
@@ -113,7 +122,13 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("audit.login", "outcome", "success", "email", req.Email)
 
-	writeTokens(w, http.StatusOK, tokens)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(loginResponse{
+		AccessToken:            result.Tokens.AccessToken,
+		RefreshToken:           result.Tokens.RefreshToken,
+		RequiresTotpEnrollment: result.RequiresTotpEnrollment,
+	})
 }
 
 // RefreshHandler serves POST /auth/refresh.
