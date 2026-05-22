@@ -129,7 +129,7 @@ Operator-facing web UI, deployed on ECS Fargate. Thin client: posts username + p
 
 Calls the API service for all data and actions; no direct AWS SDK use from the browser.
 
-The dashboard lives in `web/` (Next.js App Router, TypeScript; built #16). All cp-api access goes through `lib/api` — `apiRequest` attaches the bearer token, auto-generates an `Idempotency-Key` on mutations, and transparently refreshes the token pair on a 401. Server state flows only through TanStack Query hooks (`useDevices`, `useLogin`, `useFirstRun`, `useEnrollTotp`); a CI test forbids `setInterval` in components. The auth flow — first-run admin claim, login, mandatory TOTP enrollment with QR + once-shown recovery codes — is built; fleet view (#17) and per-device view (#18) follow. Tested with Vitest + React Testing Library + MSW (cp-api mocked at the network layer).
+The dashboard lives in `web/` (Next.js App Router, TypeScript; built #16). All cp-api access goes through `lib/api` — `apiRequest` attaches the bearer token, auto-generates an `Idempotency-Key` on mutations, and transparently refreshes the token pair on a 401. Server state flows only through TanStack Query hooks (`useDevices`, `useLogin`, `useFirstRun`, `useEnrollTotp`); a CI test forbids `setInterval` in components. The auth flow — first-run admin claim, login, mandatory TOTP enrollment with QR + once-shown recovery codes — and the fleet view are built; the per-device view (#18) follows. The fleet view groups the operator's site-scoped devices by client and site (site-less devices fall under "Unassigned"), shows a presence chip per row, links each row to the per-device view, and polls `GET /devices` every 10s via `useDevices`. Tested with Vitest + React Testing Library + MSW (cp-api mocked at the network layer).
 
 ### Storage
 
@@ -176,7 +176,7 @@ Control Plane packages (`internal/cp/`):
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
 | `api` | HTTP router; idempotency, bearer-auth, forced-TOTP-enrollment, and site-scope middleware | Built (#03, #04, #05, #06) |
 
-The dashboard scaffold + auth flow landed in #16 (see § Dashboard). Not yet built: the dashboard fleet view (#17) and per-device view (#18 — which renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
+The dashboard scaffold + auth flow (#16) and fleet view (#17) landed (see § Dashboard). Not yet built: the dashboard per-device view (#18 — which renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
 ## Cloud infrastructure
 
