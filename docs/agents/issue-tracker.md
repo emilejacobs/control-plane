@@ -17,6 +17,10 @@ Issues here are **short-lived working notes** — open design questions, "circle
 - Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
+## Issue structure
+
+New implementation issues follow the skeleton in [`issue-template.md`](./issue-template.md). Every issue carries a standing **documentation** acceptance criterion, so `docs/` (architecture, glossary, ADRs) does not drift behind the code as issues land — see the template for the rationale.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
