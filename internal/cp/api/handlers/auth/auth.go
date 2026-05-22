@@ -69,9 +69,10 @@ type LoginHandler struct {
 func NewLogin(svc Service) *LoginHandler { return &LoginHandler{svc: svc} }
 
 type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	TOTPCode string `json:"totp_code"`
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	TOTPCode     string `json:"totp_code"`
+	RecoveryCode string `json:"recovery_code"`
 }
 
 func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -84,9 +85,10 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tokens, err := h.svc.Login(r.Context(), authn.LoginInput{
-		Email:    req.Email,
-		Password: req.Password,
-		TOTPCode: req.TOTPCode,
+		Email:        req.Email,
+		Password:     req.Password,
+		TOTPCode:     req.TOTPCode,
+		RecoveryCode: req.RecoveryCode,
 	})
 	if err != nil {
 		if errors.Is(err, authn.ErrInvalidCredentials) {

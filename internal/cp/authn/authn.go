@@ -201,16 +201,27 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (Tokens, error) {
 	}
 
 	// The password is correct. An enrolled operator must also present a
-	// valid TOTP code; a not-yet-enrolled operator skips this check and is
-	// funnelled into enrollment by the first-login gate. A bad TOTP code
-	// does not touch the failed-login counter — the password held.
+	// valid second factor — a TOTP code, or a single-use recovery code in
+	// its place. A not-yet-enrolled operator skips this and is funnelled
+	// into enrollment by the first-login gate. A bad second factor does not
+	// touch the failed-login counter — the password held.
 	if totpSecretEnc != nil {
-		secret, err := a.cipher.Decrypt(totpSecretEnc)
-		if err != nil {
-			return Tokens{}, fmt.Errorf("decrypt totp secret: %w", err)
-		}
-		if !validateTotp(string(secret), in.TOTPCode, a.now()) {
-			return Tokens{}, ErrInvalidTotp
+		if in.RecoveryCode != "" {
+			used, err := a.consumeRecoveryCode(ctx, operatorID, in.RecoveryCode)
+			if err != nil {
+				return Tokens{}, err
+			}
+			if !used {
+				return Tokens{}, ErrInvalidTotp
+			}
+		} else {
+			secret, err := a.cipher.Decrypt(totpSecretEnc)
+			if err != nil {
+				return Tokens{}, fmt.Errorf("decrypt totp secret: %w", err)
+			}
+			if !validateTotp(string(secret), in.TOTPCode, a.now()) {
+				return Tokens{}, ErrInvalidTotp
+			}
 		}
 	}
 

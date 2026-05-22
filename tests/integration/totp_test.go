@@ -181,6 +181,49 @@ func TestLoginRequiresTotpAfterEnrollment(t *testing.T) {
 	}
 }
 
+func TestLoginWithRecoveryCodeSingleUse(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const email = "admin@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	token := firstRunToken(t, srv, email, password)
+
+	enroll := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e01")
+	var enr totpEnrollResponse
+	if err := json.NewDecoder(enroll.Body).Decode(&enr); err != nil {
+		t.Fatalf("decode enroll: %v", err)
+	}
+	enroll.Body.Close()
+	if len(enr.RecoveryCodes) != 10 {
+		t.Fatalf("expected 10 recovery codes, got %d", len(enr.RecoveryCodes))
+	}
+	code := enr.RecoveryCodes[3]
+
+	// A recovery code stands in for the TOTP code.
+	first := doLoginTotp(t, srv.URL, email, password, "", code, "00000000-0000-4000-8000-0000000072a1")
+	defer first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(first.Body)
+		t.Errorf("login with recovery code: got %d want 200; body=%s", first.StatusCode, raw)
+	}
+
+	// The same code is single-use — rejected on reuse.
+	second := doLoginTotp(t, srv.URL, email, password, "", code, "00000000-0000-4000-8000-0000000072a2")
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusUnauthorized {
+		t.Errorf("reused recovery code: got %d want 401", second.StatusCode)
+	}
+
+	// A still-unused code from the same batch keeps working.
+	third := doLoginTotp(t, srv.URL, email, password, "", enr.RecoveryCodes[7], "00000000-0000-4000-8000-0000000072a3")
+	defer third.Body.Close()
+	if third.StatusCode != http.StatusOK {
+		t.Errorf("login with an unused recovery code: got %d want 200", third.StatusCode)
+	}
+}
+
 func TestTotpSecretEncryptedAtRest(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
