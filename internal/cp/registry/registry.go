@@ -61,8 +61,9 @@ type EnrollOutput struct {
 // Device is the row returned by GetByID. LastSeen is the raw last_seen
 // column (nil until the first heartbeat lands); IsOnline is the stored
 // presence state maintained by cp-ingest's ingesters and sweeper.
-// PresenceChangedAt is when IsOnline last flipped. mtls_cert_days_remaining
-// lands in #09.
+// PresenceChangedAt is when IsOnline last flipped. MtlsCertExpiresAt is the
+// notAfter of the per-device mTLS cert minted at enrollment (nil only for
+// rows that predate migration 006).
 type Device struct {
 	ID                string
 	Hostname          string
@@ -74,6 +75,7 @@ type Device struct {
 	LastSeen          *time.Time
 	IsOnline          bool
 	PresenceChangedAt *time.Time
+	MtlsCertExpiresAt *time.Time
 	EnrolledAt        time.Time
 }
 

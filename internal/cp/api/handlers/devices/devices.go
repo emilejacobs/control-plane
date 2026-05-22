@@ -23,16 +23,17 @@ type GetHandler struct {
 func NewGet(svc Service) *GetHandler { return &GetHandler{svc: svc} }
 
 type response struct {
-	DeviceID           string `json:"device_id"`
-	Hostname           string `json:"hostname"`
-	HardwareUUID       string `json:"hardware_uuid"`
-	HardwareKind       string `json:"hardware_kind"`
-	OSVersion          string `json:"os_version"`
-	AgentVersion       string `json:"agent_version"`
-	IoTThingARN        string `json:"iot_thing_arn"`
-	IsOnline           bool   `json:"is_online"`
-	LastSeenAgoSeconds *int64 `json:"last_seen_ago_seconds"`
-	EnrolledAt         string `json:"enrolled_at"`
+	DeviceID           string  `json:"device_id"`
+	Hostname           string  `json:"hostname"`
+	HardwareUUID       string  `json:"hardware_uuid"`
+	HardwareKind       string  `json:"hardware_kind"`
+	OSVersion          string  `json:"os_version"`
+	AgentVersion       string  `json:"agent_version"`
+	IoTThingARN        string  `json:"iot_thing_arn"`
+	IsOnline           bool    `json:"is_online"`
+	LastSeenAgoSeconds *int64  `json:"last_seen_ago_seconds"`
+	MtlsCertExpiresAt  *string `json:"mtls_cert_expires_at"`
+	EnrolledAt         string  `json:"enrolled_at"`
 }
 
 func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +57,14 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		agoSeconds = &s
 	}
 
+	// mtls_cert_expires_at is the cert notAfter persisted at enrollment;
+	// null only for rows that predate migration 006.
+	var certExpiresAt *string
+	if dev.MtlsCertExpiresAt != nil {
+		s := dev.MtlsCertExpiresAt.UTC().Format(time.RFC3339)
+		certExpiresAt = &s
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response{
 		DeviceID:           dev.ID,
@@ -67,6 +76,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		IoTThingARN:        dev.IoTThingARN,
 		IsOnline:           dev.IsOnline,
 		LastSeenAgoSeconds: agoSeconds,
+		MtlsCertExpiresAt:  certExpiresAt,
 		EnrolledAt:         dev.EnrolledAt.UTC().Format(time.RFC3339),
 	})
 }
