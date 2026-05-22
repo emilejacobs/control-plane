@@ -1,0 +1,89 @@
+package enrollment
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
+	"github.com/emilejacobs/control-plane/internal/cp/registry"
+)
+
+// fakeService is a stand-in for the registry — it records the EnrollInput it
+// received and returns a preset output/error, so handler tests stay free of
+// Postgres and IoT Core.
+type fakeService struct {
+	out registry.EnrollOutput
+	err error
+	got registry.EnrollInput
+}
+
+func (f *fakeService) Enroll(_ context.Context, in registry.EnrollInput) (registry.EnrollOutput, error) {
+	f.got = in
+	return f.out, f.err
+}
+
+// enroll drives the handler — wrapped in the cplog middleware so audit lines
+// land in logs — and returns the recorder.
+func enroll(h http.Handler, logs *bytes.Buffer, body map[string]any) *httptest.ResponseRecorder {
+	wrapped := cplog.Middleware(cplog.New(logs, "cp-api"))(h)
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/enrollments", bytes.NewReader(buf))
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	return rec
+}
+
+// auditLogged reports whether buf has a JSON log line with msg == wantMsg and
+// every want attribute matching.
+func auditLogged(buf, wantMsg string, want map[string]any) bool {
+	for _, line := range strings.Split(buf, "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) != nil || entry["msg"] != wantMsg {
+			continue
+		}
+		match := true
+		for k, v := range want {
+			if entry[k] != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEnrollmentAuditsSuccess(t *testing.T) {
+	var logs bytes.Buffer
+	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}})
+
+	rec := enroll(h, &logs, map[string]any{
+		"bootstrap_key": "k",
+		"hostname":      "mac-mini-acme-01",
+		"hardware_uuid": "11111111-2222-3333-4444-555555555555",
+		"hardware_kind": "mac",
+	})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: got %d want 201", rec.Code)
+	}
+	// httptest.NewRequest stamps RemoteAddr 192.0.2.1:1234.
+	if !auditLogged(logs.String(), "audit.enrollment", map[string]any{
+		"outcome":       "success",
+		"hostname":      "mac-mini-acme-01",
+		"hardware_uuid": "11111111-2222-3333-4444-555555555555",
+		"source_ip":     "192.0.2.1",
+	}) {
+		t.Errorf("no audit.enrollment success line:\n%s", logs.String())
+	}
+}

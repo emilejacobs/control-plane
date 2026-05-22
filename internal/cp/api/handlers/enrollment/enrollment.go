@@ -6,11 +6,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
+
+// sourceIP is the client address an enrollment request arrived from, without
+// the port — the audit log keys anomaly detection on it (ADR-017).
+func sourceIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
 
 type Service interface {
 	Enroll(ctx context.Context, in registry.EnrollInput) (registry.EnrollOutput, error)
@@ -41,6 +52,8 @@ type response struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log := cplog.FromContext(r.Context())
+
 	var req request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -62,6 +75,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Info("audit.enrollment",
+		"outcome", "success",
+		"source_ip", sourceIP(r),
+		"hardware_uuid", req.HardwareUUID,
+		"hostname", req.Hostname,
+		"device_id", out.DeviceID,
+	)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(response{
