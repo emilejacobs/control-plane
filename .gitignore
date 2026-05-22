@@ -15,11 +15,12 @@ coverage.html
 dist/
 bin/
 
-# Node / Next.js (future dashboard)
+# Node / Next.js (dashboard)
 node_modules/
 .next/
 build/
 .turbo/
+*.tsbuildinfo
 
 # Terraform / CDK (future infra)
 .terraform/
