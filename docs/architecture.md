@@ -131,7 +131,7 @@ Calls the API service for all data and actions; no direct AWS SDK use from the b
 
 ### Storage
 
-- **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the stored `is_online` column on the `devices` row (alongside `last_seen` and `presence_changed_at`), maintained by `cp-ingest`. The `devices` row also stores `mtls_cert_expires_at` — the per-device mTLS cert's notAfter, captured at enrollment and surfaced on `GET /devices/{id}` as the early-warning signal for cert rotation (ADR-013). Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
+- **RDS Postgres (multi-AZ)** — source of truth for clients, sites, devices, services, commands, audit log, operators, notification targets. Device presence is the stored `is_online` column on the `devices` row (alongside `last_seen` and `presence_changed_at`), maintained by `cp-ingest`. A device's `site_id` ties it to a `sites` row, which the `authz` module filters on; `operator_sites` grants a non-staff operator access to specific sites. The `devices` row also stores `mtls_cert_expires_at` — the per-device mTLS cert's notAfter, captured at enrollment and surfaced on `GET /devices/{id}` as the early-warning signal for cert rotation (ADR-013). Schema is managed by goose migrations embedded in the binaries and applied on startup (ADR-019).
 - **Timestream** — time-series telemetry metrics (CPU/mem/disk, per-service uptime); planned per ADR-016. Heartbeat *presence* does not use Timestream — it is the `last_seen` column in Postgres.
 - **S3** — agent binaries (signed manifests for self-update), command stdout/stderr, camera snapshots if cached, daily audit-log mirror.
 
@@ -163,17 +163,18 @@ Control Plane packages (`internal/cp/`):
 
 | Package | Responsibility | Status |
 |---|---|---|
-| `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `UpdateLastSeen` | Built (#03, #07, #08, #09) |
+| `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `List`, `UpdateLastSeen`; device reads are site-scoped | Built (#03, #06, #07, #08, #09) |
 | `iotprovisioner` | Wraps the AWS IoT SDK — thing + certificate minting | Built (#03) |
+| `authz` | Site-scoped authorization — operator `SiteFilter` resolution, the `ScopedDeviceQuery` chokepoint, and the CI gate | Built (#06) |
 | `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout, mandatory TOTP + recovery codes | Built (#04, #05) |
 | `presence` | Online threshold; in-memory per-device presence state and transitions (heartbeat, sweep, connect/disconnect) | Built (#07, #08) |
 | `sqsconsumer` | Generic `SQSConsumer[T]` — schema validation, DLQ routing, graceful drain | Built (#07) |
 | `ingest` | Heartbeat + lifecycle SQS handlers and the presence sweeper | Built (#07, #08) |
 | `cplog` | Structured JSON logs + end-to-end correlation IDs (ADR-011) | Built (#19) |
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
-| `api` | HTTP router; idempotency, bearer-auth, and forced-TOTP-enrollment middleware | Built (#03, #04, #05) |
+| `api` | HTTP router; idempotency, bearer-auth, forced-TOTP-enrollment, and site-scope middleware | Built (#03, #04, #05, #06) |
 
-Not yet built: site-scoped authorization (#06), the Next.js dashboard (#16–#18 — including the per-device view that renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
+Not yet built: the Next.js dashboard (#16–#18 — including the per-device view that renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
 ## Cloud infrastructure
 
@@ -306,7 +307,7 @@ See [decisions.md ADR-005](decisions.md#adr-005-api-first-design-for-mobile-read
 - Per-device X.509 certs issued by IoT Core's CA; 1-year TTL in Phase 1 (ADR-013), with rotation tooling a later-phase concern.
 - All commands signed with an Ed25519 key in KMS; agents reject unsigned or invalid commands.
 - API authn: short-lived JWT bearer tokens (~1h), refreshed via rotating, hashed-at-rest refresh tokens (ADR-010) — no external IdP.
-- Per-site authorization on operator JWTs (site allowlist claim, enforced server-side on every endpoint).
+- Per-site authorization (`authz` module). An operator's `SiteFilter` is resolved per request — staff (`operators.is_staff`) get the full fleet; a non-staff operator's allowlist comes from the `operator_sites` table — and injected into request context by the scope middleware. Every device-returning query routes through `ScopedDeviceQuery`, which composes the `devices.site_id` filter; a runtime CI gate fails any device read that bypasses it (the structural posture of ADR-012's idempotency gate). Phase 1 operators are all staff, so the filter is unrestrictive today, but the machinery is enforced from the first endpoint.
 - Secrets in AWS Secrets Manager (Mosyle/Tailscale tokens, DB DSN, signing-key passphrase).
 - Append-only audit log in Postgres + daily S3 mirror, covering: command issuance, login, config change, enrollment.
 - Edge UI bound to `127.0.0.1` — only the agent (and via the tailnet, the CP proxy) can reach it. Reduces today's attack surface, where the Edge UI is reachable across the tailnet.

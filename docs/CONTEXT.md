@@ -14,9 +14,11 @@ Terms used throughout the design documents.
 | **Bootstrap key** | A static shared secret bundled into the device install package; the install script presents it to `POST /enrollments`. Static-key approach per ADR-017, which superseded the short-lived per-device S3 token of ADR-014. |
 | **Enrollment** | The one-time process of registering a new device with the CP and provisioning its mTLS cert. |
 | **Signed command** | A command payload signed with the CP's Ed25519 key (held in KMS) before being sent to a device. The agent verifies the signature before executing. |
+| **Client** | A uKnomi customer organization. Owns one or more sites — the `clients` and `sites` tables. |
 | **Site** | A physical client location. One client may have multiple sites. |
 | **Operator (staff)** | A uKnomi internal user with full fleet access. Authenticates with local credentials — password + TOTP (ADR-010, which dropped Entra ID); carries the `'*'` site allowlist via the `is_staff` flag. |
 | **Operator (local)** | A future field-operator user with a local CP account, scoped to specific sites. |
+| **Site allowlist** | The set of sites an operator may see. Staff hold the full fleet implicitly via `is_staff`; a non-staff operator's allowlist is the explicit `operator_sites` grants. Enforced on every device read through the `authz` module's `ScopedDeviceQuery` helper. |
 | **Mosyle** | Apple MDM provider used for Mac auto-enrollment. Not in the CP runtime path; only triggers the install script. |
 | **Heartbeat** | A small message the agent publishes to `devices/{id}/telemetry` every 30s. The ingest worker uses it to update the device's `last_seen` in Postgres. |
 | **Online threshold** | The freshness window for `last_seen` that makes a device count as "online" in the dashboard. Phase 1 value: 90 seconds (3× heartbeat interval). |
