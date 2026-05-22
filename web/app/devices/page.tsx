@@ -2,6 +2,7 @@
 
 import { useDevices } from "../../lib/api/hooks";
 import { groupDevices } from "../../lib/fleet";
+import { PresenceChip } from "../../components/PresenceChip";
 
 // DevicesPage is the fleet view: every device the operator may see, grouped
 // by client and site, polled so presence stays current (Issue 17).
@@ -23,7 +24,9 @@ export default function DevicesPage() {
                 <h3>{site.siteName}</h3>
                 <ul>
                   {site.devices.map((d) => (
-                    <li key={d.deviceId}>{d.hostname}</li>
+                    <li key={d.deviceId}>
+                      <PresenceChip online={d.isOnline} /> {d.hostname}
+                    </li>
                   ))}
                 </ul>
               </section>

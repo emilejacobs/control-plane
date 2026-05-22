@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/server";
 import { renderWithClient } from "../../test/render";
@@ -35,5 +35,18 @@ describe("fleet view", () => {
     const z = rows.findIndex((t) => t.includes("mac-z"));
     expect(a).toBeGreaterThanOrEqual(0);
     expect(a).toBeLessThan(z);
+  });
+
+  it("shows a presence chip reflecting each device's online state", async () => {
+    devicesReturn([
+      { device_id: "d1", hostname: "mac-on", is_online: true, site_name: "HQ", client_name: "Acme" },
+      { device_id: "d2", hostname: "mac-off", is_online: false, site_name: "HQ", client_name: "Acme" },
+    ]);
+    renderWithClient(<DevicesPage />);
+
+    const onRow = (await screen.findByText("mac-on")).closest("li")!;
+    const offRow = screen.getByText("mac-off").closest("li")!;
+    expect(within(onRow).getByText("Online")).toBeInTheDocument();
+    expect(within(offRow).getByText("Offline")).toBeInTheDocument();
   });
 });
