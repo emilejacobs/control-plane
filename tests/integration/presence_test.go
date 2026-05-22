@@ -224,7 +224,7 @@ func TestDeviceGetReportsOnline(t *testing.T) {
 	srv := newTestServer(t, ctx)
 
 	deviceID := enrollForTest(t, srv, "mac-mini-presence-02", "44444444-4444-4444-4444-555555555555")
-	token := mintAccessToken(t)
+	token := mintAccessToken(t, ctx, srv)
 
 	get := func() (online bool, ago *int64) {
 		t.Helper()

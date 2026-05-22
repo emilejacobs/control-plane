@@ -57,7 +57,7 @@ func TestGetDeviceByIDReturnsInsertedRow(t *testing.T) {
 	srv := newTestServer(t, ctx)
 	deviceID := enrollForTest(t, srv, "mac-mini-acme-02", "22222222-2222-3333-4444-555555555555")
 
-	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t))
+	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t, ctx, srv))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
@@ -115,7 +115,7 @@ func TestGetDeviceByIDSurfacesCertExpiry(t *testing.T) {
 	srv := newTestServer(t, ctx)
 	deviceID := enrollForTest(t, srv, "mac-mini-acme-09", "09090909-0909-4909-8909-090909090909")
 
-	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t))
+	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t, ctx, srv))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
@@ -157,7 +157,7 @@ func TestGetDeviceByIDUnknownReturns404(t *testing.T) {
 	srv := newTestServer(t, ctx)
 
 	// A syntactically-valid UUID that won't match any row.
-	resp := doDeviceGet(t, srv.URL, "00000000-0000-0000-0000-000000000000", mintAccessToken(t))
+	resp := doDeviceGet(t, srv.URL, "00000000-0000-0000-0000-000000000000", mintAccessToken(t, ctx, srv))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		raw, _ := io.ReadAll(resp.Body)

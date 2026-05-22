@@ -181,6 +181,40 @@ func TestLoginRequiresTotpAfterEnrollment(t *testing.T) {
 	}
 }
 
+func TestForcedTotpEnrollmentGate(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const deviceID = "00000000-0000-0000-0000-000000000000"
+	// A real operator who has not yet enrolled TOTP.
+	token := firstRunToken(t, srv, "admin@acmecorp.test", "correct-horse-battery-staple")
+
+	// A gated read endpoint is blocked until enrollment completes.
+	blocked := doDeviceGet(t, srv.URL, deviceID, token)
+	blocked.Body.Close()
+	if blocked.StatusCode != http.StatusForbidden {
+		t.Fatalf("pre-enrollment device read: got %d want 403", blocked.StatusCode)
+	}
+	if got := blocked.Header.Get("Reason"); got != "totp-enrollment-required" {
+		t.Errorf("Reason header: got %q want %q", got, "totp-enrollment-required")
+	}
+
+	// The enrollment endpoint itself is exempt from the gate.
+	enroll := doTotpEnroll(t, srv.URL, token, "00000000-0000-4000-8000-000000000e01")
+	enroll.Body.Close()
+	if enroll.StatusCode != http.StatusOK {
+		t.Fatalf("enroll while gated: got %d want 200", enroll.StatusCode)
+	}
+
+	// After enrollment the same token clears the gate — 404 for the unknown id.
+	allowed := doDeviceGet(t, srv.URL, deviceID, token)
+	allowed.Body.Close()
+	if allowed.StatusCode != http.StatusNotFound {
+		t.Fatalf("post-enrollment device read: got %d want 404", allowed.StatusCode)
+	}
+}
+
 func TestLoginWithRecoveryCodeSingleUse(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()

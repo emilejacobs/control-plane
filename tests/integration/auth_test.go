@@ -598,7 +598,7 @@ func TestDeviceGetRequiresAuth(t *testing.T) {
 
 	// A validly-signed token passes the middleware and reaches the handler,
 	// which 404s for this unknown id.
-	resp = doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t))
+	resp = doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t, ctx, srv))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("valid bearer token, unknown id: got %d want 404", resp.StatusCode)

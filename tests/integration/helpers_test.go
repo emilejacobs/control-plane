@@ -102,16 +102,25 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc, Registry: reg}
 }
 
-// mintAccessToken returns a freshly-signed operator access token valid for a
-// server built by newTestServer — the bearer token its Auth middleware
-// expects. It signs with testSigningKey directly, so no DB operator is
-// needed; the middleware only verifies the JWT.
-func mintAccessToken(t *testing.T) string {
+// mintAccessToken inserts a TOTP-enrolled staff operator and returns a signed
+// access token for it. Gated read endpoints sit behind Auth +
+// RequireTotpEnrolled, so the backing operator must exist and be enrolled for
+// the request to reach the handler.
+func mintAccessToken(t *testing.T, ctx context.Context, srv *testServer) string {
 	t.Helper()
+	const operatorID = "00000000-0000-0000-0000-0000000000aa"
+	const email = "gated-reader@acmecorp.test"
+	if _, err := srv.Pool.Exec(ctx, `
+		INSERT INTO operators (id, email, password_hash, is_staff, totp_secret_encrypted)
+		VALUES ($1, $2, 'unused-hash', true, $3)
+		ON CONFLICT (id) DO NOTHING
+	`, operatorID, email, []byte("totp-secret-ciphertext")); err != nil {
+		t.Fatalf("insert enrolled operator: %v", err)
+	}
 	signer := authn.NewSigner(testSigningKey, time.Hour)
 	token, err := signer.Issue(authn.TokenClaims{
-		OperatorID: "00000000-0000-0000-0000-0000000000aa",
-		Email:      "operator@acmecorp.test",
+		OperatorID: operatorID,
+		Email:      email,
 		IsStaff:    true,
 	})
 	if err != nil {

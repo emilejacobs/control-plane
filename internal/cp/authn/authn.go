@@ -284,6 +284,24 @@ type TotpEnrollment struct {
 	RecoveryCodes   []string
 }
 
+// TotpEnrolled reports whether the operator has completed TOTP enrollment.
+// The forced-enrollment gate calls it on every protected request. An
+// operator id that matches no row is reported as not enrolled.
+func (a *AuthN) TotpEnrolled(ctx context.Context, operatorID string) (bool, error) {
+	var enrolled bool
+	err := a.pool.QueryRow(ctx,
+		`SELECT totp_secret_encrypted IS NOT NULL FROM operators WHERE id = $1`,
+		operatorID,
+	).Scan(&enrolled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check totp enrollment: %w", err)
+	}
+	return enrolled, nil
+}
+
 // EnrollTotp mints a TOTP shared secret and recoveryCodeCount recovery codes
 // for an operator, persisting the AES-256-GCM-encrypted secret and the
 // Argon2id-hashed codes. It returns the provisioning URI and the plaintext

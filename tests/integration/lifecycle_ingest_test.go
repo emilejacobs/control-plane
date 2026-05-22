@@ -25,7 +25,7 @@ func TestLifecycleIngestEndToEnd(t *testing.T) {
 
 	srv := newTestServer(t, ctx)
 	deviceID := enrollForTest(t, srv, "mac-mini-lifecycle-01", "88888888-8888-8888-8888-555555555555")
-	token := mintAccessToken(t)
+	token := mintAccessToken(t, ctx, srv)
 
 	// Bring the device online first, so a disconnect has something to flip.
 	if err := srv.Registry.SetPresence(ctx, deviceID, true, time.Now().UTC()); err != nil {
