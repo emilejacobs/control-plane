@@ -10,6 +10,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/auth"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
@@ -72,11 +73,20 @@ func (b *Builder) Handler() http.Handler { return b.mux }
 // to verify each one rejects requests without Idempotency-Key.
 func (b *Builder) MutatingRoutes() []Route { return b.mutating }
 
+// enrollmentRateLimit caps a single source IP at 20 enrollment requests per
+// hour (ADR-017) — bursty real waves stay well under it; a leaked bootstrap
+// key cannot enroll an unbounded number of fake devices.
+const (
+	enrollmentRateLimit  = 20
+	enrollmentRateWindow = time.Hour
+)
+
 // NewBuilderWith returns a fully-configured Builder. Tests use this to
 // inspect the route table; production code uses NewRouter.
 func NewBuilderWith(d Deps) *Builder {
 	b := newBuilder(middleware.Idempotency(d.IdempotencyStore))
-	b.Post("/enrollments", enrollment.New(d.Registry))
+	enrollLimiter := middleware.NewRateLimiter(enrollmentRateLimit, enrollmentRateWindow)
+	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry)))
 	if d.AuthN != nil {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN))

@@ -4,10 +4,78 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
 )
+
+// postEnrollment issues one POST /enrollments and returns the status code.
+// Each call uses a distinct hardware UUID + Idempotency-Key so the requests
+// are independent enrollments rather than idempotent replays.
+func postEnrollment(t *testing.T, baseURL, hostname string, n int) int {
+	t.Helper()
+	hwUUID := fmt.Sprintf("aaaaaaaa-0000-4000-8000-%012d", n)
+	body, err := json.Marshal(map[string]any{
+		"bootstrap_key": testBootstrapKey,
+		"hostname":      hostname,
+		"hardware_uuid": hwUUID,
+		"hardware_kind": "mac",
+		"os_version":    "macOS 15.0",
+		"agent_version": "0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/enrollments", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", hwUUID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestEnrollmentRateLimitTrips(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// 20 enrollments in the hour window from one source IP are allowed.
+	for n := 1; n <= 20; n++ {
+		if code := postEnrollment(t, srv.URL, fmt.Sprintf("mac-mini-acme-%02d", n), n); code != http.StatusCreated {
+			t.Fatalf("request %d: got %d want 201", n, code)
+		}
+	}
+	// The 21st from the same IP is rejected with 429 (ADR-017).
+	if code := postEnrollment(t, srv.URL, "mac-mini-acme-21", 21); code != http.StatusTooManyRequests {
+		t.Fatalf("21st request: got %d want 429", code)
+	}
+}
+
+func TestEnrollmentAnomalyAlertOnBadHostname(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// A hostname off the naming convention still enrolls — the regex is a
+	// sanity check, not an allowlist (ADR-017).
+	if code := postEnrollment(t, srv.URL, "rogue-laptop", 1); code != http.StatusCreated {
+		t.Fatalf("status: got %d want 201", code)
+	}
+	// ...and the mismatch raised an audit alert.
+	if !auditLogged(srv.Logs.String(), "audit.enrollment.anomaly", map[string]any{
+		"alert":    "hostname_convention",
+		"hostname": "rogue-laptop",
+	}) {
+		t.Errorf("no hostname-anomaly alert line:\n%s", srv.Logs.String())
+	}
+}
 
 func TestEnrollmentRejectsUnknownBootstrapKey(t *testing.T) {
 	requireDocker(t)
