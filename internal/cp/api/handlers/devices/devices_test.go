@@ -22,6 +22,10 @@ func (f fakeService) GetByID(_ context.Context, _ string) (registry.Device, erro
 	return f.dev, f.err
 }
 
+func (f fakeService) List(_ context.Context) ([]registry.Device, error) {
+	return nil, f.err
+}
+
 // getDevice drives GetHandler.ServeHTTP and returns the decoded JSON body.
 func getDevice(t *testing.T, h *GetHandler) map[string]any {
 	t.Helper()

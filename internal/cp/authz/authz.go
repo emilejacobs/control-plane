@@ -10,10 +10,31 @@ package authz
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ScopedMarker is the SQL comment ScopedDeviceQuery stamps on every query it
+// builds. The CI gate flags any read of the devices table that lacks it.
+const ScopedMarker = "/* authz:scoped */"
+
+// UnscopedDeviceReads returns, from a set of executed SQL statements, those
+// that read the devices table without the ScopedMarker — device reads that
+// bypassed ScopedDeviceQuery. An empty result means the gate passes.
+func UnscopedDeviceReads(sqls []string) []string {
+	var bad []string
+	for _, q := range sqls {
+		lower := strings.ToLower(q)
+		if strings.Contains(lower, "select") &&
+			strings.Contains(lower, "from devices") &&
+			!strings.Contains(q, ScopedMarker) {
+			bad = append(bad, q)
+		}
+	}
+	return bad
+}
 
 // SiteFilter is the set of sites an operator may see. All is the staff
 // full-fleet grant; otherwise SiteIDs is the explicit allowlist (empty means
@@ -57,10 +78,10 @@ func New(pool *pgxpool.Pool) *AuthZ { return &AuthZ{pool: pool} }
 // fails any handler whose devices query bypasses it.
 func ScopedDeviceQuery(f SiteFilter, baseSQL string, args ...any) (string, []any) {
 	if f.All {
-		return baseSQL, args
+		return ScopedMarker + baseSQL, args
 	}
 	predicate := fmt.Sprintf(" AND site_id = ANY($%d)", len(args)+1)
-	return baseSQL + predicate, append(args, f.SiteIDs)
+	return ScopedMarker + baseSQL + predicate, append(args, f.SiteIDs)
 }
 
 // ScopeForOperator resolves the operator's SiteFilter. A staff operator gets

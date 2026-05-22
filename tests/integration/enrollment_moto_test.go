@@ -33,7 +33,7 @@ func TestEnrollmentAgainstMotoIoT(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
 
-	pool := startPostgres(t, ctx)
+	pool := startPostgres(t, ctx, nil)
 	if err := storage.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

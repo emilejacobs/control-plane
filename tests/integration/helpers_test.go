@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -78,6 +79,21 @@ func newTestServer(t *testing.T, ctx context.Context) *testServer {
 // lockout test uses it to inject a fake clock. An empty SigningKey is
 // backfilled with testSigningKey so callers only set what they care about.
 func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) *testServer {
+	return buildTestServer(t, ctx, startPostgres(t, ctx, nil), authnCfg)
+}
+
+// newTracedTestServer is newTestServer with a pgx QueryTracer attached to the
+// pool, returning the recorder so the CI-gate test can inspect every SQL
+// statement the handlers ran.
+func newTracedTestServer(t *testing.T, ctx context.Context) (*testServer, *queryRecorder) {
+	rec := &queryRecorder{}
+	return buildTestServer(t, ctx, startPostgres(t, ctx, rec), authn.Config{}), rec
+}
+
+// buildTestServer migrates the pool, wires the CP API router, and registers
+// cleanup. An empty SigningKey / TotpEncryptionKey is backfilled with the
+// test keys.
+func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, authnCfg authn.Config) *testServer {
 	t.Helper()
 	if authnCfg.SigningKey == nil {
 		authnCfg.SigningKey = testSigningKey
@@ -85,7 +101,6 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 	if authnCfg.TotpEncryptionKey == nil {
 		authnCfg.TotpEncryptionKey = testTotpKey
 	}
-	pool := startPostgres(t, ctx)
 	if err := storage.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -104,6 +119,35 @@ func newTestServerCfg(t *testing.T, ctx context.Context, authnCfg authn.Config) 
 	}))
 	t.Cleanup(srv.Close)
 	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc, AuthZ: authzSvc, Registry: reg}
+}
+
+// queryRecorder is a pgx.QueryTracer that records every SQL statement run on
+// the pool — the runtime hook behind the scopedDeviceQuery CI gate.
+type queryRecorder struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+func (r *queryRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	r.mu.Lock()
+	r.sql = append(r.sql, data.SQL)
+	r.mu.Unlock()
+	return ctx
+}
+
+func (r *queryRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// reset clears recorded statements; snapshot returns a copy of them.
+func (r *queryRecorder) reset() {
+	r.mu.Lock()
+	r.sql = nil
+	r.mu.Unlock()
+}
+
+func (r *queryRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.sql...)
 }
 
 // mintAccessToken inserts a TOTP-enrolled staff operator and returns a signed
@@ -153,7 +197,9 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-func startPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
+// startPostgres starts a Postgres testcontainer and returns a pool. A non-nil
+// tracer is attached to every connection — the CI-gate test passes one.
+func startPostgres(t *testing.T, ctx context.Context, tracer pgx.QueryTracer) *pgxpool.Pool {
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
@@ -190,9 +236,14 @@ func startPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	}
 
 	dsn := fmt.Sprintf("postgres://cp:cp@%s:%s/cp?sslmode=disable", host, port.Port())
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
+		t.Fatalf("pgxpool.ParseConfig: %v", err)
+	}
+	cfg.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	return pool
