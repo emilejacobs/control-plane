@@ -143,6 +143,8 @@ A small Fargate task running the Tailscale client, joined to the uKnomi tailnet,
 
 - **Devices** — X.509 mTLS, certs issued by IoT Core's CA, per-device thing identity. Phase 1 cert TTL is 1 year (see ADR-013).
 - **Operators (web + future mobile)** — JWT bearer tokens issued by the Go API after username + Argon2id password + mandatory TOTP. No external IdP; staff and (future) field operators authenticate the same way (see ADR-010, which supersedes ADR-006).
+  - TOTP (RFC 6238) is enrolled once via `POST /auth/totp/enroll`, which returns an `otpauth://` provisioning URI plus ten single-use recovery codes. The shared secret is stored AES-256-GCM-encrypted (key from `TOTP_ENCRYPTION_KEY`, a KMS-protected secret loaded at startup — the same handling as the JWT signing key); recovery codes are stored Argon2id-hashed.
+  - Until an operator completes enrollment, the `RequireTotpEnrolled` gate answers every authenticated route except `/auth/totp/enroll` with `403` + a `Reason: totp-enrollment-required` header, and `POST /auth/login` returns `requires_totp_enrollment` so the client routes into enrollment.
 - **Service-to-service inside AWS** — IAM roles; no shared secrets between Fargate tasks.
 
 ## Modules and implementation status
@@ -153,7 +155,7 @@ Binaries (`cmd/`):
 
 | Binary | Role | Status |
 |---|---|---|
-| `cp-api` | HTTP API — enrollment, device reads, auth | Built (#03, #04) |
+| `cp-api` | HTTP API — enrollment, device reads, auth | Built (#03, #04, #05) |
 | `cp-ingest` | Fargate worker — heartbeat → `last_seen` | Built (#07) |
 | `agent` | `uknomi-agent` device binary | Built (Phase 0) |
 
@@ -163,13 +165,13 @@ Control Plane packages (`internal/cp/`):
 |---|---|---|
 | `registry` | Enrollment-first device lifecycle — `Enroll`, `GetByID`, `UpdateLastSeen` | Built (#03, #07, #08, #09) |
 | `iotprovisioner` | Wraps the AWS IoT SDK — thing + certificate minting | Built (#03) |
-| `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout | Built (#04); TOTP + recovery codes planned (#05) |
+| `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout, mandatory TOTP + recovery codes | Built (#04, #05) |
 | `presence` | Online threshold; in-memory per-device presence state and transitions (heartbeat, sweep, connect/disconnect) | Built (#07, #08) |
 | `sqsconsumer` | Generic `SQSConsumer[T]` — schema validation, DLQ routing, graceful drain | Built (#07) |
 | `ingest` | Heartbeat + lifecycle SQS handlers and the presence sweeper | Built (#07, #08) |
 | `cplog` | Structured JSON logs + end-to-end correlation IDs (ADR-011) | Built (#19) |
 | `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
-| `api` | HTTP router, idempotency + bearer-auth middleware | Built (#03, #04) |
+| `api` | HTTP router; idempotency, bearer-auth, and forced-TOTP-enrollment middleware | Built (#03, #04, #05) |
 
 Not yet built: site-scoped authorization (#06), the Next.js dashboard (#16–#18 — including the per-device view that renders the cert-expiry fields `GET /devices/{id}` now returns), the `audit_log` table and surface (#20 — audit events are structured log lines until then), CloudWatch alarms (#21), and command execution (Phase 3).
 
