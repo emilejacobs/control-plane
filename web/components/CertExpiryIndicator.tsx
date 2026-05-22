@@ -25,7 +25,11 @@ const statusColor: Record<CertStatus, string> = {
 };
 
 export function CertExpiryIndicator({ expiresAt, daysRemaining }: Props) {
-  if (expiresAt == null || daysRemaining == null) return null;
+  // A row predating the cert-expiry migration carries no notAfter; say so
+  // rather than leaving a silent gap where the indicator should be.
+  if (expiresAt == null || daysRemaining == null) {
+    return <p>Certificate expiry unknown</p>;
+  }
 
   const status = certStatus(daysRemaining);
   const unit = Math.abs(daysRemaining) === 1 ? "day" : "days";

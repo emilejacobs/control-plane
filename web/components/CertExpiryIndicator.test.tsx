@@ -40,3 +40,14 @@ describe("CertExpiryIndicator color coding", () => {
     expect(statusFor(-5)).toBe("red");
   });
 });
+
+describe("CertExpiryIndicator with no expiry data", () => {
+  it("reports the expiry as unknown rather than rendering nothing", () => {
+    cleanup();
+    render(<CertExpiryIndicator expiresAt={null} daysRemaining={null} />);
+
+    expect(
+      screen.getByText(/certificate expiry unknown/i),
+    ).toBeInTheDocument();
+  });
+});
