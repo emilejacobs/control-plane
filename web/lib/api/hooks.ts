@@ -2,8 +2,9 @@
 // path to server state (Issue 16; no setInterval in components).
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { firstRun, login, enrollTotp, type LoginInput } from "./auth";
+import { getDevices } from "./devices";
 
 interface Credentials {
   email: string;
@@ -29,5 +30,14 @@ export function useLogin() {
 export function useEnrollTotp() {
   return useMutation({
     mutationFn: () => enrollTotp(),
+  });
+}
+
+// useDevices loads the operator's site-scoped fleet. The fleet view (#17)
+// builds on it; #16 ships only the empty Devices shell.
+export function useDevices() {
+  return useQuery({
+    queryKey: ["devices"],
+    queryFn: getDevices,
   });
 }
