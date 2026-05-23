@@ -17,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
@@ -122,12 +123,14 @@ func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, auth
 	idemStore := storage.NewIdempotencyStore(pool)
 	authnSvc := authn.New(pool, authnCfg)
 	authzSvc := authz.New(pool)
+	auditW := audit.NewPostgresWriter(pool)
 	logs := &syncBuffer{}
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Registry:         reg,
 		AuthN:            authnSvc,
 		AuthZ:            authzSvc,
 		IdempotencyStore: idemStore,
+		Audit:            auditW,
 		Logger:           cplog.New(logs, "cp-api-test"),
 	}))
 	t.Cleanup(srv.Close)

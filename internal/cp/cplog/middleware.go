@@ -33,7 +33,7 @@ func Middleware(base *slog.Logger) func(http.Handler) http.Handler {
 			w.Header().Set(HeaderName, id)
 
 			scoped := base.With("correlation_id", id)
-			ctx := WithLogger(r.Context(), scoped)
+			ctx := WithLogger(WithCorrelationID(r.Context(), id), scoped)
 
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			start := time.Now()
