@@ -100,3 +100,10 @@ output "service_log_group_names" {
   description = "Map of service name to its CloudWatch log group. Task definitions reference these in the awslogs driver."
   value       = { for k, g in aws_cloudwatch_log_group.service : k => g.name }
 }
+
+# ── Task roles (step 7) ─────────────────────────────────────────────────────
+
+output "cp_api_task_role_arn" { value = aws_iam_role.cp_api.arn }
+output "cp_ingest_task_role_arn" { value = aws_iam_role.cp_ingest.arn }
+output "dashboard_task_role_arn" { value = aws_iam_role.dashboard.arn }
+output "tailscale_task_role_arn" { value = aws_iam_role.tailscale.arn }
