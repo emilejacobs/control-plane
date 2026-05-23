@@ -25,6 +25,12 @@ Landing incrementally per #25's 14-step staging order.
 | 13 | CloudWatch alarms + SNS | **built** |
 | 14 | Docs + ADRs | **built** (ADR-022, `architecture.md` updated) |
 
+Follow-on slices (tracked separately):
+
+| Issue | Slice | Status |
+|---|---|---|
+| #26 | CI/CD slice 1 — image build/push to ECR via OIDC | **built** |
+
 ## Workflow
 
 ```bash
@@ -85,3 +91,16 @@ The mac-mini-rollout install-package bootstrap key from #10 (`uknomi/cp/bootstra
 - Five security groups: `alb` (HTTPS from anywhere), `tasks` (8080 + 3000 from `alb`), `rds` (5432 from `tasks`), `tailscale` (egress only), `vpc-endpoints` (443 from `tasks`).
 
 `terraform fmt + validate` clean. `terraform apply` not run from this checkout — applies are deploy events.
+
+## CI/CD image-publish role (Issue #26)
+
+`ci-oidc.tf` provisions the GitHub Actions OIDC provider + an IAM role (`uknomi-gha-image-publish`) trusted only by `repo:emilejacobs/control-plane:ref:refs/heads/main`. The `.github/workflows/build-images.yml` workflow assumes this role on every merge to `main` and pushes `cp-api`, `cp-ingest`, and `dashboard` images to the three ECR repos tagged with the git SHA + `latest`.
+
+If the AWS account already has a `token.actions.githubusercontent.com` OIDC provider, `terraform apply` fails with `EntityAlreadyExists`. Recover via:
+
+```bash
+terraform import aws_iam_openid_connect_provider.github \
+  arn:aws:iam::523612763411:oidc-provider/token.actions.githubusercontent.com
+```
+
+The role ARN is in the `gha_image_publish_role_arn` output — the workflow hardcodes it via `env.OIDC_ROLE_ARN` because workflows cannot read TF outputs directly. Update both if the role is ever renamed.

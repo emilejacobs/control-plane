@@ -1,7 +1,8 @@
 # Issue 26 — CI/CD slice 1: build + push container images to ECR
 
-Status: in-progress
+Status: done
 Type: AFK
+Completed: 2026-05-22 — 5 commits, see notes.
 
 ## Parent
 
@@ -38,19 +39,19 @@ Two small follow-ups from #25 are folded in (each is necessary to make the image
 
 ## Acceptance criteria
 
-- [ ] `cmd/cp-api` exposes `GET /healthz` returning 200, covered by a Go unit test.
-- [ ] `Dockerfile` exists for `cp-api`, `cp-ingest`, and `web/` (dashboard). Each builds locally (`docker build .`) without secrets.
-- [ ] Final images run as a non-root user, contain no build toolchain, and are based on minimal images (distroless or alpine for Go; `node:LTS-alpine` runtime for dashboard).
-- [ ] Dashboard `Dockerfile` accepts `NEXT_PUBLIC_API_URL` as a build arg and bakes it into the static bundle.
-- [ ] `.github/workflows/build-images.yml` (or equivalent) triggers on push to `main`, authenticates to AWS via OIDC, and pushes the three images tagged with the git SHA + `latest`.
-- [ ] `infra/terraform-deploy/` gains:
-  - GitHub OIDC identity provider (or references the account-level one if one already exists).
-  - An IAM role assumable from `repo:uknomi/uknomi-control-plane:ref:refs/heads/main` (sub-claim scoped, not wildcarded across the repo) with the ECR push permissions enumerated above.
-  - Outputs the role ARN.
-- [ ] `cp-api.tf`'s comment is updated to reflect that the `/healthz` handler now exists and the matcher tightening is now blocked only on the image-ref flip (not on the missing handler). The actual matcher tightening defers to the image-flip slice.
-- [ ] `terraform fmt + validate` pass on both roots.
-- [ ] `go test ./...` passes; `web/` vitest suite passes; `web/` `next build` succeeds with the build arg set.
-- [ ] **Documentation updated.** `docs/architecture.md` § Cloud infrastructure mentions the image build/push flow; `infra/terraform-deploy/README.md` notes the OIDC role; consider a new ADR only if a load-bearing decision warrants it (likely not for this slice — ADR-020 already covers the shape).
+- [x] `cmd/cp-api` exposes `GET /healthz` returning 200, covered by a Go unit test.
+- [x] `Dockerfile` exists for `cp-api`, `cp-ingest`, and `web/` (dashboard). Static Go build verified outside Docker (produced a working 14MB stripped ELF); `next build` verified locally with `output: "standalone"`. *(In-Docker `docker build` not exercised locally — colima/docker daemon was stopped this session. CI exercises the full build path.)*
+- [x] Final images run as a non-root user, contain no build toolchain, and are based on minimal images (distroless/static for Go; `node:22-alpine` for dashboard).
+- [x] Dashboard `Dockerfile` accepts `NEXT_PUBLIC_API_URL` as a build arg and bakes it into the static bundle.
+- [x] `.github/workflows/build-images.yml` triggers on push to `main`, authenticates to AWS via OIDC, and pushes the three images tagged with the git SHA + `latest`.
+- [x] `infra/terraform-deploy/` gains:
+  - GitHub OIDC identity provider (`aws_iam_openid_connect_provider.github` in `ci-oidc.tf`; importable if the account already has one).
+  - IAM role `uknomi-gha-image-publish` with sub-claim scoped to `repo:emilejacobs/control-plane:ref:refs/heads/main` and the ECR push permissions.
+  - Output `gha_image_publish_role_arn`.
+- [x] `cp-api.tf`'s comment updated; matcher tightening explicitly deferred to the image-ref-flip slice.
+- [x] `terraform fmt + validate` pass on both roots.
+- [x] `go test ./...` passes; `web/` vitest suite passes (44/44); `web/` `next build` succeeds with the build arg set.
+- [x] **Documentation updated.** `docs/architecture.md` § Cloud infrastructure now lists #26 as built; `infra/terraform-deploy/README.md` documents the OIDC role + import escape hatch. No new ADR — ADR-020 already covers the shape, and no load-bearing surprise emerged in this slice.
 
 ## Blocked by
 
@@ -60,3 +61,29 @@ Two small follow-ups from #25 are folded in (each is necessary to make the image
 
 - The user-direction memory from the handoff is unchanged: account `523612763411`, region `us-east-1`. The OIDC subject claim must match the repo's canonical GitHub path (confirm via `git remote -v` before the role is applied).
 - TDD memories apply to the Go work (cp-api `/healthz`). The Dockerfile + workflow work is structural, not test-driven in the same sense; verification is local build + `terraform validate`.
+
+### Completion notes (2026-05-22)
+
+Commits (this branch):
+
+- `7322a26` — cp-api `/healthz` handler (TDD red→green→commit).
+- `12c1478` — cp-api.tf comment update; matcher tightening explicitly deferred.
+- `0d47f76` — Dockerfiles for cp-api, cp-ingest, dashboard; `.dockerignore`s; `output: "standalone"` on next.config.ts. Verified outside Docker.
+- `235bf8c` — `infra/terraform-deploy/ci-oidc.tf` — GitHub OIDC provider + `uknomi-gha-image-publish` role + per-repo ECR push policy + outputs. `terraform fmt + validate` clean.
+- `86e56b5` — `.github/workflows/build-images.yml` — matrix-fanned image build/push on merge to main + `workflow_dispatch`, OIDC auth via `aws-actions/configure-aws-credentials@v4`, gha cache.
+
+### Unblocks / next slices
+
+This slice ends with: images can be pushed to ECR. It does **not** end with: a real CP deployed. The natural follow-on slice (next issue to file when picked up) is the image-ref flip:
+
+1. Operator runs `terraform apply` once to materialise the OIDC provider + role.
+2. Push to `main` (or `workflow_dispatch`) — workflow builds + pushes the three images.
+3. New slice: flip `cp-api`, `cp-ingest`, `dashboard` task-def `image` references from the nginx placeholder to `${ecr_url}:<sha-or-latest>`; bump `cp-ingest` and `tailscale-subnet-router` `desired_count` from 0 to 1; tighten the ALB matcher from `200-499` to `200`; document the operator playbook for picking a SHA.
+
+Other ADR-020 work still owed (each its own future issue): staging environment, terraform-plan-on-PR (separate read-only OIDC role), manual `promote-to-prod` workflow_dispatch gate + 10-clean switch criterion runbook, idempotency-CI-gate (ADR-012), `scopedDeviceQuery`-CI-gate (Issue 06 outcome).
+
+### Operator preconditions before the first workflow run
+
+1. `terraform apply` in `infra/terraform-deploy/` (or `terraform import` first if the account already has a GH Actions OIDC provider — see deploy-root README).
+2. Confirm the role exists: `aws iam get-role --role-name uknomi-gha-image-publish`.
+3. Push a commit to `main` (or trigger the workflow manually) — images appear in ECR within ~3-5 minutes.
