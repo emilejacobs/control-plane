@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
@@ -34,10 +35,19 @@ type Service interface {
 }
 
 type Handler struct {
-	svc Service
+	svc   Service
+	audit audit.Writer
 }
 
-func New(svc Service) *Handler { return &Handler{svc: svc} }
+// New returns an enrollment handler. auditW may be nil; api.NewBuilderWith
+// substitutes audit.SlogOnly so unit tests that omit the writer still emit
+// the audit.* slog lines their assertions grep on.
+func New(svc Service, auditW audit.Writer) *Handler {
+	if auditW == nil {
+		auditW = audit.SlogOnly{}
+	}
+	return &Handler{svc: svc, audit: auditW}
+}
 
 type request struct {
 	BootstrapKey string `json:"bootstrap_key"`
@@ -75,13 +85,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, registry.ErrInvalidBootstrapKey) {
-			log.Info("audit.enrollment",
-				"outcome", "failure",
-				"reason", "invalid_bootstrap_key",
-				"source_ip", sourceIP(r),
-				"hardware_uuid", req.HardwareUUID,
-				"hostname", req.Hostname,
-			)
+			_ = h.audit.Write(r.Context(), audit.Entry{
+				Action:    "audit.enrollment",
+				ActorType: audit.ActorAgent,
+				Outcome:   "failure",
+				SourceIP:  sourceIP(r),
+				UserAgent: r.UserAgent(),
+				Payload: map[string]any{
+					"reason":        "invalid_bootstrap_key",
+					"hardware_uuid": req.HardwareUUID,
+					"hostname":      req.Hostname,
+				},
+			})
 			http.Error(w, "invalid bootstrap key", http.StatusUnauthorized)
 			return
 		}
@@ -95,21 +110,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Info("audit.enrollment",
-		"outcome", "success",
-		"source_ip", sourceIP(r),
-		"hardware_uuid", req.HardwareUUID,
-		"hostname", req.Hostname,
-		"device_id", out.DeviceID,
-	)
+	_ = h.audit.Write(r.Context(), audit.Entry{
+		Action:       "audit.enrollment",
+		ActorID:      out.DeviceID,
+		ActorType:    audit.ActorAgent,
+		ResourceKind: "device",
+		ResourceID:   out.DeviceID,
+		Outcome:      "success",
+		SourceIP:     sourceIP(r),
+		UserAgent:    r.UserAgent(),
+		Payload: map[string]any{
+			"hardware_uuid": req.HardwareUUID,
+			"hostname":      req.Hostname,
+			"device_id":     out.DeviceID,
+		},
+	})
 	if !hostnameConvention.MatchString(req.Hostname) {
-		log.Warn("audit.enrollment.anomaly",
-			"alert", "hostname_convention",
-			"source_ip", sourceIP(r),
-			"hardware_uuid", req.HardwareUUID,
-			"hostname", req.Hostname,
-			"device_id", out.DeviceID,
-		)
+		_ = h.audit.Write(r.Context(), audit.Entry{
+			Action:       "audit.enrollment.anomaly",
+			ActorID:      out.DeviceID,
+			ActorType:    audit.ActorAgent,
+			ResourceKind: "device",
+			ResourceID:   out.DeviceID,
+			Outcome:      "alert",
+			SourceIP:     sourceIP(r),
+			UserAgent:    r.UserAgent(),
+			Payload: map[string]any{
+				"alert":         "hostname_convention",
+				"hardware_uuid": req.HardwareUUID,
+				"hostname":      req.Hostname,
+				"device_id":     out.DeviceID,
+			},
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

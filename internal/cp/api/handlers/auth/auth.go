@@ -48,10 +48,13 @@ type loginResponse struct {
 }
 
 type FirstRunHandler struct {
-	svc Service
+	svc   Service
+	audit audit.Writer
 }
 
-func NewFirstRun(svc Service) *FirstRunHandler { return &FirstRunHandler{svc: svc} }
+func NewFirstRun(svc Service, auditW audit.Writer) *FirstRunHandler {
+	return &FirstRunHandler{svc: svc, audit: auditW}
+}
 
 type firstRunRequest struct {
 	Email    string `json:"email"`
@@ -70,7 +73,14 @@ func (h *FirstRunHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tokens, err := h.svc.ClaimFirstRunAdmin(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, authn.ErrSystemAlreadyInitialized) {
-			log.Info("audit.first_run", "outcome", "denied", "reason", "already_initialized", "email", req.Email)
+			_ = h.audit.Write(r.Context(), audit.Entry{
+				Action:    "audit.first_run",
+				ActorType: audit.ActorOperator,
+				Outcome:   "denied",
+				SourceIP:  clientIP(r),
+				UserAgent: r.UserAgent(),
+				Payload:   map[string]any{"email": req.Email, "reason": "already_initialized"},
+			})
 			http.Error(w, "system already initialized", http.StatusGone)
 			return
 		}
@@ -79,7 +89,14 @@ func (h *FirstRunHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("audit.first_run", "outcome", "success", "email", req.Email)
+	_ = h.audit.Write(r.Context(), audit.Entry{
+		Action:    "audit.first_run",
+		ActorType: audit.ActorOperator,
+		Outcome:   "success",
+		SourceIP:  clientIP(r),
+		UserAgent: r.UserAgent(),
+		Payload:   map[string]any{"email": req.Email},
+	})
 
 	writeTokens(w, http.StatusCreated, tokens)
 }
@@ -172,10 +189,13 @@ func (h *LoginHandler) writeAudit(r *http.Request, outcome, reason, email string
 
 // RefreshHandler serves POST /auth/refresh.
 type RefreshHandler struct {
-	svc Service
+	svc   Service
+	audit audit.Writer
 }
 
-func NewRefresh(svc Service) *RefreshHandler { return &RefreshHandler{svc: svc} }
+func NewRefresh(svc Service, auditW audit.Writer) *RefreshHandler {
+	return &RefreshHandler{svc: svc, audit: auditW}
+}
 
 type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
@@ -193,7 +213,14 @@ func (h *RefreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tokens, err := h.svc.Refresh(r.Context(), req.RefreshToken)
 	if err != nil {
 		if errors.Is(err, authn.ErrInvalidRefreshToken) {
-			log.Info("audit.refresh", "outcome", "failure", "reason", "invalid_refresh_token")
+			_ = h.audit.Write(r.Context(), audit.Entry{
+				Action:    "audit.refresh",
+				ActorType: audit.ActorOperator,
+				Outcome:   "failure",
+				SourceIP:  clientIP(r),
+				UserAgent: r.UserAgent(),
+				Payload:   map[string]any{"reason": "invalid_refresh_token"},
+			})
 			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
 			return
 		}
@@ -202,7 +229,13 @@ func (h *RefreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("audit.refresh", "outcome", "success")
+	_ = h.audit.Write(r.Context(), audit.Entry{
+		Action:    "audit.refresh",
+		ActorType: audit.ActorOperator,
+		Outcome:   "success",
+		SourceIP:  clientIP(r),
+		UserAgent: r.UserAgent(),
+	})
 
 	writeTokens(w, http.StatusOK, tokens)
 }
@@ -215,10 +248,13 @@ type TotpEnroller interface {
 // TotpEnrollHandler serves POST /auth/totp/enroll. It runs behind the Auth
 // middleware, so the operator identity is read from the request context.
 type TotpEnrollHandler struct {
-	svc TotpEnroller
+	svc   TotpEnroller
+	audit audit.Writer
 }
 
-func NewTotpEnroll(svc TotpEnroller) *TotpEnrollHandler { return &TotpEnrollHandler{svc: svc} }
+func NewTotpEnroll(svc TotpEnroller, auditW audit.Writer) *TotpEnrollHandler {
+	return &TotpEnrollHandler{svc: svc, audit: auditW}
+}
 
 type totpEnrollResponse struct {
 	ProvisioningURI string   `json:"provisioning_uri"`
@@ -237,7 +273,15 @@ func (h *TotpEnrollHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	enrollment, err := h.svc.EnrollTotp(r.Context(), claims.OperatorID)
 	if err != nil {
 		if errors.Is(err, authn.ErrTotpAlreadyEnrolled) {
-			log.Info("audit.totp_enroll", "outcome", "denied", "reason", "already_enrolled", "operator_id", claims.OperatorID)
+			_ = h.audit.Write(r.Context(), audit.Entry{
+				Action:    "audit.totp_enroll",
+				ActorID:   claims.OperatorID,
+				ActorType: audit.ActorOperator,
+				Outcome:   "denied",
+				SourceIP:  clientIP(r),
+				UserAgent: r.UserAgent(),
+				Payload:   map[string]any{"operator_id": claims.OperatorID, "reason": "already_enrolled"},
+			})
 			http.Error(w, "totp already enrolled", http.StatusConflict)
 			return
 		}
@@ -246,7 +290,15 @@ func (h *TotpEnrollHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("audit.totp_enroll", "outcome", "success", "operator_id", claims.OperatorID)
+	_ = h.audit.Write(r.Context(), audit.Entry{
+		Action:    "audit.totp_enroll",
+		ActorID:   claims.OperatorID,
+		ActorType: audit.ActorOperator,
+		Outcome:   "success",
+		SourceIP:  clientIP(r),
+		UserAgent: r.UserAgent(),
+		Payload:   map[string]any{"operator_id": claims.OperatorID},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

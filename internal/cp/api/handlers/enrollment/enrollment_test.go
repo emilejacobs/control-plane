@@ -65,7 +65,7 @@ func auditLogged(buf, wantMsg string, want map[string]any) bool {
 
 func TestEnrollmentAuditsSuccess(t *testing.T) {
 	var logs bytes.Buffer
-	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}})
+	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}}, nil)
 
 	rec := enroll(h, &logs, map[string]any{
 		"bootstrap_key": "k",
@@ -94,7 +94,7 @@ func TestEnrollmentAuditsSuccess(t *testing.T) {
 
 func TestEnrollmentAlertsOnHostnameAnomaly(t *testing.T) {
 	var logs bytes.Buffer
-	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}})
+	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}}, nil)
 
 	rec := enroll(h, &logs, map[string]any{
 		"bootstrap_key": "k",
@@ -119,7 +119,7 @@ func TestEnrollmentAlertsOnHostnameAnomaly(t *testing.T) {
 
 func TestEnrollmentAuditsInvalidKey(t *testing.T) {
 	var logs bytes.Buffer
-	h := New(&fakeService{err: registry.ErrInvalidBootstrapKey})
+	h := New(&fakeService{err: registry.ErrInvalidBootstrapKey}, nil)
 
 	rec := enroll(h, &logs, map[string]any{
 		"bootstrap_key": "wrong",

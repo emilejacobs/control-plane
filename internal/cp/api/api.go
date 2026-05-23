@@ -93,7 +93,7 @@ func NewBuilderWith(d Deps) *Builder {
 	b := newBuilder(middleware.Idempotency(d.IdempotencyStore))
 	auditW := d.Audit
 	if auditW == nil {
-		auditW = audit.Discard{}
+		auditW = audit.SlogOnly{}
 	}
 	// /healthz is the ALB target group health check (ADR-022). 200, empty body,
 	// no auth. Tightening from 200-499 to 200 depends on this being live.
@@ -101,11 +101,11 @@ func NewBuilderWith(d Deps) *Builder {
 		w.WriteHeader(http.StatusOK)
 	}))
 	enrollLimiter := middleware.NewRateLimiter(enrollmentRateLimit, enrollmentRateWindow)
-	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry)))
+	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry, auditW)))
 	if d.AuthN != nil {
-		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
+		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN, auditW))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN, auditW))
-		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN))
+		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN, auditW))
 		// Authenticated routes require a valid operator bearer token.
 		// Every authenticated route except enrollment itself also sits
 		// behind the forced-TOTP-enrollment gate; device reads additionally
@@ -113,7 +113,7 @@ func NewBuilderWith(d Deps) *Builder {
 		requireAuth := middleware.Auth(d.AuthN)
 		requireEnrolled := middleware.RequireTotpEnrolled(d.AuthN)
 		requireScope := middleware.Scope(d.AuthZ)
-		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN)))
+		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN, auditW)))
 		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
 	}

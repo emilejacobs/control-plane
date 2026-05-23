@@ -106,12 +106,14 @@ func (m *MemoryWriter) Entries() []Entry {
 	return out
 }
 
-// Discard is a Writer that drops every Entry on the floor. Used by tests
-// that do not care about audit assertions, and as the fallback when
-// api.Deps.Audit is nil.
-type Discard struct{}
+// SlogOnly is a Writer that emits the slog line but skips storage. The
+// default api.Deps.Audit fallback uses it so a test that does not wire a
+// real Writer still gets the audit.* log lines its assertions grep on.
+type SlogOnly struct{}
 
-// Write satisfies Writer. Notably it skips the slog co-emission too —
-// callers that want the slog line should wire a MemoryWriter or
-// PostgresWriter instead.
-func (Discard) Write(context.Context, Entry) error { return nil }
+// Write satisfies Writer.
+func (SlogOnly) Write(ctx context.Context, e Entry) error {
+	e.CorrelationID = cplog.CorrelationIDFromContext(ctx)
+	emitSlog(ctx, e)
+	return nil
+}

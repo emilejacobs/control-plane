@@ -17,6 +17,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 )
 
 // Correlated constrains consumer payloads: every message must carry an
@@ -59,6 +62,7 @@ type Config struct {
 	QueueURL     string
 	DLQURL       string
 	Logger       *slog.Logger
+	Audit        audit.Writer  // optional; nil → audit.SlogOnly{} (slog-only fallback)
 	MaxMessages  int32         // ReceiveMessage batch size; default 10
 	WaitSeconds  int32         // long-poll seconds; default 20
 	DrainTimeout time.Duration // shutdown drain budget; default 25s
@@ -71,6 +75,7 @@ type Consumer[T Correlated] struct {
 	queueURL     string
 	dlqURL       string
 	log          *slog.Logger
+	auditW       audit.Writer
 	maxMessages  int32
 	waitSeconds  int32
 	drainTimeout time.Duration
@@ -90,12 +95,17 @@ func NewConsumer[T Correlated](client SQSClient, handler Handler[T], cfg Config)
 	if cfg.DrainTimeout == 0 {
 		cfg.DrainTimeout = 25 * time.Second
 	}
+	auditW := cfg.Audit
+	if auditW == nil {
+		auditW = audit.SlogOnly{}
+	}
 	return &Consumer[T]{
 		client:       client,
 		handler:      handler,
 		queueURL:     cfg.QueueURL,
 		dlqURL:       cfg.DLQURL,
 		log:          log,
+		auditW:       auditW,
 		maxMessages:  cfg.MaxMessages,
 		waitSeconds:  cfg.WaitSeconds,
 		drainTimeout: cfg.DrainTimeout,
@@ -194,12 +204,21 @@ func (c *Consumer[T]) invoke(ctx context.Context, payload T) (err error) {
 // toDLQ records the rejection, copies the message to the DLQ, and deletes it
 // from the main queue so it is not reprocessed.
 func (c *Consumer[T]) toDLQ(ctx context.Context, m types.Message, reason, corrID string, cause error) {
-	c.log.Warn("audit.message_rejected",
-		"reason", reason,
-		"correlation_id", corrID,
-		"cause", errString(cause),
-		"queue", c.queueURL,
-	)
+	// Build an audit-side ctx: stamp the rejected message's correlation_id
+	// (so the row joins the producer's request) and install c.log as the
+	// request-scoped logger (so the SlogOnly co-emission lands in the
+	// consumer's configured logger, not slog.Default()).
+	auditCtx := cplog.WithLogger(cplog.WithCorrelationID(ctx, corrID), c.log)
+	_ = c.auditW.Write(auditCtx, audit.Entry{
+		Action:    "audit.message_rejected",
+		ActorType: audit.ActorSystem,
+		Outcome:   "rejected",
+		Payload: map[string]any{
+			"reason": reason,
+			"cause":  errString(cause),
+			"queue":  c.queueURL,
+		},
+	})
 	if c.dlqURL != "" {
 		if _, err := c.client.SendMessage(ctx, &sqs.SendMessageInput{
 			QueueUrl:    aws.String(c.dlqURL),
