@@ -6,12 +6,26 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 )
+
+// clientIP returns the request's source address without the port, falling
+// back to the raw RemoteAddr when SplitHostPort is unhappy. Duplicates a
+// helper that already exists in middleware/ratelimit.go and enrollment/
+// — a shared internal/cp/api/httpx package would consolidate them but is
+// not yet worth its own slice.
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
 
 type Service interface {
 	ClaimFirstRunAdmin(ctx context.Context, email, password string) (authn.Tokens, error)
@@ -72,10 +86,13 @@ func (h *FirstRunHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // LoginHandler serves POST /auth/login.
 type LoginHandler struct {
-	svc Service
+	svc   Service
+	audit audit.Writer
 }
 
-func NewLogin(svc Service) *LoginHandler { return &LoginHandler{svc: svc} }
+func NewLogin(svc Service, auditW audit.Writer) *LoginHandler {
+	return &LoginHandler{svc: svc, audit: auditW}
+}
 
 type loginRequest struct {
 	Email        string `json:"email"`
@@ -100,27 +117,28 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RecoveryCode: req.RecoveryCode,
 	})
 	if err != nil {
-		if errors.Is(err, authn.ErrInvalidCredentials) {
-			log.Info("audit.login", "outcome", "failure", "reason", "invalid_credentials", "email", req.Email)
+		switch {
+		case errors.Is(err, authn.ErrInvalidCredentials):
+			h.writeAudit(r, "failure", "invalid_credentials", req.Email, nil)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
-		}
-		if errors.Is(err, authn.ErrInvalidTotp) {
-			log.Info("audit.login", "outcome", "failure", "reason", "invalid_totp", "email", req.Email)
+		case errors.Is(err, authn.ErrInvalidTotp):
+			h.writeAudit(r, "failure", "invalid_totp", req.Email, nil)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
-		}
-		if errors.Is(err, authn.ErrAccountLocked) {
-			log.Info("audit.login", "outcome", "failure", "reason", "account_locked", "email", req.Email)
+		case errors.Is(err, authn.ErrAccountLocked):
+			h.writeAudit(r, "failure", "account_locked", req.Email, nil)
 			http.Error(w, "account locked", http.StatusTooManyRequests)
 			return
 		}
+		// Unrecognised error — log at error level (no audit row for system
+		// errors yet; the future audit-log surface may revisit this).
 		log.Error("audit.login", "outcome", "error", "email", req.Email, "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Info("audit.login", "outcome", "success", "email", req.Email)
+	h.writeAudit(r, "success", "", req.Email, nil)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -128,6 +146,27 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		AccessToken:            result.Tokens.AccessToken,
 		RefreshToken:           result.Tokens.RefreshToken,
 		RequiresTotpEnrollment: result.RequiresTotpEnrollment,
+	})
+}
+
+// writeAudit emits the audit.login entry. The handler holds onto the email
+// as the actor hint (the operator id is not bound until after Login succeeds)
+// and threads it through the Payload so the legacy slog "email" attr stays.
+func (h *LoginHandler) writeAudit(r *http.Request, outcome, reason, email string, extra map[string]any) {
+	payload := map[string]any{"email": email}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	_ = h.audit.Write(r.Context(), audit.Entry{
+		Action:    "audit.login",
+		ActorType: audit.ActorOperator,
+		Outcome:   outcome,
+		SourceIP:  clientIP(r),
+		UserAgent: r.UserAgent(),
+		Payload:   payload,
 	})
 }
 

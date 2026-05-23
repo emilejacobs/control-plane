@@ -105,3 +105,13 @@ func (m *MemoryWriter) Entries() []Entry {
 	copy(out, m.entries)
 	return out
 }
+
+// Discard is a Writer that drops every Entry on the floor. Used by tests
+// that do not care about audit assertions, and as the fallback when
+// api.Deps.Audit is nil.
+type Discard struct{}
+
+// Write satisfies Writer. Notably it skips the slog co-emission too —
+// callers that want the slog line should wire a MemoryWriter or
+// PostgresWriter instead.
+func (Discard) Write(context.Context, Entry) error { return nil }

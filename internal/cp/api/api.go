@@ -16,6 +16,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
@@ -27,6 +28,11 @@ type Deps struct {
 	AuthN            *authn.AuthN
 	AuthZ            *authz.AuthZ
 	IdempotencyStore middleware.IdempotencyStore
+
+	// Audit is the sink every state-mutating handler writes audit entries
+	// through. nil falls back to a discard Writer so tests that do not
+	// care about audit assertions can omit it.
+	Audit audit.Writer
 
 	// Logger is the base slog.Logger that cplog.Middleware wraps per
 	// request. nil falls back to slog.Default(); tests pass a discard
@@ -85,6 +91,10 @@ const (
 // inspect the route table; production code uses NewRouter.
 func NewBuilderWith(d Deps) *Builder {
 	b := newBuilder(middleware.Idempotency(d.IdempotencyStore))
+	auditW := d.Audit
+	if auditW == nil {
+		auditW = audit.Discard{}
+	}
 	// /healthz is the ALB target group health check (ADR-022). 200, empty body,
 	// no auth. Tightening from 200-499 to 200 depends on this being live.
 	b.Get("/healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -94,7 +104,7 @@ func NewBuilderWith(d Deps) *Builder {
 	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry)))
 	if d.AuthN != nil {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN))
-		b.Post("/auth/login", auth.NewLogin(d.AuthN))
+		b.Post("/auth/login", auth.NewLogin(d.AuthN, auditW))
 		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN))
 		// Authenticated routes require a valid operator bearer token.
 		// Every authenticated route except enrollment itself also sits
