@@ -353,3 +353,23 @@ func TestInstallScriptKeepsBootstrapKeyOutOfLogs(t *testing.T) {
 		t.Fatalf("bootstrap key leaked into script output:\n%s", out)
 	}
 }
+
+// TestInstallScriptIsShellcheckClean runs shellcheck against the
+// install script. Local dev environments without shellcheck installed
+// skip; CI is expected to have it (and to fail on a regression).
+//
+// The "one-page" review constraint is about humans being able to read
+// the script in one sitting; shellcheck is the automated half of that —
+// it catches the bash footguns a human reviewer might miss while
+// skimming.
+func TestInstallScriptIsShellcheckClean(t *testing.T) {
+	requireBash(t)
+	if _, err := exec.LookPath("shellcheck"); err != nil {
+		t.Skip("shellcheck not in PATH; CI is expected to enforce this")
+	}
+	cmd := exec.Command("shellcheck", "--severity=warning", scriptPath(t))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shellcheck reported issues (severity>=warning):\n%s", out)
+	}
+}

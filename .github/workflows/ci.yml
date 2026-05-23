@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  shellcheck:
+    name: Shellcheck (install-cp-agent.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint scripts/install-cp-agent.sh
+        run: shellcheck --severity=warning scripts/install-cp-agent.sh
+
   test-and-build:
     name: Test & Build (${{ matrix.target.goos }}/${{ matrix.target.goarch }})
     strategy:
