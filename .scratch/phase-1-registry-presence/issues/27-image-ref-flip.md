@@ -1,7 +1,8 @@
 # Issue 27 — Image-ref flip: drop the nginx placeholders
 
-Status: in-progress
+Status: done
 Type: AFK
+Completed: 2026-05-22 — single-commit slice; see notes.
 
 ## Parent
 
@@ -28,14 +29,36 @@ Out of scope:
 
 ## Acceptance criteria
 
-- [ ] All three CP services reference ECR images via `${aws_ecr_repository.main[<service>].repository_url}:${var.image_tag}`. No more nginx placeholders.
-- [ ] `cp-ingest` service `desired_count = 1`.
-- [ ] Dashboard container port + target group port + service load_balancer container_port are all `3000`.
-- [ ] `cp-api` ALB matcher = `"200"`. Dashboard ALB matcher = `"200"`.
-- [ ] `var.image_tag` exists with `default = "latest"`, documented.
-- [ ] `infra/terraform-deploy/README.md` carries a "Deploying the CP" section: workflow → apply, how to pin, how to roll back, the gotcha that ECR must be populated before the first apply touches the task defs.
-- [ ] `terraform fmt + validate` clean.
-- [ ] `docs/architecture.md` § Cloud infrastructure updated — the "until the image-flip slice" framing is replaced with the current state.
+- [x] All three CP services reference ECR images via `${aws_ecr_repository.main[<service>].repository_url}:${var.image_tag}`. No more nginx placeholders.
+- [x] `cp-ingest` service `desired_count = 1`.
+- [x] Dashboard container port + target group port + service load_balancer container_port are all `3000`.
+- [x] `cp-api` ALB matcher = `"200"`. Dashboard ALB matcher = `"200"`.
+- [x] `var.image_tag` exists with `default = "latest"`, documented.
+- [x] `infra/terraform-deploy/README.md` carries a "Deploying the CP" section: first-apply gotcha (ECR empty), pin-via-`-var`, rollback, mismatched-versions escape hatch, the Tailscale + secret-gated services caveat.
+- [x] `terraform fmt + validate` clean.
+- [x] `docs/architecture.md` § Cloud infrastructure now lists #27 as built.
+
+### Completion notes (2026-05-22)
+
+Single commit: `61c6015` (TF changes) + this docs/README/issue commit. Five files changed:
+
+- `cp-api.tf`: image ref + matcher 200-499 → 200 + comment block rewritten.
+- `cp-ingest.tf`: image ref via module input + `desired_count = 1` + comment block trimmed.
+- `dashboard.tf`: image ref + port 8080 → 3000 (three places) + matcher 200-399 → 200 + comment block updated.
+- `variables.tf`: `var.image_tag` added.
+- `infra/terraform-deploy/README.md`: § Deploying the CP added.
+
+### Unblocks
+
+- **#12 (Wave 0 bench smoke)** — now genuinely runnable. The operator playbook is: apply once (ECR empty), push to main (workflow builds), force-deploy, then enroll the bench device per `docs/runbooks/phase-1-wave-0-bench.md`.
+- **#11 (mac-mini-rollout install module)** — already `ready-for-human`, depends transitively on Wave 0.
+
+### Out of scope (future slices)
+
+- **Auto-redeploy on image push.** Operator still runs `terraform apply` (or `aws ecs update-service --force-new-deployment`) after each workflow run. Future slice can teach the workflow to call ECS directly, or route through SSM Parameter Store.
+- **Staging environment** (ADR-020).
+- **Manual `promote-to-prod` gate** + 10-clean runbook (ADR-020).
+- **Per-service image tags.** Today `var.image_tag` is shared; mismatched deploys need `-target`.
 
 ## Blocked by
 

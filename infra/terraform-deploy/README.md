@@ -30,6 +30,7 @@ Follow-on slices (tracked separately):
 | Issue | Slice | Status |
 |---|---|---|
 | #26 | CI/CD slice 1 — image build/push to ECR via OIDC | **built** |
+| #27 | Image-ref flip — services pull from ECR | **built** |
 
 ## Workflow
 
@@ -104,3 +105,36 @@ terraform import aws_iam_openid_connect_provider.github \
 ```
 
 The role ARN is in the `gha_image_publish_role_arn` output — the workflow hardcodes it via `env.OIDC_ROLE_ARN` because workflows cannot read TF outputs directly. Update both if the role is ever renamed.
+
+## Deploying the CP (Issue #27)
+
+The task definitions reference ECR via `${repo}:${var.image_tag}`. `image_tag` defaults to `"latest"`, so a vanilla `terraform apply` picks up whatever the build-images workflow most recently pushed.
+
+**Order of operations for the first deploy:**
+
+1. `terraform apply` once — provisions the OIDC role + ECR repos. The task defs reference images that do not exist yet, so ECS service creation succeeds but tasks fail to start. Expected.
+2. Push a commit to `main` (or trigger `.github/workflows/build-images.yml` via `workflow_dispatch`). Wait ~3–5 min; images appear in ECR.
+3. `terraform apply` again — no resource changes, but force a deployment so ECS pulls the now-existing `:latest`:
+   ```bash
+   aws ecs update-service --cluster uknomi-cp --service cp-api      --force-new-deployment
+   aws ecs update-service --cluster uknomi-cp --service cp-ingest   --force-new-deployment
+   aws ecs update-service --cluster uknomi-cp --service dashboard   --force-new-deployment
+   ```
+
+**Pin a specific SHA (rollout):**
+
+```bash
+terraform apply -var image_tag=7af89d8
+```
+
+**Roll back:**
+
+Same command with the previous SHA. Because all three services share one `image_tag` they roll back together — the simple case for the AFK-agent dev model where the CP is cut from one commit.
+
+**Mismatched versions per service:**
+
+Rare, but if needed, apply with `-target` against the specific task-def + service. A future slice may split `image_tag` into per-service variables; not worth the API surface today.
+
+**Tailscale + secret-gated services:**
+
+`tailscale-subnet-router` runs the public `tailscale/tailscale:stable` image and stays at `desired_count = 0` until the operator sets the real `uknomi/cp/tailscale-auth-key` Secrets Manager value (see § KMS + Secrets above). Same for `cp-api` — it will not start cleanly until the JWT signing key + TOTP encryption key are real (not the Terraform-managed placeholders).
