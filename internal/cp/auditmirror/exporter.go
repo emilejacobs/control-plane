@@ -8,11 +8,13 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,6 +23,7 @@ import (
 // *s3.Client which satisfies it.
 type S3PutObjectAPI interface {
 	PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
 // Row is the on-disk shape of one audit_log entry in the mirrored file.
@@ -68,6 +71,26 @@ func NewExporter(pool *pgxpool.Pool, s3 S3PutObjectAPI, bucket string) *Exporter
 func (e *Exporter) ExportDate(ctx context.Context, day time.Time) error {
 	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
+	key := fmt.Sprintf("%04d/%02d/%02d.jsonl.gz", start.Year(), start.Month(), start.Day())
+
+	// Idempotency short-circuit: skip the day if its object already exists.
+	// The production bucket runs in governance-mode object-lock (1y), so a
+	// second PutObject to the same key would otherwise fail AccessDenied
+	// halfway through the run; this avoids the spurious-error noise. An
+	// operator who deliberately wants to re-export deletes the object first
+	// (governance mode permits the bypass-IAM path; runbook covers it).
+	if _, err := e.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(e.bucket),
+		Key:    aws.String(key),
+	}); err == nil {
+		return nil
+	} else {
+		var notFound *types.NotFound
+		var noSuchKey *types.NoSuchKey
+		if !errors.As(err, &notFound) && !errors.As(err, &noSuchKey) {
+			return fmt.Errorf("head %s: %w", key, err)
+		}
+	}
 
 	rows, err := e.pool.Query(ctx, `
 		SELECT id::text, at, action, actor_id, actor_type, resource_kind, resource_id,
@@ -102,7 +125,6 @@ func (e *Exporter) ExportDate(ctx context.Context, day time.Time) error {
 		return fmt.Errorf("gzip close: %w", err)
 	}
 
-	key := fmt.Sprintf("%04d/%02d/%02d.jsonl.gz", start.Year(), start.Month(), start.Day())
 	if _, err := e.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:          aws.String(e.bucket),
 		Key:             aws.String(key),

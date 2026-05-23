@@ -113,6 +113,81 @@ func TestAuditMirrorExportDateWritesGzippedJSONLines(t *testing.T) {
 	}
 }
 
+// TestAuditMirrorExportDateIsIdempotent locks Issue 28 cycle 2: running
+// the exporter twice for the same UTC day is a no-op on the second run.
+// Object-lock on the production bucket would reject the second PutObject
+// outright; the exporter short-circuits via HeadObject before that, so a
+// re-run during a routine retry does not throw a confusing AccessDenied.
+func TestAuditMirrorExportDateIsIdempotent(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	w := audit.NewPostgresWriter(pool)
+
+	day := time.Date(2026, 4, 18, 0, 0, 0, 0, time.UTC)
+	if err := w.Write(cplog.WithCorrelationID(ctx, "corr-idem"), audit.Entry{
+		Action: "audit.idem.row", Outcome: "success", ActorType: audit.ActorOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE audit_log SET at = $1 WHERE correlation_id = $2`, day.Add(time.Hour), "corr-idem"); err != nil {
+		t.Fatal(err)
+	}
+
+	s3Client := startMotoS3(t, ctx)
+	const bucket = "uknomi-cp-audit-mirror-idem"
+	if _, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatal(err)
+	}
+
+	exp := auditmirror.NewExporter(pool, s3Client, bucket)
+	if err := exp.ExportDate(ctx, day); err != nil {
+		t.Fatalf("first ExportDate: %v", err)
+	}
+
+	// Add another row for the same day AFTER the first export — re-running
+	// must not include it, because the object already exists.
+	if err := w.Write(cplog.WithCorrelationID(ctx, "corr-idem-late"), audit.Entry{
+		Action: "audit.idem.late", Outcome: "success", ActorType: audit.ActorOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE audit_log SET at = $1 WHERE correlation_id = $2`, day.Add(2*time.Hour), "corr-idem-late"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := exp.ExportDate(ctx, day); err != nil {
+		t.Fatalf("second ExportDate: %v", err)
+	}
+
+	key := fmt.Sprintf("%04d/%02d/%02d.jsonl.gz", day.Year(), day.Month(), day.Day())
+	out, err := s3Client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	defer out.Body.Close()
+	gz, err := gzip.NewReader(out.Body)
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	body, _ := io.ReadAll(gz)
+	count := strings.Count(strings.TrimSpace(string(body)), "\n")
+	// Two newlines → three lines OR one newline → two lines? The first
+	// export wrote one line (1 entry). If idempotency works, the file
+	// still has one line. If it doesn't, it'd have two.
+	got := count + 1
+	if strings.TrimSpace(string(body)) == "" {
+		got = 0
+	}
+	if got != 1 {
+		t.Errorf("rows in mirrored file: got %d want 1 (re-run must not overwrite); body=%s", got, body)
+	}
+}
+
 // startMotoS3 stands up a moto container with the S3 service enabled.
 // Moto supports S3 natively; per project_iot_mock_choice we use moto for
 // non-IoT services too rather than spinning a second LocalStack.
