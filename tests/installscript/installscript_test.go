@@ -323,3 +323,33 @@ func TestInstallScriptReRunIsIdempotent(t *testing.T) {
 	}
 	cap.mu.Unlock()
 }
+
+// TestInstallScriptKeepsBootstrapKeyOutOfLogs locks AC-5 from the
+// issue: the bootstrap key must never appear in any stdout, stderr, or
+// command-line output the script produces. ADR-017's blast-radius
+// argument depends on this — a tee'd install log that leaks the key
+// would defeat the entire premise.
+//
+// The test runs the script with `bash -x` so any `set -x` echo of a
+// command containing the key would land in the combined output, then
+// scans every byte for the key string.
+func TestInstallScriptKeepsBootstrapKeyOutOfLogs(t *testing.T) {
+	requireBash(t)
+	srv, _ := fakeCP(t)
+	_, env := sandboxRoot(t, srv.URL)
+
+	const sentinel = "test-bootstrap-key-do-not-log"
+
+	// Trace-mode run: bash -x echoes every command + expansion to
+	// stderr. If the key ever ends up as a shell argument or in a
+	// $var that gets expanded mid-command, it surfaces here.
+	cmd := exec.Command("bash", "-x", scriptPath(t))
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script (-x) exited %v\nout:\n%s", err, out)
+	}
+	if contains(string(out), sentinel) {
+		t.Fatalf("bootstrap key leaked into script output:\n%s", out)
+	}
+}
