@@ -107,3 +107,30 @@ output "cp_api_task_role_arn" { value = aws_iam_role.cp_api.arn }
 output "cp_ingest_task_role_arn" { value = aws_iam_role.cp_ingest.arn }
 output "dashboard_task_role_arn" { value = aws_iam_role.dashboard.arn }
 output "tailscale_task_role_arn" { value = aws_iam_role.tailscale.arn }
+
+# ── ALB / DNS / cp-api (step 8) ─────────────────────────────────────────────
+
+output "alb_dns_name" {
+  description = "The ALB's DNS name. Sanity-check by curl'ing it; production traffic uses the Route 53 alias records."
+  value       = aws_lb.main.dns_name
+}
+
+output "control_zone_id" {
+  description = "Route 53 hosted zone id for control.uknomi.com."
+  value       = aws_route53_zone.control.zone_id
+}
+
+output "control_zone_nameservers" {
+  description = "Add these four NS records at the uknomi.com registrar for `control` to delegate the sub-zone to AWS. Required before the ACM cert can validate."
+  value       = aws_route53_zone.control.name_servers
+}
+
+output "control_acm_certificate_arn" {
+  description = "ACM certificate ARN covering control.uknomi.com + api.control.uknomi.com."
+  value       = aws_acm_certificate.control.arn
+}
+
+output "cp_api_target_group_arn" {
+  description = "cp-api target group ARN."
+  value       = aws_lb_target_group.cp_api.arn
+}
