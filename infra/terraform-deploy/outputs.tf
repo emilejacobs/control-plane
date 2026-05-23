@@ -134,3 +134,11 @@ output "cp_api_target_group_arn" {
   description = "cp-api target group ARN."
   value       = aws_lb_target_group.cp_api.arn
 }
+
+# ── cp-ingest + IoT rules (step 10) ─────────────────────────────────────────
+
+output "heartbeat_queue_url" { value = module.sqs_heartbeat.queue_url }
+output "heartbeat_dlq_arn" { value = module.sqs_heartbeat.dlq_arn }
+output "lifecycle_queue_url" { value = module.sqs_lifecycle.queue_url }
+output "lifecycle_dlq_arn" { value = module.sqs_lifecycle.dlq_arn }
+output "cp_ingest_service_name" { value = module.cp_ingest.service_name }
