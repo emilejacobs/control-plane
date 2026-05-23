@@ -47,28 +47,31 @@ type Route struct {
 }
 
 // Builder constructs the CP router. State-mutating registrations
-// auto-wrap the handler in the idempotency middleware and record the
-// route so tests can enumerate them.
+// auto-wrap the handler in the idempotency middleware + the audit
+// HTTP middleware (so a handler that forgets to call audit.Write still
+// records an envelope row) and record the route so tests can enumerate them.
 type Builder struct {
 	mux      *http.ServeMux
 	idem     func(http.Handler) http.Handler
+	auditMW  func(http.Handler) http.Handler
 	mutating []Route
 }
 
-func newBuilder(idem func(http.Handler) http.Handler) *Builder {
-	return &Builder{mux: http.NewServeMux(), idem: idem}
+func newBuilder(idem, auditMW func(http.Handler) http.Handler) *Builder {
+	return &Builder{mux: http.NewServeMux(), idem: idem, auditMW: auditMW}
 }
 
-// Get registers a read-side route. No idempotency wrapping.
+// Get registers a read-side route. No idempotency or audit wrapping.
 func (b *Builder) Get(path string, h http.Handler) {
 	b.mux.Handle("GET "+path, h)
 }
 
-// Post registers a state-mutating route. The handler is automatically
-// wrapped in the idempotency middleware; the route is recorded for the
-// CI-gate test.
+// Post registers a state-mutating route. The handler is wrapped in
+// audit (innermost — sees the handler's status) then idempotency
+// (outermost — short-circuits before the handler runs). The route is
+// recorded for the CI-gate test.
 func (b *Builder) Post(path string, h http.Handler) {
-	b.mux.Handle("POST "+path, b.idem(h))
+	b.mux.Handle("POST "+path, b.idem(b.auditMW(h)))
 	b.mutating = append(b.mutating, Route{Method: http.MethodPost, Path: path})
 }
 
@@ -90,11 +93,11 @@ const (
 // NewBuilderWith returns a fully-configured Builder. Tests use this to
 // inspect the route table; production code uses NewRouter.
 func NewBuilderWith(d Deps) *Builder {
-	b := newBuilder(middleware.Idempotency(d.IdempotencyStore))
 	auditW := d.Audit
 	if auditW == nil {
 		auditW = audit.SlogOnly{}
 	}
+	b := newBuilder(middleware.Idempotency(d.IdempotencyStore), audit.HTTPMiddleware(auditW))
 	// /healthz is the ALB target group health check (ADR-022). 200, empty body,
 	// no auth. Tightening from 200-499 to 200 depends on this being live.
 	b.Get("/healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

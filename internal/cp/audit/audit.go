@@ -54,10 +54,12 @@ type MemoryWriter struct {
 }
 
 // Write stamps the correlation_id from cplog context, co-emits the slog
-// line, and appends the entry.
+// line, marks the request tracker so HTTPMiddleware suppresses its
+// envelope, and appends the entry.
 func (m *MemoryWriter) Write(ctx context.Context, e Entry) error {
 	e.CorrelationID = cplog.CorrelationIDFromContext(ctx)
 	emitSlog(ctx, e)
+	markHandled(ctx)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.entries = append(m.entries, e)
@@ -115,5 +117,6 @@ type SlogOnly struct{}
 func (SlogOnly) Write(ctx context.Context, e Entry) error {
 	e.CorrelationID = cplog.CorrelationIDFromContext(ctx)
 	emitSlog(ctx, e)
+	markHandled(ctx)
 	return nil
 }
