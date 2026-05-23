@@ -61,8 +61,11 @@ func (s *PresenceSweeper) Run(ctx context.Context) {
 
 // sweepOnce runs one sweep and persists the offline transitions it finds.
 // Sweep is idempotent, so a device already offline is not re-persisted.
+// Every sweep emits a "sweeper.tick" heartbeat (whether or not there were
+// transitions); the Issue 21 lag alarm pages when the count falls to zero.
 func (s *PresenceSweeper) sweepOnce(ctx context.Context) {
 	now := s.now()
+	transitions := 0
 	for _, tr := range s.presence.Sweep(now) {
 		if err := s.writer.SetPresence(ctx, tr.DeviceID, false, now); err != nil {
 			s.log.Error("failed to persist sweep transition",
@@ -71,5 +74,7 @@ func (s *PresenceSweeper) sweepOnce(ctx context.Context) {
 		}
 		s.log.Info("audit.presence",
 			"event", "sweep_offline", "device_id", tr.DeviceID, "online", false)
+		transitions++
 	}
+	s.log.Info("sweeper.tick", "transitions", transitions)
 }

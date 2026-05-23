@@ -40,6 +40,30 @@ func TestPresenceSweeperSweepOncePersistsTransitions(t *testing.T) {
 	}
 }
 
+// TestPresenceSweeperEmitsTickHeartbeat is the Issue 21 sweeper-lag
+// signal: every sweepOnce ends with a "sweeper.tick" log line, even when
+// there are no transitions to persist. CloudWatch turns the line count
+// into a metric and pages when it falls to zero — catching a stuck
+// sweeper goroutine the lifecycle fast-path cannot otherwise reveal.
+func TestPresenceSweeperEmitsTickHeartbeat(t *testing.T) {
+	t0 := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	var logbuf bytes.Buffer
+	sw := NewPresenceSweeper(presence.New(), &fakePresenceWriter{}, SweeperConfig{
+		Logger: slog.New(slog.NewJSONHandler(&logbuf, nil)),
+		Now:    fixedClock(t0),
+	})
+
+	sw.sweepOnce(context.Background()) // no transitions; still ticks
+	if n := strings.Count(logbuf.String(), `"msg":"sweeper.tick"`); n != 1 {
+		t.Errorf("sweeper.tick lines after one sweep: got %d want 1\nbuf:\n%s", n, logbuf.String())
+	}
+
+	sw.sweepOnce(context.Background())
+	if n := strings.Count(logbuf.String(), `"msg":"sweeper.tick"`); n != 2 {
+		t.Errorf("sweeper.tick lines after two sweeps: got %d want 2\nbuf:\n%s", n, logbuf.String())
+	}
+}
+
 func TestPresenceSweeperRunStopsOnCancel(t *testing.T) {
 	sw := NewPresenceSweeper(presence.New(), &fakePresenceWriter{}, SweeperConfig{
 		Interval: 10 * time.Millisecond,
