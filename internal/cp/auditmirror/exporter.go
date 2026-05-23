@@ -136,3 +136,22 @@ func (e *Exporter) ExportDate(ctx context.Context, day time.Time) error {
 	}
 	return nil
 }
+
+// ExportRange exports every UTC day in the closed range [from, to]. Both
+// endpoints are floored to their UTC dates. A day with zero audit_log
+// rows still gets an empty object so the downstream sees an explicit
+// "we ran" signal for every covered day.
+//
+// The first error halts the range — partial output stays on S3, and a
+// subsequent re-run picks up where the previous failed (idempotent
+// ExportDate short-circuits the days that already exist).
+func (e *Exporter) ExportRange(ctx context.Context, from, to time.Time) error {
+	start := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
+	end := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.UTC)
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		if err := e.ExportDate(ctx, d); err != nil {
+			return fmt.Errorf("ExportDate %s: %w", d.Format("2006-01-02"), err)
+		}
+	}
+	return nil
+}

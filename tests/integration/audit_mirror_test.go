@@ -188,6 +188,90 @@ func TestAuditMirrorExportDateIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestAuditMirrorExportRangeBackfill locks Issue 28 cycle 3: the
+// backfill path writes one object per UTC day across the closed range
+// [from, to]. The exporter binary's --from/--to flags drive this for
+// the first-run case where audit_log has rows older than the daily job
+// has been running.
+func TestAuditMirrorExportRangeBackfill(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	w := audit.NewPostgresWriter(pool)
+
+	// Three rows across three days; one day in the middle with no rows.
+	dates := []time.Time{
+		time.Date(2026, 1, 1, 5, 0, 0, 0, time.UTC),
+		// Jan 2 deliberately empty.
+		time.Date(2026, 1, 3, 5, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 4, 5, 0, 0, 0, time.UTC), // outside the range
+	}
+	for i, at := range dates {
+		corr := fmt.Sprintf("corr-range-%d", i)
+		if err := w.Write(cplog.WithCorrelationID(ctx, corr), audit.Entry{
+			Action: "audit.range", Outcome: "success", ActorType: audit.ActorOperator,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE audit_log SET at = $1 WHERE correlation_id = $2`, at, corr); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s3Client := startMotoS3(t, ctx)
+	const bucket = "uknomi-cp-audit-mirror-range"
+	if _, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatal(err)
+	}
+
+	exp := auditmirror.NewExporter(pool, s3Client, bucket)
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	if err := exp.ExportRange(ctx, from, to); err != nil {
+		t.Fatalf("ExportRange: %v", err)
+	}
+
+	// Expect objects for Jan 1, Jan 2 (empty), Jan 3 — and NOT Jan 4.
+	want := []struct {
+		key      string
+		nonEmpty bool
+	}{
+		{"2026/01/01.jsonl.gz", true},
+		{"2026/01/02.jsonl.gz", false}, // empty gzip stream
+		{"2026/01/03.jsonl.gz", true},
+	}
+	for _, w := range want {
+		out, err := s3Client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(w.key)})
+		if err != nil {
+			t.Errorf("GetObject %s: %v", w.key, err)
+			continue
+		}
+		gz, err := gzip.NewReader(out.Body)
+		if err != nil {
+			out.Body.Close()
+			t.Errorf("gzip %s: %v", w.key, err)
+			continue
+		}
+		body, _ := io.ReadAll(gz)
+		out.Body.Close()
+		hasRows := strings.TrimSpace(string(body)) != ""
+		if hasRows != w.nonEmpty {
+			t.Errorf("%s nonEmpty: got %v want %v; body=%s", w.key, hasRows, w.nonEmpty, body)
+		}
+	}
+
+	// Jan 4 was outside the range — no object should exist.
+	if _, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String("2026/01/04.jsonl.gz"),
+	}); err == nil {
+		t.Error("Jan 4 was outside the range but an object was written")
+	}
+}
+
 // startMotoS3 stands up a moto container with the S3 service enabled.
 // Moto supports S3 natively; per project_iot_mock_choice we use moto for
 // non-IoT services too rather than spinning a second LocalStack.
