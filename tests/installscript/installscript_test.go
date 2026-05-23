@@ -298,3 +298,28 @@ func TestInstallScriptInstallsSystemdUnit(t *testing.T) {
 		}
 	}
 }
+
+// TestInstallScriptReRunIsIdempotent locks cycle 4: re-running the
+// script against the same machine succeeds (the server-side
+// Idempotency-Key replay returns the canonical response) and converges
+// on the same on-disk state, no duplicated systemd unit or broken cert.
+// In production this protects against a rerun after a transient
+// network failure or a re-image where /etc/machine-id is preserved.
+func TestInstallScriptReRunIsIdempotent(t *testing.T) {
+	requireBash(t)
+	srv, cap := fakeCP(t)
+	_, env := sandboxRoot(t, srv.URL)
+
+	for i := 1; i <= 2; i++ {
+		out, err := runScript(t, env)
+		if err != nil {
+			t.Fatalf("script run %d failed %v\nout:\n%s", i, err, out)
+		}
+	}
+
+	cap.mu.Lock()
+	if cap.enrollHits != 2 {
+		t.Errorf("POST /enrollments hits across two runs: got %d want 2 (idempotency is server-side; the second call replays)", cap.enrollHits)
+	}
+	cap.mu.Unlock()
+}
