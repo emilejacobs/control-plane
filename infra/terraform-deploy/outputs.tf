@@ -83,3 +83,20 @@ output "ecr_repository_urls" {
   description = "Map of service name to ECR repository URL. CI (#02) pushes images here; task definitions reference the URL + tag."
   value       = { for k, r in aws_ecr_repository.main : k => r.repository_url }
 }
+
+# ── ECS (step 6) ────────────────────────────────────────────────────────────
+
+output "ecs_cluster_arn" {
+  description = "ECS Fargate cluster ARN. Consumed by every service slice."
+  value       = aws_ecs_cluster.main.arn
+}
+
+output "task_execution_role_arn" {
+  description = "Task execution role ARN. Every service uses this for image pulls, log writes, and secret fetches."
+  value       = aws_iam_role.task_execution.arn
+}
+
+output "service_log_group_names" {
+  description = "Map of service name to its CloudWatch log group. Task definitions reference these in the awslogs driver."
+  value       = { for k, g in aws_cloudwatch_log_group.service : k => g.name }
+}
