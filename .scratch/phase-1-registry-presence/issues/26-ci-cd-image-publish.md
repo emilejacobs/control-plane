@@ -23,7 +23,7 @@ Auth: GitHub OIDC federation. A new IAM role in `infra/terraform-deploy/` trusts
 
 Two small follow-ups from #25 are folded in (each is necessary to make the image actually deployable, so splitting them off would be churn):
 
-- **cp-api `/healthz` handler.** Returns 200 with no body. Lets the ALB target group matcher tighten from `200-499` to `200` (also touched here; the comment in `infra/terraform-deploy/cp-api.tf` is removed).
+- **cp-api `/healthz` handler.** Returns 200 with no body. Necessary precondition for the ALB matcher to tighten from `200-499` to `200`; the matcher change itself defers to the slice that flips the cp-api task def image off the nginx placeholder (tightening now, while the placeholder still 404s, would break the deploy).
 - **dashboard `NEXT_PUBLIC_API_URL` build-time bake.** Next.js bakes `NEXT_PUBLIC_*` into the JS bundle at `next build` time, so the Dockerfile must accept it as a build arg and the workflow must pass `https://api.control.uknomi.com`.
 
 ## Out of scope
@@ -47,7 +47,7 @@ Two small follow-ups from #25 are folded in (each is necessary to make the image
   - GitHub OIDC identity provider (or references the account-level one if one already exists).
   - An IAM role assumable from `repo:uknomi/uknomi-control-plane:ref:refs/heads/main` (sub-claim scoped, not wildcarded across the repo) with the ECR push permissions enumerated above.
   - Outputs the role ARN.
-- [ ] `cp-api.tf`'s ALB health-check matcher tightens from `200-499` to `200`; the explanatory comment is updated/removed.
+- [ ] `cp-api.tf`'s comment is updated to reflect that the `/healthz` handler now exists and the matcher tightening is now blocked only on the image-ref flip (not on the missing handler). The actual matcher tightening defers to the image-flip slice.
 - [ ] `terraform fmt + validate` pass on both roots.
 - [ ] `go test ./...` passes; `web/` vitest suite passes; `web/` `next build` succeeds with the build arg set.
 - [ ] **Documentation updated.** `docs/architecture.md` § Cloud infrastructure mentions the image build/push flow; `infra/terraform-deploy/README.md` notes the OIDC role; consider a new ADR only if a load-bearing decision warrants it (likely not for this slice — ADR-020 already covers the shape).

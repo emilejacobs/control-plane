@@ -1,10 +1,12 @@
 # cp-api service — target group, listener rule, task definition, ECS
-# service. Placeholder image until #02 wires CI to push to ECR; the ALB
-# matcher accepts any non-5xx so the placeholder's 404 on /healthz still
-# passes the health check.
+# service. Placeholder image until the image-ref flip slice replaces it
+# with the ECR-hosted cp-api image (#26 ships the build/push pipeline).
+# The ALB matcher accepts any non-5xx so the placeholder's 404 on /healthz
+# still passes the health check.
 #
-# TODO(cp-api): add a /healthz handler returning 200 so the matcher can
-# tighten to just 200.
+# The cp-api /healthz handler returning 200 already exists (#26); the
+# matcher tightens to "200" in the same slice that flips the image
+# reference off the placeholder.
 
 resource "aws_lb_target_group" "cp_api" {
   name        = "uknomi-cp-api"
