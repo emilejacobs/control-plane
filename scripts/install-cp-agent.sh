@@ -83,4 +83,46 @@ case "$http_code" in
         exit 1 ;;
 esac
 
-echo "enrollment ok"
+# Lay out /etc/uknomi/: cert.pem + key.pem at 0600, agent-config.json at
+# 0644 (it carries the device_id but no secret material).
+runtime_dir="${ROOT}/etc/uknomi"
+mkdir -p "$runtime_dir"
+chmod 755 "$runtime_dir"
+
+device_id="$(python3 - "$resp_file" "${runtime_dir}/cert.pem" "${runtime_dir}/key.pem" <<'PY'
+import json, os, sys
+resp_file, cert_path, key_path = sys.argv[1:4]
+with open(resp_file) as f:
+    resp = json.load(f)
+for path, field in ((cert_path, "mtls_cert_pem"), (key_path, "mtls_private_key_pem")):
+    pem = resp.get(field) or ""
+    if not pem:
+        sys.exit("enrollment response missing " + field)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(pem if pem.endswith("\n") else pem + "\n")
+print(resp.get("device_id") or "")
+PY
+)"
+if [[ -z "$device_id" ]]; then
+    echo "enrollment response missing device_id" >&2
+    exit 1
+fi
+
+# Agent config: the device_id, the IoT broker URL, paths to the cert
+# material. 0644 — no secret material lands here.
+cat > "${runtime_dir}/agent-config.json" <<JSON
+{
+  "device_id": "${device_id}",
+  "version": "${AGENT_VERSION}",
+  "broker_url": "${CP_BROKER_URL}",
+  "client_id": "${device_id}",
+  "cert_path": "/etc/uknomi/cert.pem",
+  "key_path": "/etc/uknomi/key.pem",
+  "ca_cert_path": "/etc/uknomi/ca.pem",
+  "telemetry_interval": "30s"
+}
+JSON
+chmod 644 "${runtime_dir}/agent-config.json"
+
+echo "enrolled ${device_id}"

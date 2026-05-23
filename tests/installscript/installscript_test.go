@@ -189,3 +189,56 @@ func TestInstallScriptCallsEnrollmentWithMachineIDKey(t *testing.T) {
 		t.Errorf("body.hardware_kind: got %v want %q", cap.body["hardware_kind"], "pi")
 	}
 }
+
+// TestInstallScriptWritesCertAndConfigAt0600 locks cycle 2: after a
+// successful enrollment, cert, private key, and agent config live under
+// ${CP_ROOT}/etc/uknomi/ with mode 0600 (cert+key) and 0644 (config),
+// each carrying the response payload. The CA file lands at 0644 because
+// Amazon's root CA is public.
+func TestInstallScriptWritesCertAndConfigAt0600(t *testing.T) {
+	requireBash(t)
+	srv, _ := fakeCP(t)
+	root, env := sandboxRoot(t, srv.URL)
+
+	out, err := runScript(t, env)
+	if err != nil {
+		t.Fatalf("script exited %v\nout:\n%s", err, out)
+	}
+
+	checks := []struct {
+		path     string
+		wantMode os.FileMode
+		needle   string
+	}{
+		{filepath.Join(root, "etc/uknomi/cert.pem"), 0o600, "TESTCERT"},
+		{filepath.Join(root, "etc/uknomi/key.pem"), 0o600, "TESTKEY"},
+		{filepath.Join(root, "etc/uknomi/agent-config.json"), 0o644, "dev-test-1"},
+	}
+	for _, c := range checks {
+		st, err := os.Stat(c.path)
+		if err != nil {
+			t.Errorf("stat %s: %v", c.path, err)
+			continue
+		}
+		if st.Mode().Perm() != c.wantMode {
+			t.Errorf("%s mode: got %o want %o", c.path, st.Mode().Perm(), c.wantMode)
+		}
+		data, err := os.ReadFile(c.path)
+		if err != nil {
+			t.Errorf("read %s: %v", c.path, err)
+			continue
+		}
+		if !contains(string(data), c.needle) {
+			t.Errorf("%s missing %q; content=%s", c.path, c.needle, data)
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
