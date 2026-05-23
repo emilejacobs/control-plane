@@ -65,7 +65,7 @@ The scope is large enough that a single big-bang apply is risky. Landing slice-b
 |---|---|---|
 | 1 | Networking — VPC, subnets, IGW + single NAT, route tables, VPC endpoints, security groups | **built** (2026-05-22) |
 | 2 | State backend `key` for this root + bootstrap doc | **built** (2026-05-22 — backend wired, points at `deploy/terraform.tfstate` in the shared state bucket; bootstrap doc lives in `infra/terraform/README.md`) |
-| 3 | KMS + Secrets Manager (DB credentials, JWT signing key placeholder, TOTP encryption key placeholder, Tailscale auth key) | pending |
+| 3 | KMS + Secrets Manager (JWT signing key, TOTP encryption key, Tailscale auth key — DB credentials defer to RDS-managed-password in step 4) | **built** (2026-05-22) |
 | 4 | RDS Postgres (depends on networking + KMS + secrets) | pending |
 | 5 | ECR repos | pending |
 | 6 | ECS cluster + task execution role + log groups | pending |

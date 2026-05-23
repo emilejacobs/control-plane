@@ -32,3 +32,30 @@ output "tailscale_security_group_id" {
   description = "Tailscale subnet router security group id — consumed by that slice."
   value       = aws_security_group.tailscale.id
 }
+
+# ── KMS + Secrets (step 3) ──────────────────────────────────────────────────
+
+output "kms_key_arn" {
+  description = "Customer-managed KMS key ARN. Referenced by RDS (step 4), S3 (step 12), and the Secrets Manager secrets in this slice."
+  value       = aws_kms_key.main.arn
+}
+
+output "kms_key_alias" {
+  description = "KMS key alias — the indirection layer in case the key is rotated to a successor key."
+  value       = aws_kms_alias.main.name
+}
+
+output "jwt_signing_key_secret_arn" {
+  description = "Secrets Manager ARN of the JWT signing key. The cp-api task definition (step 8) injects it via the `secrets` attribute."
+  value       = aws_secretsmanager_secret.jwt_signing_key.arn
+}
+
+output "totp_encryption_key_secret_arn" {
+  description = "Secrets Manager ARN of the TOTP encryption key. The cp-api task definition (step 8) injects it."
+  value       = aws_secretsmanager_secret.totp_encryption_key.arn
+}
+
+output "tailscale_auth_key_secret_arn" {
+  description = "Secrets Manager ARN of the Tailscale auth key. The subnet-router task (step 11) reads it at startup."
+  value       = aws_secretsmanager_secret.tailscale_auth_key.arn
+}

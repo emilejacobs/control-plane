@@ -10,9 +10,9 @@ Landing incrementally per #25's 14-step staging order.
 
 | Step | Slice | Status |
 |---|---|---|
-| 1 | Networking — VPC, subnets, IGW + single NAT, route tables, VPC endpoints, SGs | **built** (this commit) |
-| 2 | State backend `key` + bootstrap doc | **built** (this commit — see [§ State](#state)) |
-| 3 | KMS + Secrets Manager | pending |
+| 1 | Networking — VPC, subnets, IGW + single NAT, route tables, VPC endpoints, SGs | **built** |
+| 2 | State backend `key` + bootstrap doc | **built** (see [§ State](#state)) |
+| 3 | KMS + Secrets Manager | **built** (see [§ KMS + Secrets](#kms--secrets)) |
 | 4 | RDS Postgres | pending |
 | 5 | ECR repos | pending |
 | 6 | ECS cluster + execution role + log groups | pending |
@@ -46,6 +46,34 @@ S3 backend on `uknomi-tfstate-523612763411` with DynamoDB locking on `uknomi-tfs
 2. **DNS:** new Route 53 hosted zone `control.uknomi.com` (created in the ALB / ACM / Route 53 slice). Proposed hostname split: dashboard at `control.uknomi.com` (apex), cp-api at `api.control.uknomi.com`; the ACM cert carries both as SANs and the ALB does host-based routing. A one-time NS delegation at the registrar of `uknomi.com` is required for the new zone to resolve publicly.
 3. **Tailscale:** existing tailnet, non-expiring auth key. The key lands in Secrets Manager in the secrets slice and is read by the subnet-router task at startup.
 4. **Image source for v0:** public placeholders (e.g. `public.ecr.aws/nginx/nginx-unprivileged:latest`) for `cp-api` and `dashboard` so the ALB has healthy targets on initial apply. `cp-ingest` and `tailscale-subnet-router` start at `desired_count = 0`. Real images land via #02 (CI pipeline).
+
+## KMS + Secrets
+
+The root provisions a single customer-managed KMS key (`alias/uknomi-cp`) used for at-rest encryption by Secrets Manager (in this slice), RDS (step 4), and S3 (step 12). The key policy allows IAM identities in this account full management; service principals get only the operations they need (Secrets Manager today, RDS / S3 in later slices). Key rotation is enabled.
+
+Three Secrets Manager secrets are created with non-secret placeholders; the real values are set out-of-band, like #10's bootstrap key:
+
+```bash
+# The cp-api JWT signing key — base64 of >= 32 raw bytes.
+aws secretsmanager put-secret-value \
+  --secret-id uknomi/cp/jwt-signing-key \
+  --secret-string "$(openssl rand -base64 48)"
+
+# The TOTP-at-rest encryption key — base64 of exactly 32 raw bytes.
+aws secretsmanager put-secret-value \
+  --secret-id uknomi/cp/totp-encryption-key \
+  --secret-string "$(openssl rand -base64 32)"
+
+# The non-expiring Tailscale auth key for the existing tailnet (generate it in
+# the Tailscale admin console with the "reusable" + "no expiry" flags).
+aws secretsmanager put-secret-value \
+  --secret-id uknomi/cp/tailscale-auth-key \
+  --secret-string "tskey-auth-..."
+```
+
+`lifecycle { ignore_changes = [secret_string] }` on the version resource keeps Terraform off the real value after the placeholder gets replaced. The Fargate task definitions (steps 8 / 11) reference these secrets by ARN; the secret values are injected as env vars at task start time, never landing in any artefact.
+
+The mac-mini-rollout install-package bootstrap key from #10 (`uknomi/cp/bootstrap-key`) follows the same pattern but lives in the IoT Core root next door for historical reasons — moving it would require cross-root state migration. Set its value the same way.
 
 ## This slice — networking (step 1)
 
