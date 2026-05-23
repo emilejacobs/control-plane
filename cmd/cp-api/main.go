@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
@@ -122,6 +123,7 @@ func run(logger *slog.Logger) error {
 	idemStore := storage.NewIdempotencyStore(pool)
 	authnSvc := authn.New(pool, authn.Config{SigningKey: signingKey, TotpEncryptionKey: totpKey})
 	authzSvc := authz.New(pool)
+	auditW := audit.NewPostgresWriter(pool)
 
 	srv := &http.Server{
 		Addr: ":" + port,
@@ -130,6 +132,7 @@ func run(logger *slog.Logger) error {
 			AuthN:            authnSvc,
 			AuthZ:            authzSvc,
 			IdempotencyStore: idemStore,
+			Audit:            auditW,
 			Logger:           logger,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

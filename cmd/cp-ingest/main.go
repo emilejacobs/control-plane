@@ -32,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/presence"
@@ -92,15 +93,17 @@ func run(logger *slog.Logger) error {
 	// feed it, the sweeper reads it.
 	pres := presence.New()
 
+	auditW := audit.NewPostgresWriter(pool)
+
 	heartbeatConsumer := sqsconsumer.NewConsumer[ingest.Heartbeat](
 		sqsClient,
 		ingest.NewPresenceIngester(pres, reg, nil).Handle,
-		sqsconsumer.Config{QueueURL: heartbeatQueueURL, DLQURL: heartbeatDLQURL, Logger: logger},
+		sqsconsumer.Config{QueueURL: heartbeatQueueURL, DLQURL: heartbeatDLQURL, Logger: logger, Audit: auditW},
 	)
 	lifecycleConsumer := sqsconsumer.NewConsumer[ingest.Lifecycle](
 		sqsClient,
 		ingest.NewLifecycleIngester(pres, reg, nil).Handle,
-		sqsconsumer.Config{QueueURL: lifecycleQueueURL, DLQURL: lifecycleDLQURL, Logger: logger},
+		sqsconsumer.Config{QueueURL: lifecycleQueueURL, DLQURL: lifecycleDLQURL, Logger: logger, Audit: auditW},
 	)
 	sweeper := ingest.NewPresenceSweeper(pres, reg, ingest.SweeperConfig{Logger: logger})
 
