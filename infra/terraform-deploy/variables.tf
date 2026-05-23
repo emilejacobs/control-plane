@@ -38,3 +38,47 @@ variable "tags" {
     Managed = "terraform"
   }
 }
+
+# ── RDS (step 4) ────────────────────────────────────────────────────────────
+
+variable "db_instance_class" {
+  description = "RDS Postgres instance class. db.t4g.micro is comfortable for Phase 1 (25 Macs, low write rate); resize before Wave 2 if needed."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "db_engine_version" {
+  description = "Major Postgres version. AWS picks the latest matching minor."
+  type        = string
+  default     = "16"
+}
+
+variable "db_allocated_storage" {
+  description = "Initial GB of GP3 storage."
+  type        = number
+  default     = 20
+}
+
+variable "db_max_allocated_storage" {
+  description = "Storage autoscaling cap in GB."
+  type        = number
+  default     = 100
+}
+
+variable "db_multi_az" {
+  description = "Multi-AZ deployment. Single-AZ for Wave 0; flip to true before the ship gate."
+  type        = bool
+  default     = false
+}
+
+variable "db_backup_retention_days" {
+  description = "Daily automated-backup retention."
+  type        = number
+  default     = 7
+}
+
+variable "db_log_retention_days" {
+  description = "CloudWatch retention for the RDS postgresql log export."
+  type        = number
+  default     = 30
+}
