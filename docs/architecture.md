@@ -224,8 +224,8 @@ flowchart TB
 Infrastructure is Terraform, in `infra/terraform/` (ADR-015 multi-AZ Postgres, ADR-018 Fargate, ADR-021 all-CloudWatch observability). Current state:
 
 - **Built** — `modules/sqs-ingest` (SQS queue + DLQ + redrive + IoT Rule) and `modules/cp-ingest-service` (Fargate task + service + log group), landed with #07; #08 reuses `sqs-ingest` for the presence-lifecycle queue.
-- **Phase 0 spike** — the flat root in `infra/terraform/` provisions a single IoT thing + certificate for the agent spike, plus (with #10) the `uknomi/cp/bootstrap-key` Secrets Manager secret and the scoped IAM role the `mac-mini-rollout` CI assumes to read it.
-- **Pending #01** — the Phase 1 root: VPC, subnets, ALB, the RDS instance, the Fargate cluster, S3 backend + DynamoDB lock for Terraform state. The modules above are consumed by that root.
+- **Built (#01, #10)** — the IoT Core root in `infra/terraform/`: the corrected `UknomiAgentPolicy`, a parameterised per-device thing + cert, and (from #10) the `uknomi/cp/bootstrap-key` Secrets Manager secret + the scoped IAM role the `mac-mini-rollout` CI assumes to read it. State on S3 (`uknomi-tfstate-523612763411`) with DynamoDB locking; key `iot-core/terraform.tfstate`.
+- **Pending #25** — the Phase 1 deployment infra root: VPC + subnets, security groups, ALB + ACM + Route 53, RDS Postgres (small, single-AZ initially → multi-AZ before the ship gate), the Fargate cluster + task definitions for cp-api / cp-ingest / dashboard / Tailscale subnet router, ECR repos for the images, IAM roles, KMS keys, S3 buckets (audit mirror, command output, agent binaries), CloudWatch log groups and alarms, and the IoT rules wiring that consumes `modules/sqs-ingest`. Lives next to the IoT Core root in the same state bucket under a different `key`.
 
 ## Key flows
 

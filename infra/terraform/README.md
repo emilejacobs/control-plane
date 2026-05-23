@@ -1,8 +1,10 @@
-# Terraform — Phase 0 IoT Core resources
+# Terraform — IoT Core root (Phase 0 + #01 + #10)
 
-Minimal starter that codifies the IoT Core resources the Phase 0 spike needs (one shared policy + one thing/cert per device). Designed for one-command device provisioning during the macOS and Linux smoke runs.
+This root codifies the IoT Core resources for the Phase 0 spike and the bootstrap-key plumbing from #10: one shared policy, one thing+cert per device (parameterised by `device_id`), the `uknomi/cp/bootstrap-key` Secrets Manager secret, and the IAM role the `mac-mini-rollout` CI assumes to read it.
 
-This is a starter — the full Phase 1 Terraform scope (VPC, ALB, RDS, Fargate, KMS, S3, Tailscale subnet router) lands in [Phase 1 issue 01](../../.scratch/phase-1-registry-presence/issues/01-terraform-iot-core.md), which also decides the S3 + DynamoDB state backend, the device-as-module split, and the controller-cert separation.
+State lives on S3 with DynamoDB locking — see [§ State backend bootstrap](#state-backend-bootstrap) for the one-time setup.
+
+The **Phase 1 deployment infra** — VPC, ALB, RDS Postgres, Fargate cluster, KMS, S3, ECR, IAM, Tailscale subnet router, IoT rules wiring, CloudWatch — is a separate Terraform root tracked in [issue #25](../../.scratch/phase-1-registry-presence/issues/25-phase-1-deployment-infra.md). It lives next to this root in the same state bucket (different `key`), not in this root.
 
 ## Workflow — provision a device
 
@@ -28,13 +30,44 @@ Removes the thing, cert, attachments, **and** the shared policy. If you have oth
 
 ## State
 
-Local state, deliberately. `terraform.tfstate` lives in this directory and is gitignored. It contains the private key for the cert — protect it like any other secret.
+State lives on S3 with DynamoDB locking — configured in `providers.tf` against:
 
-For multi-developer use, move to:
-- S3 bucket with default encryption + bucket policy scoping access
-- DynamoDB table for state locking
+- **Bucket**: `uknomi-tfstate-523612763411` (versioning + AES256 SSE + all-public-access blocked)
+- **Lock table**: `uknomi-tfstate-locks` (PAY_PER_REQUEST, partition key `LockID`)
+- **Key for this root**: `iot-core/terraform.tfstate`
 
-That's a Phase 1 issue 01 deliverable, not Phase 0 spike work.
+The state still contains private key material (`aws_iot_certificate` returns the PEM); the bucket-level encryption + IAM scoping is the protection. Treat any download of state files as a secret event.
+
+### State backend bootstrap
+
+One-time, run by an admin role in the target AWS account *before* the first `terraform init` of this root:
+
+```bash
+ACCOUNT_ID=523612763411
+REGION=us-east-1
+BUCKET=uknomi-tfstate-${ACCOUNT_ID}
+
+# State bucket — versioned, encrypted, no public access.
+aws s3api create-bucket --bucket "$BUCKET" --region "$REGION"
+aws s3api put-bucket-versioning --bucket "$BUCKET" \
+  --versioning-configuration Status=Enabled
+aws s3api put-bucket-encryption --bucket "$BUCKET" \
+  --server-side-encryption-configuration \
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+aws s3api put-public-access-block --bucket "$BUCKET" \
+  --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+# Lock table — pay-per-request so it costs nothing when idle.
+aws dynamodb create-table \
+  --table-name uknomi-tfstate-locks \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region "$REGION"
+```
+
+If you already have local state from a Phase 0 apply, `terraform init` will offer to migrate it on the first run after this backend block lands. Answer **yes** to migrate; the local file becomes redundant.
 
 ## Multi-device
 
@@ -52,10 +85,10 @@ Each workspace gets its own state file under `terraform.tfstate.d/`. The shared 
 
 ## What's deliberately NOT here
 
-- The shared `UknomiAgentPolicy` does not live in its own `infra/terraform/shared/` module yet — that's the cleaner shape for Phase 1.
-- No custom CA. The cert is `aws_iot_certificate` (AWS-managed mint). ADR-004's install-script enrollment with a uKnomi-owned CA is a Phase 1 deliverable.
-- No remote state, no IAM scoping of who can apply.
-- No CloudWatch logging config for IoT Core (deferred).
+- VPC, ALB, RDS, Fargate, KMS, S3 buckets, ECR, IAM roles for tasks, Tailscale subnet router, IoT rules wiring, CloudWatch alarms — the Phase 1 deployment-infra root, tracked in [issue #25](../../.scratch/phase-1-registry-presence/issues/25-phase-1-deployment-infra.md).
+- The shared `UknomiAgentPolicy` does not live in its own module yet — that and the device-as-module split are reshape candidates when #25's root lands and absorbs or supersedes this one.
+- No custom CA. The cert is `aws_iot_certificate` (AWS-managed mint). ADR-004's install-script enrollment with a uKnomi-owned CA is a Phase 4 concern.
+- No CloudWatch logging config for IoT Core (deferred to #25).
 
 ## Known gotcha: agent-cli ↔ policy
 

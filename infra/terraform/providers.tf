@@ -8,9 +8,17 @@ terraform {
     }
   }
 
-  # Local state for the Phase 0 spike. Move to S3 + DynamoDB before a second
-  # person touches this — see Phase 1 issue 01.
-  # backend "s3" { ... }
+  # Remote state on S3, with DynamoDB-based locking. The bucket and table
+  # are created once, out-of-band — see README § "State backend bootstrap".
+  # `key` is per-root so future Terraform roots (e.g. the Phase 1 deployment
+  # infra) live next to this one in the same bucket without collision.
+  backend "s3" {
+    bucket         = "uknomi-tfstate-523612763411"
+    key            = "iot-core/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "uknomi-tfstate-locks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
