@@ -142,3 +142,10 @@ output "heartbeat_dlq_arn" { value = module.sqs_heartbeat.dlq_arn }
 output "lifecycle_queue_url" { value = module.sqs_lifecycle.queue_url }
 output "lifecycle_dlq_arn" { value = module.sqs_lifecycle.dlq_arn }
 output "cp_ingest_service_name" { value = module.cp_ingest.service_name }
+
+# ── S3 (step 12) ────────────────────────────────────────────────────────────
+
+output "s3_bucket_names" {
+  description = "Map of purpose to bucket name. audit-mirror is wired in #20; command-output / agent-dist stand ready for Phase 3."
+  value       = { for k, b in aws_s3_bucket.main : k => b.id }
+}
