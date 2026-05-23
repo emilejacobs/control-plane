@@ -156,3 +156,10 @@ output "alarms_sns_topic_arn" {
   description = "SNS topic every alarm publishes to. Subscribe via aws sns subscribe after first apply."
   value       = aws_sns_topic.alarms.arn
 }
+
+# ── CI/CD (Issue 26) ────────────────────────────────────────────────────────
+
+output "gha_image_publish_role_arn" {
+  description = "IAM role ARN the GitHub Actions image-publish workflow assumes via OIDC. Set this as the `role-to-assume` in aws-actions/configure-aws-credentials."
+  value       = aws_iam_role.gha_image_publish.arn
+}

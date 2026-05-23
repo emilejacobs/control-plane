@@ -82,3 +82,17 @@ variable "db_log_retention_days" {
   type        = number
   default     = 30
 }
+
+# CI/CD (Issue 26)
+
+variable "github_repo" {
+  description = "GitHub repo identifier (owner/name). Scopes the OIDC trust so only this repo can assume the image-publish role."
+  type        = string
+  default     = "emilejacobs/control-plane"
+}
+
+variable "github_image_publish_branch" {
+  description = "Git branch on which the image-publish workflow runs. The OIDC sub claim is pinned to this branch so PR builds cannot push to ECR."
+  type        = string
+  default     = "main"
+}
