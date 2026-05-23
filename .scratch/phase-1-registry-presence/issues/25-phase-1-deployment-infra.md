@@ -36,12 +36,12 @@ Out of scope:
 - Cross-region DR.
 - Command-execution infrastructure beyond the placeholder KMS key + S3 bucket (Phase 3).
 
-## Decisions to confirm before HCL is written
+## Decisions (resolved 2026-05-22)
 
-1. **AWS account + region.** Same `523612763411` / `us-east-1` as Phase 0? If a separate deploy account is intended, surface it before SGs reference VPC IDs.
-2. **DNS zone + hostnames.** Production hostname for the CP API and the dashboard. Route 53 zone already in this account, or external?
-3. **Tailscale tailnet + auth-key strategy.** Reuse the existing tailnet? Ephemeral OAuth key vs reusable auth key?
-4. **Image source for v0.** The Fargate task defs reference container images — do they come from the ECR repos this issue creates (in which case there is a chicken-and-egg around the first image push), or from a public placeholder until the CI pipeline (#02) is wired?
+1. **AWS account + region.** `523612763411` / `us-east-1` (same as Phase 0).
+2. **DNS.** Create a new Route 53 hosted zone `control.uknomi.com` (the account currently has 4 zones; default limit is 500 — plenty of headroom). Hostname split: `control.uknomi.com` (apex) → dashboard, `api.control.uknomi.com` → cp-api. ACM cert carries both as SANs; ALB does host-based routing. A one-time NS delegation at the registrar of the parent `uknomi.com` zone is required for the new sub-zone to resolve publicly; spelled out in the ALB slice's runbook when it lands.
+3. **Tailscale.** Reuse the existing tailnet. A non-expiring auth key, stored in Secrets Manager in the secrets slice and read by the subnet-router task at startup.
+4. **Image source for v0.** Public placeholders (`public.ecr.aws/nginx/nginx-unprivileged:latest`) for `cp-api` and `dashboard` so the ALB has healthy targets on initial apply. `cp-ingest` and `tailscale-subnet-router` start at `desired_count = 0`. Real images get pushed to the ECR repos this root creates by the CI pipeline in #02.
 
 ## Acceptance criteria
 
@@ -57,21 +57,23 @@ Out of scope:
 
 - None structurally. Foundational — unblocks #12 (Wave 0 bench smoke), which has had this listed as a hidden prerequisite all along.
 
-## Notes / suggested staging
+## Notes / staging
 
-The scope is large enough that a single big-bang apply is risky. A reasonable staging order, each as its own commit:
+The scope is large enough that a single big-bang apply is risky. Landing slice-by-slice; each step is its own commit against `infra/terraform-deploy/`.
 
-1. Networking (VPC, subnets, IGW/NAT, route tables, VPC endpoints, security groups).
-2. State backend `key` for this root + the bootstrap doc.
-3. KMS + Secrets Manager (DB credentials, JWT signing key placeholder, TOTP encryption key placeholder).
-4. RDS Postgres (depends on networking + KMS + secrets).
-5. ECR repos.
-6. ECS cluster + task execution role + log groups.
-7. IAM task roles per service.
-8. `cp-api` task definition + service + ALB target group; ACM + Route 53 + ALB last.
-9. `dashboard` task definition + service.
-10. `cp-ingest` task definition + service + the `modules/sqs-ingest` instantiations + `modules/cp-ingest-service` instantiation.
-11. Tailscale subnet router task + secret.
-12. S3 buckets (audit mirror, command output, agent distribution).
-13. CloudWatch alarms + SNS topic.
-14. Docs (`architecture.md`, ADRs for the load-bearing decisions).
+| Step | Slice | Status |
+|---|---|---|
+| 1 | Networking — VPC, subnets, IGW + single NAT, route tables, VPC endpoints, security groups | **built** (2026-05-22) |
+| 2 | State backend `key` for this root + bootstrap doc | **built** (2026-05-22 — backend wired, points at `deploy/terraform.tfstate` in the shared state bucket; bootstrap doc lives in `infra/terraform/README.md`) |
+| 3 | KMS + Secrets Manager (DB credentials, JWT signing key placeholder, TOTP encryption key placeholder, Tailscale auth key) | pending |
+| 4 | RDS Postgres (depends on networking + KMS + secrets) | pending |
+| 5 | ECR repos | pending |
+| 6 | ECS cluster + task execution role + log groups | pending |
+| 7 | IAM task roles per service | pending |
+| 8 | `cp-api` task + service + ALB target group; ACM + Route 53 hosted zone (`control.uknomi.com`) + ALB | pending |
+| 9 | `dashboard` task + service | pending |
+| 10 | `cp-ingest` task + service + `modules/sqs-ingest` instantiations + `modules/cp-ingest-service` | pending |
+| 11 | Tailscale subnet router task + secret consumption | pending |
+| 12 | S3 buckets (audit mirror, command output, agent distribution) | pending |
+| 13 | CloudWatch alarms + SNS topic | pending |
+| 14 | Docs (`architecture.md`, ADRs for the load-bearing decisions: single-region, single-AZ NAT, host-based ALB routing) | pending |

@@ -24,7 +24,7 @@ before they start. **Status as of 2026-05-22:**
 
 | # | Prerequisite | Status |
 |---|---|---|
-| #01 | Phase 1 Terraform — VPC, ALB, RDS, Fargate, deployed `cp-api`, `cp-ingest`, dashboard, Tailscale subnet router | **pending** — Wave 0 can only run once #01 lands |
+| #25 | Phase 1 deployment infra — VPC, ALB, RDS Postgres, Fargate (`cp-api`, `cp-ingest`, dashboard, Tailscale subnet router), KMS, S3, ECR, IAM, IoT rules wiring | **pending** — Wave 0 can only run once #25 lands (the scope formerly attributed to #01 — see the 2026-05-22 scope split) |
 | #10 | `uknomi/cp/bootstrap-key` Secrets Manager secret applied **and** populated with the real key (`aws secretsmanager put-secret-value`) | secret HCL landed; placeholder; real key not yet set |
 | #10 / mac-mini-rollout CI | The install package's `secrets/cp-bootstrap-key` written by CI at build time | **deferred** — tracked in `mac-mini-rollout` (see [#10's completion comment](../../.scratch/phase-1-registry-presence/issues/10-bootstrap-key-secrets-manager.md)) |
 | #11 | `mac-mini-rollout/modules/11-cp-agent.sh` exists | landed (`6a2aeed` in the rollout repo) |
@@ -132,23 +132,26 @@ aws iot describe-thing --thing-name "${PHASE0_DEVICE_ID}" 2>&1 | \
 
 ## 2. Apply Phase 1 IoT Core infrastructure
 
-Phase 1's Terraform root (issue #01) provisions: the shared
-`UknomiAgentPolicy`, the `uknomi/cp/bootstrap-key` Secrets Manager secret +
-CI IAM role, and the rest of the Phase 1 stack (VPC, ALB, RDS, Fargate, etc.).
-Until #01 lands, the Phase 0 root in `infra/terraform/` carries only the
-policy + the bootstrap-key secret resources from #10; it is **not** a full
-Phase 1 deployment.
+Two Terraform roots: `infra/terraform/` (the IoT Core root from #01 + #10:
+shared `UknomiAgentPolicy`, the `uknomi/cp/bootstrap-key` secret + CI IAM
+role) and `infra/terraform-deploy/` (issue #25: VPC, RDS Postgres, Fargate,
+ALB, KMS, S3, ECR, IAM, IoT rules wiring, observability). Apply the IoT
+Core root first if it has not been applied; then apply the deploy root.
+
+Until #25 lands the deploy root is incomplete — until then there is no live
+CP to enrol against.
 
 ```bash
 cd "${REPO_ROOT}/infra/terraform"
-terraform init
-terraform plan
-terraform apply
+terraform init && terraform plan && terraform apply
+
+cd "${REPO_ROOT}/infra/terraform-deploy"
+terraform init && terraform plan && terraform apply
 ```
 
-> **Stop here if #01 has not landed.** A Wave 0 smoke against an
+> **Stop here if #25 has not landed.** A Wave 0 smoke against an
 > incompletely-deployed Phase 1 is testing the wrong thing. File the gap
-> ("Wave 0 needs the Phase 1 CP deployed via #01") as the only outcome of
+> ("Wave 0 needs the Phase 1 CP deployed via #25") as the only outcome of
 > this attempt.
 
 Set the real bootstrap key (one-time, out-of-band — Terraform seeds a
