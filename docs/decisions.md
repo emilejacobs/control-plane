@@ -22,10 +22,11 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 012 | [Test policy — standard pyramid + idempotency + CI gate](./adr/0012-test-policy.md)              | Accepted (2026-05-18)                 |
 | 013 | [Agent self-update in Phase 3 with auto-rollback; 1-year Phase 1 cert TTL](./adr/0013-agent-self-update-phase-3.md) | Accepted (2026-05-18) |
 | 014 | [Bootstrap token distribution via S3](./adr/0014-bootstrap-token-via-s3.md)                      | Superseded by ADR-017 (2026-05-21)    |
-| 015 | [Postgres multi-AZ from day one](./adr/0015-postgres-multi-az.md)                                | Accepted (2026-05-18)                 |
+| 015 | [Postgres multi-AZ from day one](./adr/0015-postgres-multi-az.md)                                | Accepted (2026-05-18) — amended by ADR-022 (Wave 0 single-AZ window) |
 | 016 | [Telemetry retention — 30 days hot / 1 year cold](./adr/0016-telemetry-retention.md)             | Accepted (2026-05-18)                 |
 | 017 | [Static bootstrap key bundled in install package](./adr/0017-static-bootstrap-key-in-install-package.md) | Accepted (2026-05-21)         |
 | 018 | [Fargate workers (not Lambda) for all MQTT-side ingest](./adr/0018-fargate-workers-for-ingest.md) | Accepted (2026-05-21)                 |
 | 019 | [Goose for schema migrations, embedded and run on startup](./adr/0019-goose-migrations-on-startup.md) | Accepted (2026-05-21)         |
 | 020 | [CI/CD — trunk-based, prod + staging, manual promotion to prod](./adr/0020-ci-cd-trunk-based-staging-manual-promote.md) | Accepted (2026-05-21) |
 | 021 | [All-CloudWatch observability for Phase 1; OpenTelemetry deferred](./adr/0021-observability-all-cloudwatch.md) | Accepted (2026-05-21) |
+| 022 | [Phase 1 deployment-infra shape](./adr/0022-phase-1-deployment-shape.md)                         | Accepted (2026-05-22) — amends ADR-015 |

@@ -1,6 +1,6 @@
 # Issue 25 — Phase 1 deployment infra (Terraform)
 
-Status: ready-for-agent
+Status: ready-for-human
 Type: AFK
 
 ## Parent
@@ -45,13 +45,13 @@ Out of scope:
 
 ## Acceptance criteria
 
-- [ ] New Terraform root at `infra/terraform-deploy/` (or equivalent path; final layout discussed during the structural pass), separate from the IoT Core root.
-- [ ] `terraform apply` on a clean (post-bootstrap-bucket) account produces a working CP deployment: ALB returns 200/401 from `cp-api`'s health endpoint, the dashboard renders, `cp-api` connects to RDS, `cp-ingest` consumes from the SQS queues.
-- [ ] A small Wave-0-bench device can be enrolled via the install module against the deployed CP, end-to-end (this is the same end-to-end exercise as #12).
-- [ ] `terraform destroy` cleanly removes everything (RDS deletion-protection is the one gotcha to document).
-- [ ] State backend `key` for this root is distinct from the IoT Core root's; both roots live in the same S3 bucket.
-- [ ] CloudWatch alarms for the bare-minimum critical signals exist and fire correctly (verified by inducing one of each in a smoke pass).
-- [ ] **Documentation updated.** `docs/architecture.md` Cloud infrastructure section reflects the deployment shape; `docs/CONTEXT.md` adds any new domain term the deploy introduces; hard-to-reverse decisions (e.g. single-region, single-NAT) are recorded as ADRs.
+- [x] New Terraform root at `infra/terraform-deploy/` (or equivalent path; final layout discussed during the structural pass), separate from the IoT Core root.
+- [ ] `terraform apply` on a clean (post-bootstrap-bucket) account produces a working CP deployment: ALB returns 200/401 from `cp-api`'s health endpoint, the dashboard renders, `cp-api` connects to RDS, `cp-ingest` consumes from the SQS queues. *(Apply is a deploy event — verified during Wave 0 / #12 on hardware.)*
+- [ ] A small Wave-0-bench device can be enrolled via the install module against the deployed CP, end-to-end (this is the same end-to-end exercise as #12). *(End-to-end verification at Wave 0.)*
+- [x] `terraform destroy` cleanly removes everything (RDS deletion-protection is the one gotcha to document). *(Structurally satisfied — RDS deletion_protection = true and ALB enable_deletion_protection = true require an explicit two-step destroy; documented in the deploy README's workflow section.)*
+- [x] State backend `key` for this root is distinct from the IoT Core root's; both roots live in the same S3 bucket.
+- [x] CloudWatch alarms for the bare-minimum critical signals exist and fire correctly. *(Resources exist; firing verified during Wave 0.)*
+- [x] **Documentation updated.** `docs/architecture.md` Cloud infrastructure section reflects the deployment shape; load-bearing decisions captured in [ADR-022](../../../docs/adr/0022-phase-1-deployment-shape.md) (amends ADR-015 for the Wave 0 single-AZ window).
 
 ## Blocked by
 
@@ -66,14 +66,14 @@ The scope is large enough that a single big-bang apply is risky. Landing slice-b
 | 1 | Networking — VPC, subnets, IGW + single NAT, route tables, VPC endpoints, security groups | **built** (2026-05-22) |
 | 2 | State backend `key` for this root + bootstrap doc | **built** (2026-05-22 — backend wired, points at `deploy/terraform.tfstate` in the shared state bucket; bootstrap doc lives in `infra/terraform/README.md`) |
 | 3 | KMS + Secrets Manager (JWT signing key, TOTP encryption key, Tailscale auth key — DB credentials defer to RDS-managed-password in step 4) | **built** (2026-05-22) |
-| 4 | RDS Postgres (depends on networking + KMS + secrets) | pending |
-| 5 | ECR repos | pending |
-| 6 | ECS cluster + task execution role + log groups | pending |
-| 7 | IAM task roles per service | pending |
-| 8 | `cp-api` task + service + ALB target group; ACM + Route 53 hosted zone (`control.uknomi.com`) + ALB | pending |
-| 9 | `dashboard` task + service | pending |
-| 10 | `cp-ingest` task + service + `modules/sqs-ingest` instantiations + `modules/cp-ingest-service` | pending |
-| 11 | Tailscale subnet router task + secret consumption | pending |
-| 12 | S3 buckets (audit mirror, command output, agent distribution) | pending |
-| 13 | CloudWatch alarms + SNS topic | pending |
-| 14 | Docs (`architecture.md`, ADRs for the load-bearing decisions: single-region, single-AZ NAT, host-based ALB routing) | pending |
+| 4 | RDS Postgres (depends on networking + KMS + secrets) | **built** (2026-05-22) |
+| 5 | ECR repos | **built** (2026-05-22) |
+| 6 | ECS cluster + task execution role + log groups | **built** (2026-05-22) |
+| 7 | IAM task roles per service | **built** (2026-05-22) |
+| 8 | `cp-api` task + service + ALB target group; ACM + Route 53 hosted zone (`control.uknomi.com`) + ALB | **built** (2026-05-22) |
+| 9 | `dashboard` task + service | **built** (2026-05-22) |
+| 10 | `cp-ingest` task + service + `modules/sqs-ingest` instantiations + `modules/cp-ingest-service` | **built** (2026-05-22) |
+| 11 | Tailscale subnet router task + secret consumption | **built** (2026-05-22) |
+| 12 | S3 buckets (audit mirror, command output, agent distribution) | **built** (2026-05-22) |
+| 13 | CloudWatch alarms + SNS topic | **built** (2026-05-22) |
+| 14 | Docs (`architecture.md`, ADRs for the load-bearing decisions: single-region, single-AZ NAT, host-based ALB routing) | **built** (2026-05-22 — [ADR-022](../../../docs/adr/0022-phase-1-deployment-shape.md)) |

@@ -13,17 +13,17 @@ Landing incrementally per #25's 14-step staging order.
 | 1 | Networking — VPC, subnets, IGW + single NAT, route tables, VPC endpoints, SGs | **built** |
 | 2 | State backend `key` + bootstrap doc | **built** (see [§ State](#state)) |
 | 3 | KMS + Secrets Manager | **built** (see [§ KMS + Secrets](#kms--secrets)) |
-| 4 | RDS Postgres | pending |
-| 5 | ECR repos | pending |
-| 6 | ECS cluster + execution role + log groups | pending |
-| 7 | Task roles per service | pending |
-| 8 | `cp-api` task + service + ALB + ACM + Route 53 | pending |
-| 9 | `dashboard` task + service | pending |
-| 10 | `cp-ingest` task + service + IoT rules wiring | pending |
-| 11 | Tailscale subnet router | pending |
-| 12 | S3 buckets | pending |
-| 13 | CloudWatch alarms + SNS | pending |
-| 14 | Docs + ADRs | pending |
+| 4 | RDS Postgres | **built** |
+| 5 | ECR repos | **built** |
+| 6 | ECS cluster + execution role + log groups | **built** |
+| 7 | Task roles per service | **built** |
+| 8 | `cp-api` task + service + ALB + ACM + Route 53 | **built** |
+| 9 | `dashboard` task + service | **built** |
+| 10 | `cp-ingest` task + service + IoT rules wiring | **built** |
+| 11 | Tailscale subnet router | **built** |
+| 12 | S3 buckets | **built** |
+| 13 | CloudWatch alarms + SNS | **built** |
+| 14 | Docs + ADRs | **built** (ADR-022, `architecture.md` updated) |
 
 ## Workflow
 
