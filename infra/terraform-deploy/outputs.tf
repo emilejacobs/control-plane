@@ -149,3 +149,10 @@ output "s3_bucket_names" {
   description = "Map of purpose to bucket name. audit-mirror is wired in #20; command-output / agent-dist stand ready for Phase 3."
   value       = { for k, b in aws_s3_bucket.main : k => b.id }
 }
+
+# ── Alarms (step 13) ────────────────────────────────────────────────────────
+
+output "alarms_sns_topic_arn" {
+  description = "SNS topic every alarm publishes to. Subscribe via aws sns subscribe after first apply."
+  value       = aws_sns_topic.alarms.arn
+}
