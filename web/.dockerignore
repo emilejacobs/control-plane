@@ -1,0 +1,14 @@
+node_modules
+.next
+.turbo
+*.tsbuildinfo
+coverage
+.env
+.env.*
+.git
+.vscode
+.idea
+*.swp
+test
+vitest.config.ts
+vitest.setup.ts

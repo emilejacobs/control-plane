@@ -1,0 +1,46 @@
+# Keep the build context minimal — every file copied is sent to the Docker
+# daemon and counted against layer cache invalidation.
+.git
+.github
+.gitignore
+.dockerignore
+
+# IDE / editor
+.idea
+.vscode
+*.swp
+
+# Go build outputs
+bin
+dist
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Node / Next.js (only needed by web/Dockerfile, scoped there)
+node_modules
+.next
+.turbo
+*.tsbuildinfo
+
+# Terraform / state
+.terraform
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+cdk.out
+infra
+
+# Local scratch + docs (not needed in images)
+.scratch
+docs
+README.md
+CLAUDE.md
+
+# Env / secrets — never let a leaked .env file end up in an image layer
+.env
+.env.*
+*.pem
+*.key
+*.p12
