@@ -85,6 +85,11 @@ const (
 // inspect the route table; production code uses NewRouter.
 func NewBuilderWith(d Deps) *Builder {
 	b := newBuilder(middleware.Idempotency(d.IdempotencyStore))
+	// /healthz is the ALB target group health check (ADR-022). 200, empty body,
+	// no auth. Tightening from 200-499 to 200 depends on this being live.
+	b.Get("/healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 	enrollLimiter := middleware.NewRateLimiter(enrollmentRateLimit, enrollmentRateWindow)
 	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry)))
 	if d.AuthN != nil {
