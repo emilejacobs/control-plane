@@ -254,7 +254,7 @@ sequenceDiagram
     Note over A,DB: agent connects to IoT Core and publishes its first<br/>heartbeat; cp-ingest sets last_seen → device shows online
 ```
 
-A replay of a prior `hardware_uuid` returns the original `201` response from the idempotency store. Linux devices run the same flow from a one-page install script (no full rollout repo — Pis are deprecating).
+A replay of a prior `hardware_uuid` returns the original `201` response from the idempotency store. Linux devices run the same flow from a one-page install script ([`scripts/install-cp-agent.sh`](../scripts/install-cp-agent.sh), Issue 22) — 162-line bash, shellcheck-gated in CI, no full rollout repo since Pis are deprecating (ADR-007). The Linux script uses `/etc/machine-id` as the `Idempotency-Key`, writes cert + key to `/etc/uknomi/` at mode 0600, and installs a systemd unit at `/etc/systemd/system/uknomi-agent.service`. The bootstrap key is baked into the script's build the same way `mac-mini-rollout/modules/11-cp-agent.sh` bakes it for Mac (ADR-017).
 
 ### Command execution
 
