@@ -76,3 +76,10 @@ output "db_dsn_secret_arn" {
   description = "Secrets Manager ARN of the constructed Postgres DSN. cp-api / cp-ingest read this; consumed by cp-ingest-service module."
   value       = aws_secretsmanager_secret.db_dsn.arn
 }
+
+# ── ECR (step 5) ────────────────────────────────────────────────────────────
+
+output "ecr_repository_urls" {
+  description = "Map of service name to ECR repository URL. CI (#02) pushes images here; task definitions reference the URL + tag."
+  value       = { for k, r in aws_ecr_repository.main : k => r.repository_url }
+}
