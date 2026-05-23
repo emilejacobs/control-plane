@@ -53,13 +53,48 @@ type MemoryWriter struct {
 	entries []Entry
 }
 
-// Write stamps the correlation_id from cplog context and appends the entry.
+// Write stamps the correlation_id from cplog context, co-emits the slog
+// line, and appends the entry.
 func (m *MemoryWriter) Write(ctx context.Context, e Entry) error {
 	e.CorrelationID = cplog.CorrelationIDFromContext(ctx)
+	emitSlog(ctx, e)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.entries = append(m.entries, e)
 	return nil
+}
+
+// emitSlog writes the entry as a JSON log line on the cplog request-scoped
+// logger. Top-level attrs match the legacy audit.* slog shape: outcome,
+// source_ip, user_agent, plus every Payload key flattened. Structured
+// fields (actor_id, actor_type, resource_kind, resource_id) emit only when
+// set so call sites that do not populate them do not litter the log.
+func emitSlog(ctx context.Context, e Entry) {
+	log := cplog.FromContext(ctx)
+	attrs := make([]any, 0, 16)
+	attrs = append(attrs, "outcome", e.Outcome)
+	if e.SourceIP != "" {
+		attrs = append(attrs, "source_ip", e.SourceIP)
+	}
+	if e.UserAgent != "" {
+		attrs = append(attrs, "user_agent", e.UserAgent)
+	}
+	if e.ActorID != "" {
+		attrs = append(attrs, "actor_id", e.ActorID)
+	}
+	if e.ActorType != "" {
+		attrs = append(attrs, "actor_type", string(e.ActorType))
+	}
+	if e.ResourceKind != "" {
+		attrs = append(attrs, "resource_kind", e.ResourceKind)
+	}
+	if e.ResourceID != "" {
+		attrs = append(attrs, "resource_id", e.ResourceID)
+	}
+	for k, v := range e.Payload {
+		attrs = append(attrs, k, v)
+	}
+	log.Info(e.Action, attrs...)
 }
 
 // Entries returns a copy of every Entry written so far, in write order.

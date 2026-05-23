@@ -7,7 +7,10 @@ import (
 
 type ctxKey struct{}
 
-func withLogger(ctx context.Context, l *slog.Logger) context.Context {
+// WithLogger returns ctx carrying the given logger; FromContext returns it.
+// Production code uses Middleware to install the request-scoped logger;
+// tests use this directly to seed a context.
+func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
 	return context.WithValue(ctx, ctxKey{}, l)
 }
 
