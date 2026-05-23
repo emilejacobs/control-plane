@@ -36,3 +36,4 @@ cdk.out/
 *.pem
 *.key
 *.p12
+web-prototype/

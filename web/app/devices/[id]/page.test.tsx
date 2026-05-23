@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { screen, act } from "@testing-library/react";
+import { screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../test/server";
@@ -9,7 +9,7 @@ import DevicePage from "./page";
 
 // The page reads its device id from the route; the per-device tests all
 // pin it to "dev-1".
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: "dev-1" }) }));
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "dev-1" }), usePathname: () => "/devices/dev-1" }));
 
 // device is a full GET /devices/{id} body; tests override the fields they
 // exercise and leave the rest at these benign defaults.
@@ -88,7 +88,10 @@ describe("per-device view", () => {
     renderWithClient(<DevicePage />);
     await screen.findByRole("heading", { name: "mac-mini-acme-01" });
 
-    expect(screen.getByText("Online")).toBeInTheDocument();
+    // Scope to <main> — the Topbar carries its own "Online" status pill,
+    // which is incidental to this assertion.
+    const main = screen.getByRole("main");
+    expect(within(main).getByText("Online")).toBeInTheDocument();
   });
 
   it("shows last_seen as an ago-string", async () => {

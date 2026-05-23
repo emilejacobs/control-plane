@@ -1,6 +1,9 @@
-// CertExpiryIndicator surfaces a device's mTLS cert expiry on the per-device
-// view — the early-warning signal for cert rotation (ADR-013, Issue 09). It
-// shows the expiry date and the whole days remaining.
+// CertExpiryIndicator surfaces a device's mTLS cert expiry on the
+// per-device view — the early-warning signal for cert rotation (ADR-013,
+// Issue 09). Restyled to consume the design-token color band from
+// globals.css; the text shape is preserved verbatim so the page-level
+// test (data-cert-status, "Certificate expires", "365 days") still
+// passes after the visual restyle.
 
 interface Props {
   expiresAt: string | null;
@@ -11,7 +14,6 @@ type CertStatus = "green" | "yellow" | "red";
 
 // certStatus maps days-remaining to a color band (Issue 09): green when
 // comfortably ahead, yellow approaching, red when expiry is imminent or past.
-// The threshold days (30, 180) fall in the safer adjacent band.
 function certStatus(daysRemaining: number): CertStatus {
   if (daysRemaining > 180) return "green";
   if (daysRemaining >= 30) return "yellow";
@@ -19,25 +21,28 @@ function certStatus(daysRemaining: number): CertStatus {
 }
 
 const statusColor: Record<CertStatus, string> = {
-  green: "#16a34a",
-  yellow: "#ca8a04",
-  red: "#dc2626",
+  green: "var(--green-ink)",
+  yellow: "var(--amber-ink)",
+  red: "var(--red-ink)",
 };
 
 export function CertExpiryIndicator({ expiresAt, daysRemaining }: Props) {
   // A row predating the cert-expiry migration carries no notAfter; say so
   // rather than leaving a silent gap where the indicator should be.
   if (expiresAt == null || daysRemaining == null) {
-    return <p>Certificate expiry unknown</p>;
+    return <p className="muted" style={{ margin: 0 }}>Certificate expiry unknown</p>;
   }
 
   const status = certStatus(daysRemaining);
   const unit = Math.abs(daysRemaining) === 1 ? "day" : "days";
   return (
-    <p data-cert-status={status}>
+    <p data-cert-status={status} style={{ margin: 0, fontSize: 13.5 }}>
       Certificate expires{" "}
-      <time dateTime={expiresAt}>{expiresAt.slice(0, 10)}</time> (
-      <span style={{ color: statusColor[status] }}>
+      <time className="mono" dateTime={expiresAt}>
+        {expiresAt.slice(0, 10)}
+      </time>{" "}
+      (
+      <span style={{ color: statusColor[status], fontWeight: 600 }}>
         {daysRemaining} {unit}
       </span>{" "}
       remaining)

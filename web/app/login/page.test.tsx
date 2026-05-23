@@ -8,7 +8,7 @@ import { API_BASE, clearTokens } from "../../lib/api/client";
 import LoginPage from "./page";
 
 const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }), usePathname: () => "/" }));
 
 function loginReturns(body: Record<string, unknown>) {
   server.use(

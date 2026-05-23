@@ -1,12 +1,20 @@
-// PresenceChip shows a device's online/offline state at a glance: a green
-// dot for online, gray for offline, with the state spelled out alongside.
-export function PresenceChip({ online }: { online: boolean }) {
+// PresenceChip — green dot + "Online" / gray dot + "Offline".
+// Restyled to use the design-token .presence + .dot classes from
+// globals.css. The "Online" / "Offline" text is exact (tests query it),
+// and aria-label still spells the state out for screen readers.
+
+interface Props {
+  online: boolean;
+}
+
+export function PresenceChip({ online }: Props) {
   return (
-    <span aria-label={online ? "online" : "offline"}>
-      <span aria-hidden style={{ color: online ? "#16a34a" : "#9ca3af" }}>
-        ●
-      </span>{" "}
-      {online ? "Online" : "Offline"}
+    <span
+      className={`presence ${online ? "online" : "offline"}`}
+      aria-label={online ? "online" : "offline"}
+    >
+      <span className={`dot ${online ? "green" : "gray"}`} aria-hidden />
+      <span className="label">{online ? "Online" : "Offline"}</span>
     </span>
   );
 }

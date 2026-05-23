@@ -8,7 +8,7 @@ import { API_BASE, setTokens } from "../../lib/api/client";
 import TotpEnrollPage from "./page";
 
 const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }), usePathname: () => "/" }));
 
 const recoveryCodes = Array.from({ length: 10 }, (_, i) => `code-${i + 1}`);
 

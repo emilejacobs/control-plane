@@ -11,7 +11,7 @@ import LoginPage from "../app/login/page";
 import DevicesPage from "../app/devices/page";
 
 const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }), usePathname: () => "/" }));
 
 // The Issue-16 "minimal E2E equivalent": one test walking the whole auth
 // path across all four pages, against an MSW-mocked cp-api, with the token
