@@ -48,6 +48,10 @@ jobs:
             dockerfile: web/Dockerfile
             build_args: |
               NEXT_PUBLIC_API_URL=https://api.control.uknomi.com
+          - name: audit-mirror
+            context: .
+            dockerfile: cmd/audit-mirror/Dockerfile
+            build_args: ""
     steps:
       - uses: actions/checkout@v4
 

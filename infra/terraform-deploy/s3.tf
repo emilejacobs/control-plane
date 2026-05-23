@@ -22,9 +22,30 @@ locals {
 resource "aws_s3_bucket" "main" {
   for_each = local.buckets
   bucket   = each.value
+  # Object-lock must be enabled at bucket creation; enabling it on an
+  # existing bucket is not supported by the S3 API. The audit-mirror
+  # bucket carries it from day one for the Issue 28 retention policy;
+  # the other two have no use case yet so we don't pay the lock-state
+  # complexity.
+  object_lock_enabled = each.key == "audit-mirror"
   tags = {
     Name    = each.value
     Purpose = each.key
+  }
+}
+
+# 1-year governance-mode retention on the audit-mirror bucket (Issue 28).
+# Every new object inherits the horizon automatically. Governance — not
+# compliance — keeps an IAM "root override" escape hatch for the cases
+# where an operator deliberately re-exports or deletes a day.
+resource "aws_s3_bucket_object_lock_configuration" "audit_mirror" {
+  bucket = aws_s3_bucket.main["audit-mirror"].id
+
+  rule {
+    default_retention {
+      mode = "GOVERNANCE"
+      days = 365
+    }
   }
 }
 

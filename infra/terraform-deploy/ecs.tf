@@ -15,7 +15,7 @@ resource "aws_ecs_cluster" "main" {
 }
 
 locals {
-  services = toset(["cp-api", "cp-ingest", "dashboard", "tailscale-subnet-router"])
+  services = toset(["cp-api", "cp-ingest", "dashboard", "tailscale-subnet-router", "audit-mirror"])
 }
 
 resource "aws_cloudwatch_log_group" "service" {

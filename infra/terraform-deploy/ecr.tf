@@ -7,7 +7,7 @@
 # policy) is not worth the marginal hardening for Phase 1.
 
 locals {
-  ecr_repos = toset(["cp-api", "cp-ingest", "dashboard"])
+  ecr_repos = toset(["cp-api", "cp-ingest", "dashboard", "audit-mirror"])
 }
 
 resource "aws_ecr_repository" "main" {
