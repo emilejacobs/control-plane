@@ -1,10 +1,15 @@
 package middleware
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 )
 
 // okHandler is a terminal handler that records it was reached.
@@ -85,5 +90,46 @@ func TestRateLimiterIsolatesByIP(t *testing.T) {
 	// A different source IP has its own window — unaffected by the first.
 	if code := from(h, "10.0.0.2:5000"); code != http.StatusOK {
 		t.Fatalf("second IP: got %d want 200", code)
+	}
+}
+
+// TestRateLimiterEmitsTripLogLine locks the Issue 21 alarm signal: when
+// the limiter rejects a request, it logs "ratelimit.trip" with the
+// source_ip via the cplog request-scoped logger. CloudWatch turns the
+// line count into a metric and pages when an IP starts probing the
+// enrollment endpoint; the runbook bridges the per-IP precision the
+// metric filter cannot express directly.
+func TestRateLimiterEmitsTripLogLine(t *testing.T) {
+	reached := 0
+	rl := NewRateLimiter(2, time.Hour)
+	h := rl.Middleware(okHandler(&reached))
+
+	var logbuf bytes.Buffer
+	logger := cplog.New(&logbuf, "cp-api-test")
+	ctx := cplog.WithLogger(context.Background(), logger)
+	fromCtx := func(remoteAddr string) int {
+		req := httptest.NewRequest(http.MethodPost, "/enrollments", nil).WithContext(ctx)
+		req.RemoteAddr = remoteAddr
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Within the limit — no trip line.
+	fromCtx("10.0.0.5:5000")
+	fromCtx("10.0.0.5:5000")
+	if strings.Contains(logbuf.String(), "ratelimit.trip") {
+		t.Fatalf("trip line emitted while still under limit:\n%s", logbuf.String())
+	}
+
+	// 3rd request trips the limit and emits exactly one line.
+	if code := fromCtx("10.0.0.5:5000"); code != http.StatusTooManyRequests {
+		t.Fatalf("3rd request: got %d want 429", code)
+	}
+	if n := strings.Count(logbuf.String(), `"msg":"ratelimit.trip"`); n != 1 {
+		t.Errorf("ratelimit.trip lines: got %d want 1\nbuf:\n%s", n, logbuf.String())
+	}
+	if !strings.Contains(logbuf.String(), `"source_ip":"10.0.0.5"`) {
+		t.Errorf("source_ip not in line:\n%s", logbuf.String())
 	}
 }

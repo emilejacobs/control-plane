@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 )
 
 // RateLimiter is a fixed-window, per-source-IP request limiter. ADR-017 caps
@@ -54,10 +56,18 @@ func (rl *RateLimiter) allow(ip string) bool {
 }
 
 // Middleware wraps next, rejecting a source IP that exceeds the limit with
-// HTTP 429.
+// HTTP 429. A trip emits a "ratelimit.trip" log line on the request-scoped
+// logger; the Issue 21 alarm counts these to page on enrollment probing.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(clientIP(r)) {
+		ip := clientIP(r)
+		if !rl.allow(ip) {
+			cplog.FromContext(r.Context()).Warn("ratelimit.trip",
+				"source_ip", ip,
+				"path", r.URL.Path,
+				"limit", rl.limit,
+				"window_seconds", int(rl.window.Seconds()),
+			)
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
