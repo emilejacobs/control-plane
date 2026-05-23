@@ -242,3 +242,59 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestInstallScriptInstallsSystemdUnit locks cycle 3: the script
+// installs the agent binary to /usr/local/bin, writes a systemd unit at
+// /etc/systemd/system/uknomi-agent.service with the right ExecStart,
+// and drives systemctl through daemon-reload → enable → start. The
+// stubbed systemctl on PATH records each call into a log file the test
+// asserts against.
+func TestInstallScriptInstallsSystemdUnit(t *testing.T) {
+	requireBash(t)
+	srv, _ := fakeCP(t)
+	root, env := sandboxRoot(t, srv.URL)
+
+	out, err := runScript(t, env)
+	if err != nil {
+		t.Fatalf("script exited %v\nout:\n%s", err, out)
+	}
+
+	binPath := filepath.Join(root, "usr/local/bin/uknomi-agent")
+	if st, err := os.Stat(binPath); err != nil {
+		t.Errorf("agent binary not installed at %s: %v", binPath, err)
+	} else if st.Mode().Perm()&0o111 == 0 {
+		t.Errorf("agent binary at %s is not executable; mode=%o", binPath, st.Mode().Perm())
+	}
+
+	unitPath := filepath.Join(root, "etc/systemd/system/uknomi-agent.service")
+	unit, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read systemd unit: %v", err)
+	}
+	wantNeedles := []string{
+		"[Unit]",
+		"[Service]",
+		"[Install]",
+		"ExecStart=/usr/local/bin/uknomi-agent --config /etc/uknomi/agent-config.json",
+		"Restart=always",
+		"WantedBy=multi-user.target",
+	}
+	for _, n := range wantNeedles {
+		if !contains(string(unit), n) {
+			t.Errorf("unit missing %q; content=\n%s", n, unit)
+		}
+	}
+
+	// systemctl was invoked: daemon-reload, enable, start (or
+	// enable --now). The stub recorded "$*" per invocation.
+	stubLog, err := os.ReadFile(filepath.Join(root, "systemctl.log"))
+	if err != nil {
+		t.Fatalf("read systemctl log: %v", err)
+	}
+	stub := string(stubLog)
+	for _, want := range []string{"daemon-reload", "enable", "uknomi-agent"} {
+		if !contains(stub, want) {
+			t.Errorf("systemctl never called with %q; log=\n%s", want, stub)
+		}
+	}
+}

@@ -125,4 +125,38 @@ cat > "${runtime_dir}/agent-config.json" <<JSON
 JSON
 chmod 644 "${runtime_dir}/agent-config.json"
 
+# Install the agent binary at /usr/local/bin (755).
+bin_dir="${ROOT}/usr/local/bin"
+mkdir -p "$bin_dir"
+install -m 0755 "$CP_AGENT_BIN_SRC" "${bin_dir}/uknomi-agent"
+
+# Write the systemd unit. KeepAlive maps to Restart=always; the agent
+# reads its full config from the JSON file, so ExecStart carries only
+# the binary path + --config.
+unit_dir="${ROOT}/etc/systemd/system"
+mkdir -p "$unit_dir"
+cat > "${unit_dir}/uknomi-agent.service" <<UNIT
+[Unit]
+Description=uKnomi Control Plane agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/uknomi-agent --config /etc/uknomi/agent-config.json
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+chmod 644 "${unit_dir}/uknomi-agent.service"
+
+# daemon-reload picks up the new unit, then enable + start (or restart
+# if the agent was already running from a prior install).
+systemctl daemon-reload
+systemctl enable uknomi-agent.service
+systemctl restart uknomi-agent.service
+
 echo "enrolled ${device_id}"
