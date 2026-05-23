@@ -23,6 +23,13 @@ Every CloudWatch alarm in `infra/terraform-deploy/alarms.tf` carries an `alarm_d
 | `uknomi-cp-enrollment-ratelimit-trip` | Any `ratelimit.trip` line in 5 min | [enrollment-ratelimit-trip.md](enrollment-ratelimit-trip.md) |
 | `uknomi-cp-hostname-anomaly` | Any `audit.enrollment.anomaly` in 5 min | [hostname-anomaly.md](hostname-anomaly.md) |
 
+## #28 audit-mirror alarms
+
+| Alarm | Trigger | Runbook |
+|---|---|---|
+| `uknomi-cp-audit-mirror-failure` | Any `"audit-mirror failed"` log line in 5 min | [audit-mirror.md](audit-mirror.md) |
+| `uknomi-cp-audit-mirror-stale` | No `"audit-mirror completed"` line in 25 hours | [audit-mirror.md](audit-mirror.md) |
+
 The #25-baseline runbooks are marked TODO — they were built before this directory existed and were never written up. File an issue or fold them into the next on-call shadow shift.
 
 ## Verification

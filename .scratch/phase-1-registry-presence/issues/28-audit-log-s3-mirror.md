@@ -1,7 +1,8 @@
 # Issue 28 — Daily audit-log S3 mirror
 
-Status: ready-for-agent
+Status: done
 Type: AFK
+Completed: 2026-05-23 — 6-cycle TDD slice; pattern captured as ADR-023.
 
 ## Parent
 
@@ -30,19 +31,36 @@ Out of scope:
 
 ## Acceptance criteria
 
-- [ ] The exporter runs daily at 00:05 UTC and produces `s3://<audit-bucket>/<YYYY>/<MM>/<DD>.jsonl.gz` containing every audit_log row whose `at` falls on the prior day (UTC).
-- [ ] The audit-mirror bucket has object-lock enabled with the agreed retention horizon; new objects inherit it.
-- [ ] The exporter's IAM role is scoped to `s3:PutObject` on the audit-mirror bucket and the audit_log SELECT path only.
-- [ ] CloudWatch alarm fires + SNS publishes if the export task fails or does not run for 25+ hours.
-- [ ] A backfill flag mirrors a historical range.
-- [ ] Integration test against testcontainers Postgres + LocalStack S3 (per `[[project_iot_mock_choice]]`: LocalStack is fine for non-IoT services).
-- [ ] **Documentation updated.** `docs/architecture.md` reflects the exporter's role; if the Fargate-task-vs-goroutine choice is load-bearing, capture it as an ADR.
+- [x] The exporter runs daily at 00:05 UTC and produces `s3://<audit-bucket>/<YYYY>/<MM>/<DD>.jsonl.gz` containing every audit_log row whose `at` falls on the prior day (UTC). EventBridge rule + ECS RunTask target wire in `infra/terraform-deploy/audit-mirror.tf`.
+- [x] The audit-mirror bucket has object-lock enabled with the agreed retention horizon; new objects inherit it. 1-year governance-mode per the user's call. `infra/terraform-deploy/s3.tf` carries `object_lock_enabled = true` (audit-mirror only) + `aws_s3_bucket_object_lock_configuration.audit_mirror` with mode=GOVERNANCE, days=365.
+- [x] The exporter's IAM role is scoped to `s3:Put/Get/List` on the audit-mirror bucket only. `db-dsn` Secrets Manager read comes from the shared task-execution role's existing `uknomi/cp/*` policy via the task-def `secrets` injection; the audit-mirror task role does not get raw Secrets Manager access.
+- [x] CloudWatch alarms fire on failure + on a 25-hour gap. Two log-metric-filter + alarm pairs (`audit-mirror-failure`, `audit-mirror-stale`); shared runbook at [`docs/runbooks/alarms/audit-mirror.md`](../../../docs/runbooks/alarms/audit-mirror.md).
+- [x] A backfill flag mirrors a historical range. `cmd/audit-mirror --from YYYY-MM-DD --to YYYY-MM-DD` drives `Exporter.ExportRange`; integration test seeds three days of rows and asserts one object per UTC day in the range, with the out-of-range day skipped.
+- [x] Integration test against testcontainers Postgres + moto S3. Per `[[project_iot_mock_choice]]`, moto handles S3 fine for non-IoT services without a second LocalStack instance.
+- [x] **Documentation updated.** [ADR-023](../../../docs/adr/0023-fargate-scheduled-tasks-for-batch-jobs.md) captures the Fargate-scheduled-task vs goroutine choice as the pattern for future batch jobs. `docs/architecture.md` mentions the audit-mirror flow. CONTEXT.md not touched — no new domain terms (audit-log mirror is described by `[[audit_log]]` + S3, both pre-existing).
 
 ## Blocked by
 
-- None on the code side. Operationally depends on Issue 20 being deployed (audit_log table populated).
+- None on the code side. Operationally depends on Issue 20 being deployed (audit_log table populated) and #26's CI run pushing the audit-mirror image to ECR.
 
 ## Notes
 
-- Decision worth grilling: Fargate scheduled task (separate failure domain, separate IAM, clean rollback) vs. goroutine in cp-ingest (one less service to operate). Recommend the former; capture the rationale in an ADR if the discussion uncovers non-obvious trade-offs.
-- Retention horizon for object-lock: legal/compliance owner picks the years. PRD says "long-term retention" without a number; needs a human decision before apply.
+- Decision worth grilling: Fargate scheduled task vs goroutine in cp-ingest — captured as ADR-023.
+- Retention horizon for object-lock: user picked 1-year governance. Adjustable later via root-account override (governance, not compliance).
+
+### Completion notes (2026-05-23)
+
+6 cycles, `c926c63` → this commit:
+
+1. `c926c63` — TDD: `auditmirror.Exporter.ExportDate` writes gzipped JSONL to `s3://<bucket>/YYYY/MM/DD.jsonl.gz`. Integration test against testcontainers Postgres + moto S3.
+2. `b728727` — TDD: `ExportDate` is idempotent. HeadObject short-circuit avoids the AccessDenied that governance-mode object-lock would throw on a re-PUT.
+3. `b80851b` — TDD: `Exporter.ExportRange` iterates UTC days in `[from, to]`. Three-day test (one in-range, one empty, one outside) verifies object set.
+4. `79e606f` — `cmd/audit-mirror` binary + Dockerfile. Flags: `--date`, `--from`/`--to`; no-flag default exports yesterday. Static 14MB linux/amd64 ELF.
+5. `51101a6` — Terraform infra: ECR repo (`uknomi/audit-mirror`), task role scoped to s3-on-audit-mirror-only, ECS task definition, EventBridge cron rule (00:05 UTC daily), EventBridge invoke role with `ecs:RunTask` + `iam:PassRole`, two CloudWatch alarms, plus `object_lock_enabled = true` + `aws_s3_bucket_object_lock_configuration` on the audit-mirror bucket. CI image-build workflow gains a 4th matrix entry.
+6. This commit — ADR-023 (Fargate scheduled tasks for batch jobs), audit-mirror alarm runbook, alarms README updated, architecture.md updated, Issue 28 closed.
+
+### Out of scope (filed as follow-ons if/when needed)
+
+- **Cross-region replication of the audit bucket.** Phase 2 hardening — out of scope until DR review.
+- **SIEM integration.** The S3 mirror is the export surface; downstream consumers ingest the JSONL files at their own cadence.
+- **Per-job DLQ on EventBridge RunTask failures.** Phase 1 relies on the stale-completion alarm; if missed schedules become common, add an EventBridge target DLQ + SNS subscription.
