@@ -2,15 +2,14 @@
 # control.uknomi.com hostname. No secrets needed; the dashboard is a thin
 # Next.js client that talks to cp-api at https://api.control.uknomi.com.
 #
-# Caveat for the real image: NEXT_PUBLIC_API_URL is baked in at Next.js
-# build time, not read at runtime — so the CI in #02 must build the
-# dashboard image with NEXT_PUBLIC_API_URL=https://api.control.uknomi.com.
-# Setting it as a Fargate env var (below) is a no-op for the bundled
-# client; it is kept here as documentation of the expected value.
+# NEXT_PUBLIC_API_URL is baked in at Next.js build time, not read at
+# runtime — the build-images workflow (#26) passes it as a build arg so
+# the baked value matches the deploy. The env var below is kept as
+# documentation of the expected value.
 
 resource "aws_lb_target_group" "dashboard" {
   name        = "uknomi-cp-dashboard"
-  port        = 8080
+  port        = 3000
   protocol    = "HTTP"
   target_type = "ip"
   vpc_id      = aws_vpc.main.id
@@ -21,7 +20,7 @@ resource "aws_lb_target_group" "dashboard" {
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 3
-    matcher             = "200-399"
+    matcher             = "200"
   }
 
   tags = { Name = "uknomi-cp-dashboard" }
@@ -55,11 +54,11 @@ resource "aws_ecs_task_definition" "dashboard" {
   container_definitions = jsonencode([
     {
       name      = "dashboard"
-      image     = "public.ecr.aws/nginx/nginx-unprivileged:latest" # placeholder; CI (#02) replaces with ECR
+      image     = "${aws_ecr_repository.main["dashboard"].repository_url}:${var.image_tag}"
       essential = true
 
       portMappings = [{
-        containerPort = 8080 # placeholder; real dashboard image will listen on 3000 — update here when CI lands
+        containerPort = 3000
         protocol      = "tcp"
       }]
 
@@ -97,7 +96,7 @@ resource "aws_ecs_service" "dashboard" {
   load_balancer {
     target_group_arn = aws_lb_target_group.dashboard.arn
     container_name   = "dashboard"
-    container_port   = 8080
+    container_port   = 3000
   }
 
   depends_on = [aws_lb_listener_rule.dashboard]

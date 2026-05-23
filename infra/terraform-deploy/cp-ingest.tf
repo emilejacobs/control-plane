@@ -2,9 +2,6 @@
 # Fargate service that drains them. Both halves come from existing modules
 # next door in the IoT Core root (`infra/terraform/modules/`), so this file
 # is mostly wiring.
-#
-# desired_count = 0 by design: cp-ingest has no real container image until
-# #02's CI pushes one. Bump to 1 after the first image lands in ECR.
 
 # ── Heartbeat pipeline ──────────────────────────────────────────────────────
 
@@ -42,7 +39,7 @@ module "sqs_lifecycle" {
 module "cp_ingest" {
   source = "../terraform/modules/cp-ingest-service"
 
-  image  = "public.ecr.aws/nginx/nginx-unprivileged:latest" # placeholder; CI (#02) replaces
+  image  = "${aws_ecr_repository.main["cp-ingest"].repository_url}:${var.image_tag}"
   region = var.region
 
   cluster_arn        = aws_ecs_cluster.main.arn
@@ -58,8 +55,7 @@ module "cp_ingest" {
 
   db_dsn_secret_arn = aws_secretsmanager_secret.db_dsn.arn
 
-  # Start dormant; flip to 1 after the real image lands.
-  desired_count = 0
+  desired_count = 1
 
   tags = var.tags
 }

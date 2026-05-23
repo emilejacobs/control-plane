@@ -96,3 +96,9 @@ variable "github_image_publish_branch" {
   type        = string
   default     = "main"
 }
+
+variable "image_tag" {
+  description = "Container image tag pulled by every CP service (cp-api, cp-ingest, dashboard). Defaults to \"latest\" so a fresh apply tracks whatever the build-images workflow most recently pushed; pass a specific git SHA via -var image_tag=<sha> to pin a deploy (and to roll back to the prior SHA on apply)."
+  type        = string
+  default     = "latest"
+}

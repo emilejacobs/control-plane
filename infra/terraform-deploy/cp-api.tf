@@ -1,12 +1,7 @@
 # cp-api service — target group, listener rule, task definition, ECS
-# service. Placeholder image until the image-ref flip slice replaces it
-# with the ECR-hosted cp-api image (#26 ships the build/push pipeline).
-# The ALB matcher accepts any non-5xx so the placeholder's 404 on /healthz
-# still passes the health check.
-#
-# The cp-api /healthz handler returning 200 already exists (#26); the
-# matcher tightens to "200" in the same slice that flips the image
-# reference off the placeholder.
+# service. Image is pulled from ECR (#26's build/push workflow) at the
+# tag named by var.image_tag; the ALB target group health-checks the
+# /healthz handler (#26) with a strict 200 matcher.
 
 resource "aws_lb_target_group" "cp_api" {
   name        = "uknomi-cp-api"
@@ -21,7 +16,7 @@ resource "aws_lb_target_group" "cp_api" {
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 3
-    matcher             = "200-499"
+    matcher             = "200"
   }
 
   tags = { Name = "uknomi-cp-api" }
@@ -55,7 +50,7 @@ resource "aws_ecs_task_definition" "cp_api" {
   container_definitions = jsonencode([
     {
       name      = "cp-api"
-      image     = "public.ecr.aws/nginx/nginx-unprivileged:latest" # placeholder; CI (#02) replaces with ECR
+      image     = "${aws_ecr_repository.main["cp-api"].repository_url}:${var.image_tag}"
       essential = true
 
       portMappings = [{
