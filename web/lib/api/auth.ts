@@ -18,6 +18,21 @@ interface TokenPair {
   refresh_token: string;
 }
 
+export interface FirstRunStatus {
+  initialized: boolean;
+}
+
+// getFirstRunStatus polls the unauthenticated GET /auth/first-run so the
+// root page can decide whether to route a visitor to the claim flow vs.
+// rendering the overview. Cheap (one DB count) and safe pre-auth.
+export async function getFirstRunStatus(): Promise<FirstRunStatus> {
+  const res = await apiRequest("/auth/first-run", { method: "GET" });
+  if (!res.ok) {
+    throw new ApiError(res.status, "first-run status failed");
+  }
+  return (await res.json()) as FirstRunStatus;
+}
+
 // firstRun claims the first-run admin account. On success the returned token
 // pair is stored, leaving the dashboard authenticated as the new admin.
 export async function firstRun(email: string, password: string): Promise<void> {

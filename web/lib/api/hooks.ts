@@ -3,7 +3,13 @@
 "use client";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { firstRun, login, enrollTotp, type LoginInput } from "./auth";
+import {
+  firstRun,
+  getFirstRunStatus,
+  login,
+  enrollTotp,
+  type LoginInput,
+} from "./auth";
 import { getDevices, getDevice } from "./devices";
 
 interface Credentials {
@@ -15,6 +21,18 @@ interface Credentials {
 export function useFirstRun() {
   return useMutation({
     mutationFn: ({ email, password }: Credentials) => firstRun(email, password),
+  });
+}
+
+// useFirstRunStatus reports whether the system has been initialized. The
+// root page mounts it to auto-redirect a visitor to the claim page when
+// the operators table is empty. Cache long enough that login + every
+// already-authenticated route doesn't re-fetch on every render.
+export function useFirstRunStatus() {
+  return useQuery({
+    queryKey: ["first-run-status"],
+    queryFn: getFirstRunStatus,
+    staleTime: 60_000,
   });
 }
 
