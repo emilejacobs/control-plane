@@ -65,6 +65,11 @@ export interface Device {
   // report. Empty array for a device that has never reported (the
   // dashboard distinguishes "no report yet" from a missing field).
   services: DeviceService[];
+  // Phase 2 slice 2: per-device allow-list + cadence override, plus
+  // the last-applied tracking the cmd-result handler stamps. The
+  // EditServicesModal reads + writes this block; the panel chrome
+  // shows "(default)" vs "(overridden)" derived from allowListOverride.
+  serviceConfig: ServiceConfig;
 }
 
 // DeviceService is one row from the device_services table — what the
@@ -74,6 +79,18 @@ export interface DeviceService {
   state: "running" | "stopped" | "unknown";
   stateSince: string;   // RFC3339
   lastReported: string; // RFC3339
+}
+
+// ServiceConfig is the per-device override block. null fields mean
+// "no override" (agent uses its bundled defaults); a non-null
+// allowListOverride of `[]` means "track nothing" — distinct from null.
+// lastAppliedAt is null until the agent has ACKed the most recent
+// (or any) config.update.
+export interface ServiceConfig {
+  allowListOverride: string[] | null;
+  intervalOverride: string | null;
+  lastAppliedAt: string | null; // RFC3339
+  lastAppliedCorrelationId: string | null;
 }
 
 interface DeviceWire {
@@ -92,6 +109,7 @@ interface DeviceWire {
   site_name: string | null;
   client_name: string | null;
   services: DeviceServiceWire[];
+  service_config: ServiceConfigWire;
 }
 
 interface DeviceServiceWire {
@@ -99,6 +117,13 @@ interface DeviceServiceWire {
   state: string;
   state_since: string;
   last_reported: string;
+}
+
+interface ServiceConfigWire {
+  allow_list_override: string[] | null;
+  interval_override: string | null;
+  last_applied_at: string | null;
+  last_applied_correlation_id: string | null;
 }
 
 // getDevice fetches one device's full record from GET /devices/{id}.
@@ -132,5 +157,55 @@ export async function getDevice(id: string): Promise<Device> {
       stateSince: s.state_since,
       lastReported: s.last_reported,
     })),
+    serviceConfig: {
+      allowListOverride: d.service_config?.allow_list_override ?? null,
+      intervalOverride: d.service_config?.interval_override ?? null,
+      lastAppliedAt: d.service_config?.last_applied_at ?? null,
+      lastAppliedCorrelationId:
+        d.service_config?.last_applied_correlation_id ?? null,
+    },
   };
+}
+
+// putServiceConfig pushes a per-device allow-list + cadence override
+// down to the agent via PUT /devices/{id}/service-config (Phase 2
+// slice 2). Both fields are optional — pass null to clear, an array
+// (possibly empty for "track nothing") or string to set. CP persists,
+// publishes config.update on the cmd channel, returns 202 + the
+// correlation_id the caller polls /devices/{id} against until
+// serviceConfig.lastAppliedCorrelationId matches.
+export interface ServiceConfigUpdate {
+  serviceAllowList?: string[] | null;
+  serviceStatusInterval?: string | null;
+}
+
+export async function putServiceConfig(
+  id: string,
+  update: ServiceConfigUpdate,
+): Promise<{ correlationId: string }> {
+  const body: Record<string, unknown> = {};
+  if (update.serviceAllowList !== undefined) {
+    body.service_allow_list = update.serviceAllowList;
+  }
+  if (update.serviceStatusInterval !== undefined) {
+    body.service_status_interval = update.serviceStatusInterval;
+  }
+  const res = await apiRequest(`/devices/${id}/service-config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 400) {
+    const detail = (await res.json().catch(() => ({}))) as {
+      code?: string;
+      message?: string;
+    };
+    const code = detail.code ? ` (${detail.code})` : "";
+    throw new ApiError(400, `${detail.message ?? "invalid service config"}${code}`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to update service config");
+  }
+  const payload = (await res.json()) as { correlation_id: string };
+  return { correlationId: payload.correlation_id };
 }

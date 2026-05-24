@@ -1,12 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import { useDevice, useNow } from "../../../lib/api/hooks";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
+import { EditServicesModal } from "../../../components/EditServicesModal";
 import { Topbar } from "../../../components/ui/Topbar";
 import { Card } from "../../../components/ui/Card";
 import { KV } from "../../../components/ui/KV";
@@ -31,6 +34,8 @@ export default function DevicePage() {
   const device = useDevice(id);
   const now = useNow();
   const d = device.data;
+  const queryClient = useQueryClient();
+  const [editingServices, setEditingServices] = useState(false);
 
   // Cert "pill" tone derived from days remaining — mirrors the band logic
   // in CertExpiryIndicator without duplicating its text shape.
@@ -188,9 +193,45 @@ export default function DevicePage() {
 
             <div style={{ height: 16 }} />
 
-            <Card label="Services">
+            <Card
+              label={
+                <span>
+                  Services{" "}
+                  <span className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
+                    {d.serviceConfig.allowListOverride !== null
+                      ? "(overridden)"
+                      : "(default)"}
+                  </span>
+                </span>
+              }
+              actions={
+                <button
+                  type="button"
+                  onClick={() => setEditingServices(true)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    background: "transparent",
+                    border: "1px solid var(--line, #ccc)",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  Edit
+                </button>
+              }
+            >
               <ServicesPanel services={d.services} now={now} />
             </Card>
+            {editingServices && d && (
+              <EditServicesModal
+                device={d}
+                onClose={() => setEditingServices(false)}
+                onApplied={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["device", id] });
+                }}
+              />
+            )}
 
             <div style={{ height: 16 }} />
 
