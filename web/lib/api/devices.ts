@@ -61,6 +61,19 @@ export interface Device {
   enrolledAt: string;
   siteName: string | null;
   clientName: string | null;
+  // Phase 2: per-service state from the agent's last service-status
+  // report. Empty array for a device that has never reported (the
+  // dashboard distinguishes "no report yet" from a missing field).
+  services: DeviceService[];
+}
+
+// DeviceService is one row from the device_services table — what the
+// per-device Services panel renders.
+export interface DeviceService {
+  name: string;
+  state: "running" | "stopped" | "unknown";
+  stateSince: string;   // RFC3339
+  lastReported: string; // RFC3339
 }
 
 interface DeviceWire {
@@ -78,6 +91,14 @@ interface DeviceWire {
   enrolled_at: string;
   site_name: string | null;
   client_name: string | null;
+  services: DeviceServiceWire[];
+}
+
+interface DeviceServiceWire {
+  name: string;
+  state: string;
+  state_since: string;
+  last_reported: string;
 }
 
 // getDevice fetches one device's full record from GET /devices/{id}.
@@ -105,5 +126,11 @@ export async function getDevice(id: string): Promise<Device> {
     enrolledAt: d.enrolled_at,
     siteName: d.site_name,
     clientName: d.client_name,
+    services: (d.services ?? []).map((s) => ({
+      name: s.name,
+      state: s.state as DeviceService["state"],
+      stateSince: s.state_since,
+      lastReported: s.last_reported,
+    })),
   };
 }

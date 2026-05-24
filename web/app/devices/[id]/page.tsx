@@ -6,6 +6,7 @@ import { useDevice, useNow } from "../../../lib/api/hooks";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
+import { ServicesPanel } from "../../../components/ServicesPanel";
 import { Topbar } from "../../../components/ui/Topbar";
 import { Card } from "../../../components/ui/Card";
 import { KV } from "../../../components/ui/KV";
@@ -183,6 +184,12 @@ export default function DevicePage() {
                   )}
                 </div>
               </div>
+            </Card>
+
+            <div style={{ height: 16 }} />
+
+            <Card label="Services">
+              <ServicesPanel services={d.services} now={now} />
             </Card>
 
             <div style={{ height: 16 }} />
