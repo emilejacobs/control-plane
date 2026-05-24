@@ -30,6 +30,13 @@ resource "aws_iot_policy" "agent" {
           "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/cmd",
           "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/cmd-result",
           "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/telemetry",
+          # Phase 2 service-status reports: the agent's
+          # ServiceStatusPublisher emits a typed servicestatus.Report on
+          # this topic every 5 minutes. AWS IoT silently drops publishes
+          # to disallowed topics (broker-layer PUBACKs still succeed),
+          # so omitting this line was the cause of "agent looks healthy,
+          # cp-ingest sees nothing" in the Wave 0 bench upgrade.
+          "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/service-status",
         ]
       },
       {
