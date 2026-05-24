@@ -44,7 +44,10 @@ func (c *ServiceStatusCollector) Collect(ctx context.Context) Report {
 	now := c.Now()
 	services := make([]ServiceState, 0, len(c.AllowList))
 	for _, name := range c.AllowList {
-		st, _ := c.Backend.Status(ctx, name)
+		st, err := c.Backend.Status(ctx, name)
+		if err != nil {
+			st = service.StateUnknown
+		}
 		services = append(services, ServiceState{
 			Name:       name,
 			State:      st,
