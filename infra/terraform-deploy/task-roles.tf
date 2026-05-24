@@ -63,6 +63,18 @@ data "aws_iam_policy_document" "cp_api" {
       values   = ["secretsmanager.${var.region}.amazonaws.com"]
     }
   }
+  # Phase 2 slice 2: PUT /devices/{id}/service-config publishes a
+  # config.update envelope on devices/{id}/cmd via iotdataplane. Scope
+  # restricted to the cmd topic for the devices/* prefix — cp-api has
+  # no business publishing on telemetry / service-status / cmd-result
+  # paths (those flow agent → cp).
+  statement {
+    sid     = "IoTPublishCmd"
+    actions = ["iot:Publish"]
+    resources = [
+      "arn:aws:iot:${var.region}:${data.aws_caller_identity.current.account_id}:topic/devices/*/cmd",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_api" {

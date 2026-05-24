@@ -103,3 +103,18 @@ variable "service_status_dlq_url" {
   type        = string
   default     = ""
 }
+
+# Phase 2 slice 2 cmd-result feedback (per-device allow-list overrides).
+# Empty defaults keep cp-ingest's cmd-result consumer disabled until the
+# deploy root wires the new sqs-ingest module + IoT Rule.
+variable "cmd_result_queue_url" {
+  description = "SQS URL of the cmd-result queue (sqs-ingest module output queue_url). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "cmd_result_dlq_url" {
+  description = "SQS URL of the cmd-result dead-letter queue (sqs-ingest module output dlq_url). Optional."
+  type        = string
+  default     = ""
+}

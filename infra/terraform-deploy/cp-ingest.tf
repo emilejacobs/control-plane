@@ -59,6 +59,27 @@ module "sqs_service_status" {
   tags = var.tags
 }
 
+# ── Cmd-result pipeline (Phase 2 slice 2, allow-list overrides) ────────────
+
+module "sqs_cmd_result" {
+  source = "../terraform/modules/sqs-ingest"
+
+  name          = "uknomi-cp-cmd-result"
+  iot_rule_name = "uknomi_cp_cmd_result"
+  # Agent publishes envelope.Result JSON on devices/{device_id}/cmd-result
+  # after handling any cmd. The IoT Rule injects device_id from topic(2)
+  # since the on-wire envelope doesn't natively carry it (the topic does).
+  # cp-ingest's CmdResultIngester routes by Type field — slice 2 only
+  # handles "config.update"; other types are silently ignored so Phase 3
+  # can add per-type handlers later without breaking flow.
+  #
+  # Cadence is operator-driven (one cmd-result per PUT to /service-config),
+  # which is tens per day at fleet scale. Module defaults are fine.
+  iot_sql = "SELECT *, topic(2) as device_id FROM 'devices/+/cmd-result'"
+
+  tags = var.tags
+}
+
 # ── cp-ingest Fargate service ───────────────────────────────────────────────
 
 module "cp_ingest" {
@@ -80,6 +101,9 @@ module "cp_ingest" {
 
   service_status_queue_url = module.sqs_service_status.queue_url
   service_status_dlq_url   = module.sqs_service_status.dlq_url
+
+  cmd_result_queue_url = module.sqs_cmd_result.queue_url
+  cmd_result_dlq_url   = module.sqs_cmd_result.dlq_url
 
   db_dsn_secret_arn = aws_secretsmanager_secret.db_dsn.arn
 

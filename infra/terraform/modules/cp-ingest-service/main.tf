@@ -45,6 +45,10 @@ resource "aws_ecs_task_definition" "this" {
         # sqs-ingest instantiation lands.
         { name = "SERVICE_STATUS_QUEUE_URL", value = var.service_status_queue_url },
         { name = "SERVICE_STATUS_DLQ_URL", value = var.service_status_dlq_url },
+        # Phase 2 slice 2: cmd-result feedback. Same posture — empty
+        # disables the consumer; populating both turns it on.
+        { name = "CMD_RESULT_QUEUE_URL", value = var.cmd_result_queue_url },
+        { name = "CMD_RESULT_DLQ_URL", value = var.cmd_result_dlq_url },
       ]
 
       # The DSN carries the DB password — injected from Secrets Manager,
