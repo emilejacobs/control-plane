@@ -29,7 +29,12 @@ module "sqs_lifecycle" {
   # AWS IoT lifecycle events arrive on $aws/events/presence/{eventType}/{thingName}.
   # The rule extracts thing-name + event-type as top-level columns so the
   # lifecycle handler can fan out without re-parsing the topic.
-  iot_sql = "SELECT *, eventType as event_type, clientId as device_id FROM '$aws/events/presence/+/+'"
+  #
+  # newuuid() stamps each event with a correlation_id — AWS lifecycle events
+  # do not carry one of their own, and sqsconsumer.Consumer[T] rejects
+  # messages without one per ADR-011 (sending them to the DLQ). Omitting this
+  # clause produced the lifecycle-DLQ growth surfaced in Wave 0.
+  iot_sql = "SELECT *, eventType as event_type, clientId as device_id, newuuid() as correlation_id FROM '$aws/events/presence/+/+'"
 
   tags = var.tags
 }
