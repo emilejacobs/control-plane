@@ -20,7 +20,7 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 010 | [Local credentials only; drop Entra ID, NextAuth, Cognito](./adr/0010-local-credentials-only.md) | Accepted (2026-05-18)                 |
 | 011 | [Structured JSON logs with end-to-end correlation IDs](./adr/0011-structured-logs-correlation-ids.md) | Accepted (2026-05-18)             |
 | 012 | [Test policy — standard pyramid + idempotency + CI gate](./adr/0012-test-policy.md)              | Accepted (2026-05-18)                 |
-| 013 | [Agent self-update in Phase 3 with auto-rollback; 1-year Phase 1 cert TTL](./adr/0013-agent-self-update-phase-3.md) | Accepted (2026-05-18) |
+| 013 | [Agent self-update in Phase 3 with auto-rollback; 1-year Phase 1 cert TTL](./adr/0013-agent-self-update-phase-3.md) | Accepted (2026-05-18) — amended by ADR-026 (cert TTL deferred to Phase 3) |
 | 014 | [Bootstrap token distribution via S3](./adr/0014-bootstrap-token-via-s3.md)                      | Superseded by ADR-017 (2026-05-21)    |
 | 015 | [Postgres multi-AZ from day one](./adr/0015-postgres-multi-az.md)                                | Accepted (2026-05-18) — amended by ADR-022 (Wave 0 single-AZ window) |
 | 016 | [Telemetry retention — 30 days hot / 1 year cold](./adr/0016-telemetry-retention.md)             | Accepted (2026-05-18)                 |
@@ -33,3 +33,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 023 | [Fargate scheduled tasks for periodic batch jobs](./adr/0023-fargate-scheduled-tasks-for-batch-jobs.md) | Accepted (2026-05-23)         |
 | 024 | [Dashboard persists tokens in `localStorage` (Phase 1)](./adr/0024-dashboard-token-persistence-localstorage.md) | Accepted (2026-05-24)         |
 | 025 | [Direct-to-main pushes under AFK-agent dev](./adr/0025-direct-to-main-pushes-under-afk-agent-dev.md) | Accepted (2026-05-24)         |
+| 026 | [Phase 1 cert TTL deferral to Phase 3](./adr/0026-phase-1-cert-ttl-deferral.md) | Accepted (2026-05-24) — amends ADR-013 |
