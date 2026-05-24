@@ -17,6 +17,9 @@
 //	AWS_REGION                 AWS region (default from the credentials chain)
 //	AWS_ENDPOINT_URL           override the AWS service endpoint (dev/moto only)
 //	SERVICE_STATUS_QUEUE_URL   SQS URL of the service-status queue (Phase 2)
+//	SERVICE_STATUS_DLQ_URL     SQS URL of the service-status DLQ (Phase 2)
+//	CMD_RESULT_QUEUE_URL       SQS URL of the cmd-result queue (Phase 2 slice 2)
+//	CMD_RESULT_DLQ_URL         SQS URL of the cmd-result DLQ (Phase 2 slice 2)
 //	SERVICE_STATUS_DLQ_URL     dead-letter queue for service-status (Phase 2)
 //
 // SERVICE_STATUS_* are optional so a deploy that lands the code before
@@ -134,11 +137,30 @@ func run(logger *slog.Logger) error {
 		)
 	}
 
+	// Optional cmd-result consumer (Phase 2 slice 2). Routes config.update
+	// ACKs to the registry's RecordServiceConfigApplied. Skipped silently
+	// while the queue / IoT Rule are being provisioned, same posture as
+	// the service-status consumer above.
+	var cmdResultConsumer *sqsconsumer.Consumer[ingest.CmdResult]
+	cmdResultQueueURL := os.Getenv("CMD_RESULT_QUEUE_URL")
+	cmdResultDLQURL := os.Getenv("CMD_RESULT_DLQ_URL")
+	if cmdResultQueueURL != "" && cmdResultDLQURL != "" {
+		crIngester := ingest.NewCmdResultIngester(reg, nil)
+		crIngester.Logger = logger
+		cmdResultConsumer = sqsconsumer.NewConsumer[ingest.CmdResult](
+			sqsClient,
+			crIngester.Handle,
+			sqsconsumer.Config{QueueURL: cmdResultQueueURL, DLQURL: cmdResultDLQURL, Logger: logger, Audit: auditW},
+		)
+	}
+
 	logger.Info("cp-ingest starting",
 		"heartbeat_queue", heartbeatQueueURL,
 		"lifecycle_queue", lifecycleQueueURL,
 		"service_status_queue", serviceStatusQueueURL,
-		"service_status_enabled", serviceStatusConsumer != nil)
+		"service_status_enabled", serviceStatusConsumer != nil,
+		"cmd_result_queue", cmdResultQueueURL,
+		"cmd_result_enabled", cmdResultConsumer != nil)
 
 	// Run all consumers + the sweeper until the signal context is cancelled,
 	// then wait for a clean drain. The consumers report drain errors; the
@@ -148,6 +170,9 @@ func run(logger *slog.Logger) error {
 	if serviceStatusConsumer != nil {
 		workers++
 	}
+	if cmdResultConsumer != nil {
+		workers++
+	}
 	errs := make(chan error, workers)
 	wg.Add(workers)
 	go func() { defer wg.Done(); errs <- heartbeatConsumer.Run(ctx) }()
@@ -155,6 +180,9 @@ func run(logger *slog.Logger) error {
 	go func() { defer wg.Done(); sweeper.Run(ctx) }()
 	if serviceStatusConsumer != nil {
 		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
+	}
+	if cmdResultConsumer != nil {
+		go func() { defer wg.Done(); errs <- cmdResultConsumer.Run(ctx) }()
 	}
 	wg.Wait()
 	close(errs)
