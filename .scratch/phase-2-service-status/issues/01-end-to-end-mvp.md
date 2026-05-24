@@ -35,17 +35,17 @@ A full vertical slice: agent collects service state on a 5-min cadence, publishe
 
 **Storage (`internal/cp/storage/migrations/`):**
 
-- New Goose migration `00N_device_services.sql`:
+- New Goose migration `011_device_services.sql`:
   ```sql
   CREATE TABLE device_services (
     device_id     uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     service_name  text NOT NULL,
-    state         text NOT NULL,  -- running | stopped | failed | unknown
+    state         text NOT NULL,  -- running | stopped | unknown (Phase 3 may add 'failed' — see PRD § Refinements)
     state_since   timestamptz NOT NULL,
     last_reported timestamptz NOT NULL,
     PRIMARY KEY (device_id, service_name)
   );
-  CREATE INDEX device_services_by_state ON device_services (state) WHERE state = 'failed';
+  CREATE INDEX device_services_stopped ON device_services (state) WHERE state = 'stopped';
   ```
 
 **cp-ingest (`internal/cp/ingest/`):**
@@ -71,9 +71,9 @@ A full vertical slice: agent collects service state on a 5-min cadence, publishe
 
 **Alarm (`infra/terraform-deploy/alarms.tf`):**
 
-- New log-metric-filter on cp-ingest log stream: count of `service-status` ingests that recorded a `failed` state (filter pattern `{ $.msg = "service-status.failed" }`).
-- New `aws_cloudwatch_metric_alarm` "uknomi-cp-service-failed": fires when the count > 0 over a 15-minute window.
-- New runbook `docs/runbooks/alarms/service-failed.md` explaining what to investigate.
+- New log-metric-filter on cp-ingest log stream: count of `service-status` ingests that recorded a `stopped` state (filter pattern `{ $.msg = "service-status.stopped" }`). Slice 1 uses `stopped` not `failed` per PRD § Refinements (the agent backend can't distinguish them in a single launchctl/systemctl call).
+- New `aws_cloudwatch_metric_alarm` "uknomi-cp-service-stopped": fires when the count > 0 over a 15-minute window.
+- New runbook `docs/runbooks/alarms/service-stopped.md` explaining what to investigate (including the known false-positive on operator-initiated stops).
 
 ### Out of scope
 

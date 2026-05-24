@@ -57,7 +57,13 @@ Pipeline mirrors heartbeat (`internal/cp/ingest/heartbeat.go` + `infra/terraform
 ## Open questions
 
 - **Initial default allow-list per OS.** Need to look at what's actually running on the Wave 0 bench Mac to pick a starting set. Talk to operations / read mac-mini-rollout install scripts for the canonical service set. Tracked in issue 01's blockers.
-- **Alarm threshold.** "Any `failed` service for > N minutes" is the obvious shape; N defaults to 15 min for slice 1, revisit after operating it for a few weeks.
+- **Alarm threshold.** Slice 1 alarm fires when the count of `stopped` services in the last 15-min window > 0 (see state-vocabulary note below). Refine after operating for a few weeks.
+
+## Refinements surfaced mid-implementation
+
+- **State vocabulary tightened to `running | stopped | unknown`** (was: + `failed`). Agent's existing `service.Backend` (`internal/service/backend_{darwin,linux}.go`) doesn't distinguish "intentionally stopped" from "failed" in a single launchctl/systemctl call — both look the same. Adding `StateFailed` would require parsing launchd plists / systemctl `--state=failed` output, which is multi-day work that belongs in Phase 3 alongside service-control commands (which already need to read exit codes).
+  - **Alarm implication:** fires on `stopped` not `failed`, with the known false-positive risk on operator-initiated stops. Acceptable for slice 1.
+  - **Schema implication:** `device_services.state` column is `text` (not an enum) so the future `failed` value lands without a migration when Phase 3 extends the backend.
 
 ## Success criteria for the PRD as a whole (all slices)
 
