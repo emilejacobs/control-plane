@@ -8,29 +8,19 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
 
-// Report is the JSON payload published on devices/{id}/service-status.
-// Cp-ingest consumes it as the typed shape; the agent's
-// ServiceStatusCollector produces it.
-type Report struct {
-	DeviceID      string         `json:"device_id"`
-	CorrelationID string         `json:"correlation_id"`
-	ReportedAt    time.Time      `json:"reported_at"`
-	Services      []ServiceState `json:"services"`
-}
-
-// ServiceState is the per-service entry in Report.Services. State_since is
-// best-effort: the collector tracks last-observed state in memory across
-// calls, so a process restart resets state_since to "now" for every
-// service. Authoritative since-tracking would need disk persistence or
-// OS-level support that's inconsistent across launchd/systemd.
-type ServiceState struct {
-	Name       string        `json:"name"`
-	State      service.State `json:"state"`
-	StateSince time.Time     `json:"state_since"`
-}
+// Report and ServiceState are the wire types for the service-status
+// reporting flow. They live in internal/protocol/servicestatus so the
+// agent (producer) and cp-ingest (consumer) share one definition.
+// Re-exported here as type aliases so existing telemetry callers keep
+// the familiar package.Type spelling.
+type (
+	Report       = servicestatus.Report
+	ServiceState = servicestatus.ServiceState
+)
 
 // ServiceStatusCollector queries service.Backend for each name in
 // AllowList and produces a Report. It does not loop on its own — the
