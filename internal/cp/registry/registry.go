@@ -7,6 +7,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -289,6 +290,101 @@ func (r *Registry) ListServices(ctx context.Context, deviceID string) ([]DeviceS
 		out = append(out, ds)
 	}
 	return out, rows.Err()
+}
+
+// ServiceConfig is the per-device override of the agent's service
+// allow-list + reporting cadence (Phase 2 slice 2). All four fields are
+// nilable — a fresh device row has all-nil semantics. LastApplied* are
+// stamped by the cmd-result handler when the agent ACKs a config.update;
+// nil = the override has been set but not yet confirmed applied (or no
+// override has ever been set).
+//
+// AllowListOverride distinguishes nil (no override; agent uses its
+// bundled list) from an empty slice ("track nothing"). The JSONB column
+// stores either SQL NULL or a JSON array literal — including the empty
+// literal `[]`.
+type ServiceConfig struct {
+	AllowListOverride        *[]string
+	IntervalOverride         *string
+	LastAppliedAt            *time.Time
+	LastAppliedCorrelationID *string
+}
+
+// GetServiceConfig returns the per-device override + last-applied
+// tracking. A non-UUID deviceID returns ErrDeviceNotFound. A row that
+// exists but has never had an override set returns a zero-valued
+// ServiceConfig (all fields nil).
+func (r *Registry) GetServiceConfig(ctx context.Context, deviceID string) (ServiceConfig, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ServiceConfig{}, ErrDeviceNotFound
+	}
+	var (
+		listRaw []byte
+		cfg     ServiceConfig
+	)
+	err := r.pool.QueryRow(ctx, `
+		SELECT service_allow_list_override,
+		       service_status_interval_override,
+		       service_config_last_applied_at,
+		       service_config_last_applied_corr_id
+		FROM devices
+		WHERE id = $1
+	`, deviceID).Scan(&listRaw, &cfg.IntervalOverride, &cfg.LastAppliedAt, &cfg.LastAppliedCorrelationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ServiceConfig{}, ErrDeviceNotFound
+		}
+		return ServiceConfig{}, fmt.Errorf("get service config: %w", err)
+	}
+	if listRaw != nil {
+		var list []string
+		if err := json.Unmarshal(listRaw, &list); err != nil {
+			return ServiceConfig{}, fmt.Errorf("decode allow-list override: %w", err)
+		}
+		// Preserve "[]" as an empty (non-nil) slice — operator
+		// explicitly chose to track nothing.
+		if list == nil {
+			list = []string{}
+		}
+		cfg.AllowListOverride = &list
+	}
+	return cfg, nil
+}
+
+// SetServiceConfig writes the per-device override. nil for either
+// pointer means "clear this override" (NULL in the column); a non-nil
+// pointer is the value to store. An empty slice via &[]string{} is a
+// meaningful override distinct from nil — see ServiceConfig.
+//
+// last_applied_* tracking is NOT touched by this method (it's the
+// operator-intent write); the cmd-result handler updates those fields
+// independently when the agent ACKs.
+func (r *Registry) SetServiceConfig(ctx context.Context, deviceID string, allowList *[]string, interval *string) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	var listJSON any // any so pgx writes SQL NULL for nil, JSONB literal for []byte
+	if allowList != nil {
+		raw, err := json.Marshal(*allowList)
+		if err != nil {
+			return fmt.Errorf("encode allow-list override: %w", err)
+		}
+		listJSON = raw
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET service_allow_list_override      = $2,
+		    service_status_interval_override = $3,
+		    updated_at                       = now()
+		WHERE id = $1
+	`, deviceID, listJSON, interval)
+	if err != nil {
+		return fmt.Errorf("set service config: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
 }
 
 // SetPresence records a device's online/offline state and the time it
