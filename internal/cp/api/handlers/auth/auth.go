@@ -56,6 +56,42 @@ func NewFirstRun(svc Service, auditW audit.Writer) *FirstRunHandler {
 	return &FirstRunHandler{svc: svc, audit: auditW}
 }
 
+// InitChecker reports whether the system has at least one operator. The
+// dashboard polls GET /auth/first-run on load to decide whether to route
+// the visitor to the first-run claim page vs. the login page.
+type InitChecker interface {
+	Initialized(ctx context.Context) (bool, error)
+}
+
+// FirstRunStatusHandler serves GET /auth/first-run. It is the read
+// counterpart of the POST claim endpoint and is intentionally
+// unauthenticated — the dashboard needs to call it before the operator
+// has any tokens.
+type FirstRunStatusHandler struct {
+	chk InitChecker
+}
+
+func NewFirstRunStatus(chk InitChecker) *FirstRunStatusHandler {
+	return &FirstRunStatusHandler{chk: chk}
+}
+
+type firstRunStatusResponse struct {
+	Initialized bool `json:"initialized"`
+}
+
+func (h *FirstRunStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log := cplog.FromContext(r.Context())
+	initialized, err := h.chk.Initialized(r.Context())
+	if err != nil {
+		log.Error("auth.first_run_status", "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(firstRunStatusResponse{Initialized: initialized})
+}
+
 type firstRunRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`

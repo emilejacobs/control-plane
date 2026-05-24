@@ -68,3 +68,62 @@ func TestLoginFailureWritesAuditEntry(t *testing.T) {
 // authn package renames it, this test fails fast at build time rather than
 // at runtime with a confusing assertion miss.
 var _ = errors.Is(authn.ErrInvalidCredentials, authn.ErrInvalidCredentials)
+
+// fakeInitChecker is the test double for auth.InitChecker. The dashboard
+// uses GET /auth/first-run to decide whether to route the operator to the
+// first-run page; the handler delegates the decision to InitChecker.
+type fakeInitChecker struct {
+	initialized bool
+	err         error
+}
+
+func (f fakeInitChecker) Initialized(context.Context) (bool, error) {
+	return f.initialized, f.err
+}
+
+func TestFirstRunStatusReturnsUninitialized(t *testing.T) {
+	h := auth.NewFirstRunStatus(fakeInitChecker{initialized: false})
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/first-run", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Errorf("Content-Type: got %q, want application/json", got)
+	}
+	want := `"initialized":false`
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("body: got %q, want substring %q", rec.Body.String(), want)
+	}
+}
+
+func TestFirstRunStatusReturnsInitialized(t *testing.T) {
+	h := auth.NewFirstRunStatus(fakeInitChecker{initialized: true})
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/first-run", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	want := `"initialized":true`
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("body: got %q, want substring %q", rec.Body.String(), want)
+	}
+}
+
+func TestFirstRunStatusPropagatesDbError(t *testing.T) {
+	h := auth.NewFirstRunStatus(fakeInitChecker{err: errors.New("db down")})
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/first-run", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
