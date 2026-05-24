@@ -1,25 +1,17 @@
 // Package configupdate implements the agent-side handler for the
-// downward `config.update` command (Phase 2 slice 2). The handler
-// validates a strict two-field payload (service_allow_list +
-// service_status_interval) — per ADR-028's blast-radius cap — and
-// delegates application to an Applier the agent wires in. Validation
-// rejects unknown fields so any drift from the whitelist is loud.
+// downward `config.update` command (Phase 2 slice 2). Wire types and
+// validation rules live in internal/protocol/configupdate so the
+// agent and CP halves can't drift on what a valid payload is — per
+// ADR-028's strict two-field whitelist.
 package configupdate
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/envelope"
-)
-
-const (
-	minInterval = 30 * time.Second
-	maxInterval = time.Hour
-	maxNameLen  = 256
+	"github.com/emilejacobs/control-plane/internal/protocol/configupdate"
 )
 
 // Applier carries out a validated config.update. allowList and interval
@@ -49,32 +41,13 @@ func New(applier Applier) *Handler {
 	return &Handler{applier: applier, now: time.Now}
 }
 
-// request mirrors the payload schema. json.RawMessage fields preserve
-// the presence-vs-null distinction that json:",omitempty" loses.
-type request struct {
-	ServiceAllowList      json.RawMessage `json:"service_allow_list,omitempty"`
-	ServiceStatusInterval json.RawMessage `json:"service_status_interval,omitempty"`
-}
-
 func (h *Handler) Handle(ctx context.Context, args json.RawMessage) (any, error) {
-	if err := rejectUnknownFields(args); err != nil {
-		return nil, err
-	}
-
-	var req request
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &req); err != nil {
-			return nil, envelope.NewCodedError("config_update.bad_payload", err.Error())
+	allowList, interval, err := configupdate.Parse(args)
+	if err != nil {
+		if v, ok := configupdate.AsValidation(err); ok {
+			return nil, envelope.NewCodedError(v.Code, v.Message)
 		}
-	}
-
-	allowList, err := parseAllowList(req.ServiceAllowList)
-	if err != nil {
-		return nil, err
-	}
-	interval, err := parseInterval(req.ServiceStatusInterval)
-	if err != nil {
-		return nil, err
+		return nil, envelope.NewCodedError(configupdate.CodeBadPayload, err.Error())
 	}
 
 	effList, effInterval, err := h.applier.Apply(ctx, allowList, interval)
@@ -87,69 +60,4 @@ func (h *Handler) Handle(ctx context.Context, args json.RawMessage) (any, error)
 		EffectiveAllowList: effList,
 		EffectiveInterval:  effInterval.String(),
 	}, nil
-}
-
-// rejectUnknownFields enforces ADR-028's strict whitelist: only
-// service_allow_list and service_status_interval are accepted. Extra
-// keys are a strong signal the cp-side has drifted; failing loud
-// catches it at the agent boundary rather than letting silent drops
-// mislead the operator.
-func rejectUnknownFields(raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var probe struct {
-		ServiceAllowList      json.RawMessage `json:"service_allow_list"`
-		ServiceStatusInterval json.RawMessage `json:"service_status_interval"`
-	}
-	if err := dec.Decode(&probe); err != nil {
-		return envelope.NewCodedError("config_update.unknown_field", err.Error())
-	}
-	return nil
-}
-
-func parseAllowList(raw json.RawMessage) (*[]string, error) {
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, nil
-	}
-	var list []string
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, envelope.NewCodedError("config_update.bad_payload",
-			fmt.Sprintf("service_allow_list: %v", err))
-	}
-	if list == nil {
-		// JSON [] decodes to a non-nil empty slice; nil here means the
-		// JSON value was effectively absent — treat as clear.
-		return nil, nil
-	}
-	for _, name := range list {
-		if len(name) == 0 || len(name) > maxNameLen {
-			return nil, envelope.NewCodedError("config_update.bad_service_name",
-				fmt.Sprintf("service name length must be 1..%d, got %d", maxNameLen, len(name)))
-		}
-	}
-	out := list
-	return &out, nil
-}
-
-func parseInterval(raw json.RawMessage) (*time.Duration, error) {
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return nil, envelope.NewCodedError("config_update.bad_payload",
-			fmt.Sprintf("service_status_interval: %v", err))
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return nil, envelope.NewCodedError("config_update.bad_interval", err.Error())
-	}
-	if d < minInterval || d > maxInterval {
-		return nil, envelope.NewCodedError("config_update.bad_interval",
-			fmt.Sprintf("interval %s outside %s..%s", d, minInterval, maxInterval))
-	}
-	return &d, nil
 }
