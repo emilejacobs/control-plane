@@ -172,12 +172,22 @@ Control Plane packages (`internal/cp/`):
 | `authn` | Argon2id passwords, HS256 JWTs, refresh-token rotation, first-run admin, account lockout, mandatory TOTP + recovery codes | Built (#04, #05) |
 | `presence` | Online threshold; in-memory per-device presence state and transitions (heartbeat, sweep, connect/disconnect) | Built (#07, #08) |
 | `sqsconsumer` | Generic `SQSConsumer[T]` — schema validation, DLQ routing, graceful drain | Built (#07) |
-| `ingest` | Heartbeat + lifecycle SQS handlers and the presence sweeper | Built (#07, #08) |
+| `ingest` | Heartbeat + lifecycle + service-status SQS handlers and the presence sweeper | Built (#07, #08, Phase 2 svc-status) |
 | `cplog` | Structured JSON logs + end-to-end correlation IDs (ADR-011) | Built (#19) |
-| `storage` | Goose migrations (ADR-019), idempotency store | Built (#03) |
+| `storage` | Goose migrations (ADR-019), idempotency store, `device_services` table (Phase 2) | Built (#03, Phase 2 svc-status) |
 | `api` | HTTP router; idempotency, bearer-auth, forced-TOTP-enrollment, site-scope, and per-IP enrollment rate-limit middleware | Built (#03, #04, #05, #06, #10) |
 
-The dashboard scaffold + auth flow (#16), fleet view (#17), and per-device view (#18) landed (see § Dashboard). The `audit_log` table + write surface (#20) landed: `audit.Writer` is the seam every state-mutating handler + the SQS DLQ path writes through, backed by `audit.PostgresWriter` in production. Every Entry co-emits the legacy slog line shape so cross-correlation by `X-Correlation-Id` works against either Postgres or the log stream. The richer alarm set (#21) layers CloudWatch log-metric-filters on top of the structured slog stream — sweeper-tick lag, login failure spikes, enrollment rate-limit trips, and hostname-convention anomalies all page through the same `uknomi-cp-alarms` SNS topic the #25 baseline uses; per-alarm runbooks live in [`docs/runbooks/alarms/`](runbooks/alarms/). The audit-log S3 mirror (#28) landed as a daily Fargate scheduled task per ADR-023: `cmd/audit-mirror` writes one gzipped JSON Lines object per UTC day to the audit-mirror bucket (1-year governance-mode object-lock retention); EventBridge fires it at 00:05 UTC; two CloudWatch alarms (`audit-mirror-failure` and `audit-mirror-stale`) catch explicit failures and missed schedules. Not yet built: command execution (Phase 3).
+Shared protocol packages (`internal/protocol/`):
+
+| Package | Responsibility | Status |
+|---|---|---|
+| `servicestatus` | Wire types for the agent → cp-ingest service-status report (Phase 2) — `Report`, `ServiceState`. Shared so a schema change is one edit on both sides. | Built (Phase 2 svc-status) |
+
+The dashboard scaffold + auth flow (#16), fleet view (#17), and per-device view (#18) landed (see § Dashboard). The `audit_log` table + write surface (#20) landed: `audit.Writer` is the seam every state-mutating handler + the SQS DLQ path writes through, backed by `audit.PostgresWriter` in production. Every Entry co-emits the legacy slog line shape so cross-correlation by `X-Correlation-Id` works against either Postgres or the log stream. The richer alarm set (#21) layers CloudWatch log-metric-filters on top of the structured slog stream — sweeper-tick lag, login failure spikes, enrollment rate-limit trips, and hostname-convention anomalies all page through the same `uknomi-cp-alarms` SNS topic the #25 baseline uses; per-alarm runbooks live in [`docs/runbooks/alarms/`](runbooks/alarms/). The audit-log S3 mirror (#28) landed as a daily Fargate scheduled task per ADR-023: `cmd/audit-mirror` writes one gzipped JSON Lines object per UTC day to the audit-mirror bucket (1-year governance-mode object-lock retention); EventBridge fires it at 00:05 UTC; two CloudWatch alarms (`audit-mirror-failure` and `audit-mirror-stale`) catch explicit failures and missed schedules.
+
+Phase 2's first slice — service-status reporting — landed: the agent's `internal/telemetry.ServiceStatusCollector` queries `service.Backend` for an allow-listed set of launchd/systemd unit names every 5 minutes and publishes a typed `servicestatus.Report` on `devices/{id}/service-status` via `ServiceStatusPublisher`. A new IoT Rule → SQS pipeline (mirroring heartbeat) feeds `cp-ingest`'s `ServiceStatusIngester`, which persists rows into the `device_services` table (PK `(device_id, service_name)`). The per-device API includes a `services` array; the dashboard renders it as the per-device Services panel. A CloudWatch alarm (`uknomi-cp-service-stopped`) pages when any allow-listed service has been reported stopped for ≥15 minutes. State vocabulary is `running | stopped | unknown` for Phase 2; `failed` is deferred to Phase 3 alongside service-control commands (the backend can't distinguish failed from intentionally-stopped without exit-code parsing).
+
+Not yet built: command execution (Phase 3); the rest of Phase 2 (log tail, Edge UI proxy, camera snapshot).
 
 ## Cloud infrastructure
 
