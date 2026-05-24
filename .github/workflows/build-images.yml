@@ -296,6 +296,13 @@ jobs:
         # to the scheduled run (subnets + tasks SG). This avoids hardcoding
         # subnet/SG IDs into the workflow and stays in sync if the
         # underlying VPC layout changes.
+        #
+        # NOTE: `aws events list-targets-by-rule` returns the awsvpc block
+        # in EventBridge's PascalCase shape (Subnets, SecurityGroups,
+        # AssignPublicIp), but `aws ecs run-task --network-configuration`
+        # only accepts the camelCase shape (subnets, securityGroups,
+        # assignPublicIp). Translate explicitly rather than passing the
+        # PascalCase blob through and getting a ParamValidation error.
         run: |
           set -euo pipefail
           awsvpc_json="$(
@@ -304,8 +311,13 @@ jobs:
               --query 'Targets[0].EcsParameters.NetworkConfiguration.awsvpcConfiguration' \
               --output json
           )"
-          # Wrap into the run-task network-configuration shape.
-          netconf="$(jq -cn --argjson c "$awsvpc_json" '{awsvpcConfiguration: $c}')"
+          netconf="$(jq -cn --argjson c "$awsvpc_json" '{
+            awsvpcConfiguration: {
+              subnets:        $c.Subnets,
+              securityGroups: $c.SecurityGroups,
+              assignPublicIp: $c.AssignPublicIp
+            }
+          }')"
           echo "netconf=$netconf" >> "$GITHUB_OUTPUT"
 
       - name: Run audit-mirror task
