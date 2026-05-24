@@ -35,3 +35,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 025 | [Direct-to-main pushes under AFK-agent dev](./adr/0025-direct-to-main-pushes-under-afk-agent-dev.md) | Accepted (2026-05-24)         |
 | 026 | [Phase 1 cert TTL deferral to Phase 3](./adr/0026-phase-1-cert-ttl-deferral.md) | Accepted (2026-05-24) — amends ADR-013 |
 | 027 | [Phase 1 auto-deploy direct to prod; staging + promote gate deferred](./adr/0027-phase-1-auto-deploy-direct-to-prod.md) | Accepted (2026-05-24) — amends ADR-020 |
+| 028 | [Unsigned `config.update` in Phase 2; signing arrives with the Phase 3 envelope](./adr/0028-unsigned-config-update-phase-2.md) | Accepted (2026-05-24) — narrows ADR-013 |
