@@ -6,8 +6,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Dot } from "./Dot";
+import { clearTokens } from "../../lib/api/client";
 
 interface NavItem {
   id: string;
@@ -45,6 +46,12 @@ export function Topbar({ userInitials = "EJ" }: Props) {
   // isolation. Treat null as the root path so the test environment
   // does not crash on the active-state calc.
   const pathname = usePathname() ?? "/";
+  const router = useRouter();
+
+  function onSignOut() {
+    clearTokens();
+    router.push("/login");
+  }
 
   return (
     <header className="topbar">
@@ -97,6 +104,14 @@ export function Topbar({ userInitials = "EJ" }: Props) {
         <div className="topbar-user" title="Account">
           {userInitials}
         </div>
+        <button
+          type="button"
+          className="btn ghost small"
+          onClick={onSignOut}
+          style={{ marginLeft: 8, color: "var(--ink-on-dark)" }}
+        >
+          Sign out
+        </button>
       </nav>
     </header>
   );

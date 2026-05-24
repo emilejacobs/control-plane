@@ -7,6 +7,13 @@ import { renderWithClient } from "../../test/render";
 import { API_BASE } from "../../lib/api/client";
 import DevicesPage from "./page";
 
+// Topbar uses useRouter for its sign-out handler; stub it for tests that
+// render a full page (the page mounts Topbar).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/devices",
+}));
+
 function devicesReturn(devices: Array<Record<string, unknown>>) {
   server.use(
     http.get(`${API_BASE}/devices`, () => HttpResponse.json({ devices })),

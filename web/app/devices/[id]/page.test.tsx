@@ -9,7 +9,11 @@ import DevicePage from "./page";
 
 // The page reads its device id from the route; the per-device tests all
 // pin it to "dev-1".
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: "dev-1" }), usePathname: () => "/devices/dev-1" }));
+vi.mock("next/navigation", () => ({
+  useParams: () => ({ id: "dev-1" }),
+  usePathname: () => "/devices/dev-1",
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 // device is a full GET /devices/{id} body; tests override the fields they
 // exercise and leave the rest at these benign defaults.
