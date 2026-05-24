@@ -3,7 +3,6 @@ package api_test
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
