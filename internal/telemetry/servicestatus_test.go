@@ -3,8 +3,10 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,4 +242,103 @@ func TestServiceStatusCollectorTransientErrorLogsAndReturnsUnknown(t *testing.T)
 	if !bytes.Contains(logBuf.Bytes(), []byte("nginx")) {
 		t.Errorf("expected log to identify the failing service by name; got: %s", logBuf.String())
 	}
+}
+
+// --- ServiceStatusPublisher ------------------------------------------------
+
+// recordingTransport is a thread-safe Transport that captures every
+// publish for later inspection. Mirrors the heartbeat publisher's
+// fakeTransport pattern.
+type recordingTransport struct {
+	mu        sync.Mutex
+	published map[string][][]byte
+	gotOne    chan struct{}
+}
+
+func newRecordingTransport() *recordingTransport {
+	return &recordingTransport{
+		published: make(map[string][][]byte),
+		gotOne:    make(chan struct{}, 1),
+	}
+}
+
+func (t *recordingTransport) Publish(topic string, payload []byte) error {
+	t.mu.Lock()
+	t.published[topic] = append(t.published[topic], payload)
+	t.mu.Unlock()
+	select {
+	case t.gotOne <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (t *recordingTransport) snapshot(topic string) [][]byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([][]byte, len(t.published[topic]))
+	copy(out, t.published[topic])
+	return out
+}
+
+// Tracer bullet for the publisher loop: given a Collect func that
+// returns a fixed Report, the publisher publishes the JSON-marshalled
+// Report on devices/{id}/service-status within one tick.
+func TestServiceStatusPublisherEmitsOneTick(t *testing.T) {
+	tr := newRecordingTransport()
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	stubReport := telemetry.Report{
+		DeviceID:      "dev-bbe0540c",
+		CorrelationID: "corr-abc",
+		ReportedAt:    now,
+		Services: []telemetry.ServiceState{
+			{Name: "nginx", State: service.StateRunning, StateSince: now},
+		},
+	}
+
+	p := &telemetry.ServiceStatusPublisher{
+		Interval:  5 * time.Millisecond,
+		DeviceID:  "dev-bbe0540c",
+		Collect:   func(_ context.Context) telemetry.Report { return stubReport },
+		Transport: tr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+
+	select {
+	case <-tr.gotOne:
+	case <-time.After(time.Second):
+		t.Fatal("no publish within 1s")
+	}
+	cancel()
+	<-done
+
+	publishes := tr.snapshot("devices/dev-bbe0540c/service-status")
+	if len(publishes) == 0 {
+		t.Fatalf("expected at least one publish on devices/dev-bbe0540c/service-status; got payloads on: %v", topicsIn(tr))
+	}
+
+	var got telemetry.Report
+	if err := json.Unmarshal(publishes[0], &got); err != nil {
+		t.Fatalf("payload not a valid Report JSON: %v\nraw: %s", err, publishes[0])
+	}
+	if got.DeviceID != stubReport.DeviceID || got.CorrelationID != stubReport.CorrelationID {
+		t.Errorf("payload identity mismatch: got %+v, want %+v", got, stubReport)
+	}
+	if len(got.Services) != 1 || got.Services[0].Name != "nginx" {
+		t.Errorf("Services round-trip lost data: got %+v", got.Services)
+	}
+}
+
+func topicsIn(t *recordingTransport) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, 0, len(t.published))
+	for k := range t.published {
+		out = append(out, k)
+	}
+	return out
 }

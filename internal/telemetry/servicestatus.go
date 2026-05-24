@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -100,5 +101,50 @@ func (c *ServiceStatusCollector) Collect(ctx context.Context) Report {
 		CorrelationID: correlationID,
 		ReportedAt:    now,
 		Services:      services,
+	}
+}
+
+// ServiceStatusPublisher drives a ServiceStatusCollector (passed in via
+// the Collect func) on an Interval ticker and publishes each Report as
+// JSON on devices/{DeviceID}/service-status. Mirrors Publisher's shape
+// but carries a typed payload so cp-ingest can deserialize cleanly.
+type ServiceStatusPublisher struct {
+	Interval  time.Duration
+	DeviceID  string
+	Collect   func(context.Context) Report
+	Transport Transport
+	Logger    *slog.Logger
+}
+
+// Run blocks until ctx is cancelled, publishing on every Interval tick.
+func (p *ServiceStatusPublisher) Run(ctx context.Context) {
+	log := p.Logger
+	if log == nil {
+		log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+
+	ticker := time.NewTicker(p.Interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.publishOnce(ctx, log)
+		}
+	}
+}
+
+func (p *ServiceStatusPublisher) publishOnce(ctx context.Context, log *slog.Logger) {
+	report := p.Collect(ctx)
+	body, err := json.Marshal(report)
+	if err != nil {
+		log.Error("service-status marshal failed", "error", err, "correlation_id", report.CorrelationID)
+		return
+	}
+	topic := "devices/" + p.DeviceID + "/service-status"
+	if err := p.Transport.Publish(topic, body); err != nil {
+		log.Error("service-status publish failed", "error", err, "correlation_id", report.CorrelationID, "topic", topic)
 	}
 }
