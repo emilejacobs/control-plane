@@ -19,6 +19,10 @@ type Service interface {
 	// by service_name (the dashboard renders them in that order). Returns
 	// an empty slice (not nil) for a device that has never reported.
 	ListServices(ctx context.Context, deviceID string) ([]registry.DeviceService, error)
+	// GetServiceConfig returns the per-device override + last-applied
+	// tracking (Phase 2 slice 2). Zero-valued for a device with no
+	// override ever set; non-nil pointers indicate present values.
+	GetServiceConfig(ctx context.Context, deviceID string) (registry.ServiceConfig, error)
 }
 
 type GetHandler struct {
@@ -52,6 +56,19 @@ type response struct {
 	// device that has never reported — the dashboard distinguishes
 	// "no report yet" from a missing field.
 	Services []serviceItem `json:"services"`
+
+	// ServiceConfig surfaces the Phase 2 slice 2 per-device override +
+	// last-applied tracking. Always present (never null) — its
+	// internal fields may be null. Distinguishes "default" from
+	// "overridden" via allow_list_override != null on the dashboard.
+	ServiceConfig serviceConfigItem `json:"service_config"`
+}
+
+type serviceConfigItem struct {
+	AllowListOverride        *[]string `json:"allow_list_override"`
+	IntervalOverride         *string   `json:"interval_override"`
+	LastAppliedAt            *string   `json:"last_applied_at"`
+	LastAppliedCorrelationID *string   `json:"last_applied_correlation_id"`
 }
 
 type serviceItem struct {
@@ -156,6 +173,23 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Phase 2 slice 2: override + last-applied tracking. Same
+	// resilience posture as services — a read failure here returns
+	// the zero-value config (all fields nil) so the rest of the page
+	// still renders.
+	cfg, _ := h.svc.GetServiceConfig(r.Context(), dev.ID)
+	var lastAppliedAt *string
+	if cfg.LastAppliedAt != nil {
+		s := cfg.LastAppliedAt.UTC().Format(time.RFC3339)
+		lastAppliedAt = &s
+	}
+	serviceConfig := serviceConfigItem{
+		AllowListOverride:        cfg.AllowListOverride,
+		IntervalOverride:         cfg.IntervalOverride,
+		LastAppliedAt:            lastAppliedAt,
+		LastAppliedCorrelationID: cfg.LastAppliedCorrelationID,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response{
 		DeviceID:              dev.ID,
@@ -173,5 +207,6 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		SiteName:              dev.SiteName,
 		ClientName:            dev.ClientName,
 		Services:              services,
+		ServiceConfig:         serviceConfig,
 	})
 }
