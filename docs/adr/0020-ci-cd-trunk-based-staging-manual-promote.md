@@ -1,6 +1,6 @@
 # ADR-020: CI/CD — trunk-based, prod + staging, manual promotion to prod
 
-**Status:** Accepted (2026-05-21)
+**Status:** Accepted (2026-05-21) — amended by [ADR-027](./0027-phase-1-auto-deploy-direct-to-prod.md) (Phase 1 ships auto-deploy direct to prod; staging + manual-promote gate deferred)
 
 **Context.** Phase 1 introduces three deployable artifacts (`cp-api`, `cp-ingest`, `dashboard`) plus Terraform-managed infrastructure. Before any of them ships, the team needs a settled story for: branch model, environment count, deployment promotion, artifact pattern, and Terraform-in-CI flow. These five sub-decisions interlock — the right branch model depends on the environment count, the right promotion strategy depends on whether a pre-prod env exists, the right artifact pattern depends on what runs where. Bundled into one ADR rather than five.
 

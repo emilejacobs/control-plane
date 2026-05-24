@@ -1,17 +1,28 @@
-name: Build & push container images
+name: Build, push & deploy
 
-# On every merge to main, build the three CP container images and push them
-# to ECR. CI auths to AWS via the OIDC role provisioned in terraform-deploy
-# (uknomi-gha-image-publish) so no long-lived AWS keys live in GitHub.
+# On every merge to main, build whichever of the CP container images were
+# affected by the change, push them to ECR, and roll the corresponding
+# ECS service. Path filters (per ADR-027) keep deploy churn proportional
+# to the diff: a web/** change rolls only the dashboard; a shared
+# internal/** change rolls all three Go services.
+#
+# CI auths to AWS via the OIDC role provisioned in terraform-deploy
+# (uknomi-gha-image-publish; widened by ADR-027 to grant ecs:UpdateService
+# + RunTask + PassRole on top of the original ECR push permissions).
 #
 # Tags pushed:
 #   - <git-sha>   — the immutable, deploy-ready tag.
-#   - latest      — convenience pointer for the operator's terraform apply
-#                   workflow until the auto-deploy slice replaces it.
+#   - latest      — what the Terraform-managed task defs reference. The
+#                   service rollout below is what makes a fresh :latest
+#                   actually run; without it the new image only ships on
+#                   the next task replacement.
 #
-# Fargate task defs default to X86_64; images build linux/amd64. The matrix
-# fans out one job per service so a failure in one image's build does not
-# block the others.
+# Fargate task defs default to X86_64; images build linux/amd64.
+#
+# Audit-mirror is a scheduled (00:05 UTC daily) one-shot task, not a
+# long-running service. On an image change we kick a fresh run-task so
+# the new image is verified before the next scheduled run; failures
+# surface through the existing audit-mirror-failure alarm.
 
 on:
   push:
@@ -19,18 +30,128 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write   # required for the OIDC AssumeRoleWithWebIdentity
+  id-token: write   # required for OIDC AssumeRoleWithWebIdentity
   contents: read
 
 env:
   AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: "523612763411"
   OIDC_ROLE_ARN: arn:aws:iam::523612763411:role/uknomi-gha-image-publish
+  ECS_CLUSTER: uknomi-cp
+  AUDIT_MIRROR_RULE: uknomi-cp-audit-mirror-daily
+  AUDIT_MIRROR_TASK_DEF: uknomi-cp-audit-mirror
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Decide which services the diff actually affects. The Go services share
+  # a lot of code under internal/cp/**; the filters are conservative —
+  # when in doubt, redeploy. Filter mapping rationale:
+  #
+  #   - dashboard depends only on web/**.
+  #   - Each cmd/<svc>/** dir is service-specific.
+  #   - The internal/cp/<pkg>/** dirs are split into service-specific
+  #     (api/authn/authz/bootstrap/iotprovisioner → cp-api;
+  #     ingest/presence/sqsconsumer → cp-ingest;
+  #     auditmirror → audit-mirror) and shared (storage/cplog/audit/
+  #     registry, plus go.mod/go.sum and the cmd/agent shared transport).
+  #   - workflow_dispatch always builds + deploys everything (filter
+  #     outputs default to false on dispatch, so we OR them with a
+  #     dispatch override below).
+  changes:
+    name: Detect affected services
+    runs-on: ubuntu-latest
+    outputs:
+      # Hyphenated GHA expression keys require bracket access, not dot.
+      cp-api:       ${{ steps.combine.outputs['cp-api'] }}
+      cp-ingest:    ${{ steps.combine.outputs['cp-ingest'] }}
+      dashboard:    ${{ steps.combine.outputs['dashboard'] }}
+      audit-mirror: ${{ steps.combine.outputs['audit-mirror'] }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        # Each go-* filter inlines the shared-Go-code patterns rather
+        # than using YAML anchors — anchor-in-list flattening is
+        # parser-dependent and not worth the risk for ~20 lines.
+        # If you add a new shared internal/cp/<pkg>, add it to every go-*
+        # filter below. Service-specific packages stay in their one
+        # filter. The dashboard filter is intentionally narrow: a Go
+        # change does not rebuild the Next.js bundle.
+        with:
+          filters: |
+            cp-api:
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/cp/storage/**'
+              - 'internal/cp/cplog/**'
+              - 'internal/cp/audit/**'
+              - 'internal/cp/registry/**'
+              - 'cmd/cp-api/**'
+              - 'internal/cp/api/**'
+              - 'internal/cp/authn/**'
+              - 'internal/cp/authz/**'
+              - 'internal/cp/bootstrap/**'
+              - 'internal/cp/iotprovisioner/**'
+            cp-ingest:
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/cp/storage/**'
+              - 'internal/cp/cplog/**'
+              - 'internal/cp/audit/**'
+              - 'internal/cp/registry/**'
+              - 'cmd/cp-ingest/**'
+              - 'internal/cp/ingest/**'
+              - 'internal/cp/presence/**'
+              - 'internal/cp/sqsconsumer/**'
+            audit-mirror:
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/cp/storage/**'
+              - 'internal/cp/cplog/**'
+              - 'internal/cp/audit/**'
+              - 'internal/cp/registry/**'
+              - 'cmd/audit-mirror/**'
+              - 'internal/cp/auditmirror/**'
+            dashboard:
+              - 'web/**'
+
+      - id: combine
+        env:
+          DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          F_CP_API: ${{ steps.filter.outputs['cp-api'] }}
+          F_CP_INGEST: ${{ steps.filter.outputs['cp-ingest'] }}
+          F_AUDIT_MIRROR: ${{ steps.filter.outputs['audit-mirror'] }}
+          F_DASHBOARD: ${{ steps.filter.outputs['dashboard'] }}
+        run: |
+          set -euo pipefail
+          out() {
+            local key="$1" filter="$2"
+            local val="false"
+            if [[ "$DISPATCH" == "true" || "$filter" == "true" ]]; then
+              val="true"
+            fi
+            echo "${key}=${val}" >> "$GITHUB_OUTPUT"
+            echo "${key}=${val}"
+          }
+          out cp-api       "$F_CP_API"
+          out cp-ingest    "$F_CP_INGEST"
+          out audit-mirror "$F_AUDIT_MIRROR"
+          out dashboard    "$F_DASHBOARD"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Build + push only the affected images. The matrix entry's `if` is
+  # evaluated per job, so an unaffected service is skipped entirely
+  # rather than running a no-op build.
   build:
     name: Build ${{ matrix.service.name }}
     runs-on: ubuntu-latest
+    needs: changes
+    if: |
+      needs.changes.outputs['cp-api'] == 'true' ||
+      needs.changes.outputs['cp-ingest'] == 'true' ||
+      needs.changes.outputs['dashboard'] == 'true' ||
+      needs.changes.outputs['audit-mirror'] == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -53,19 +174,30 @@ jobs:
             dockerfile: cmd/audit-mirror/Dockerfile
             build_args: ""
     steps:
-      - uses: actions/checkout@v4
+      - name: Skip if service unaffected
+        id: gate
+        env:
+          AFFECTED: ${{ needs.changes.outputs[matrix.service.name] }}
+        run: echo "affected=${AFFECTED}" >> "$GITHUB_OUTPUT"
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - if: steps.gate.outputs.affected == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.gate.outputs.affected == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - id: ecr-login
+      - if: steps.gate.outputs.affected == 'true'
+        id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.gate.outputs.affected == 'true'
+        uses: docker/setup-buildx-action@v3
 
       - name: Build & push ${{ matrix.service.name }}
+        if: steps.gate.outputs.affected == 'true'
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.service.context }}
@@ -78,3 +210,112 @@ jobs:
           build-args: ${{ matrix.service.build_args }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,scope=${{ matrix.service.name }},mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Roll each long-running ECS service whose image was rebuilt. Each job
+  # fires its own update-service + wait services-stable so a failure in
+  # one service does not block the others; the wait gives the workflow a
+  # real pass/fail signal instead of fire-and-forget. Per ADR-027.
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [changes, build]
+    if: |
+      needs.changes.outputs['cp-api'] == 'true' ||
+      needs.changes.outputs['cp-ingest'] == 'true' ||
+      needs.changes.outputs['dashboard'] == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [cp-api, cp-ingest, dashboard]
+    steps:
+      - name: Skip if service unaffected
+        id: gate
+        env:
+          AFFECTED: ${{ needs.changes.outputs[matrix.service] }}
+        run: echo "affected=${AFFECTED}" >> "$GITHUB_OUTPUT"
+
+      - if: steps.gate.outputs.affected == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force-redeploy ${{ matrix.service }}
+        if: steps.gate.outputs.affected == 'true'
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "${{ matrix.service }}" \
+            --force-new-deployment \
+            --query 'service.{name:serviceName,desired:desiredCount,deploymentId:deployments[0].id}' \
+            --output table
+
+      - name: Wait for ${{ matrix.service }} to stabilize
+        if: steps.gate.outputs.affected == 'true'
+        # services-stable polls every 15s for up to 10 minutes by default.
+        # ECS's deployment circuit-breaker will roll back internally if
+        # the new task fails health checks; this step then fails because
+        # the service is not at the new deployment yet.
+        run: |
+          set -euo pipefail
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "${{ matrix.service }}"
+          echo "::notice::${{ matrix.service }} stable on new task set"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Audit-mirror is a one-shot scheduled task, not a long-running service.
+  # On an image change, kick a fresh run-task so the new image is
+  # exercised immediately rather than waiting until the next 00:05 UTC
+  # scheduled run. Fire-and-forget — the existing
+  # `uknomi-cp-audit-mirror-failure` log-metric alarm catches a non-zero
+  # exit, so blocking the workflow on task completion would only add
+  # cycle-time cost.
+  audit-mirror-run:
+    name: Smoke-run audit-mirror
+    runs-on: ubuntu-latest
+    needs: [changes, build]
+    if: needs.changes.outputs['audit-mirror'] == 'true'
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Derive network config from the EventBridge target
+        id: netconf
+        # Re-use the network configuration that EventBridge already passes
+        # to the scheduled run (subnets + tasks SG). This avoids hardcoding
+        # subnet/SG IDs into the workflow and stays in sync if the
+        # underlying VPC layout changes.
+        run: |
+          set -euo pipefail
+          awsvpc_json="$(
+            aws events list-targets-by-rule \
+              --rule "$AUDIT_MIRROR_RULE" \
+              --query 'Targets[0].EcsParameters.NetworkConfiguration.awsvpcConfiguration' \
+              --output json
+          )"
+          # Wrap into the run-task network-configuration shape.
+          netconf="$(jq -cn --argjson c "$awsvpc_json" '{awsvpcConfiguration: $c}')"
+          echo "netconf=$netconf" >> "$GITHUB_OUTPUT"
+
+      - name: Run audit-mirror task
+        env:
+          NETCONF: ${{ steps.netconf.outputs.netconf }}
+        run: |
+          set -euo pipefail
+          task_arn="$(
+            aws ecs run-task \
+              --cluster "$ECS_CLUSTER" \
+              --launch-type FARGATE \
+              --task-definition "$AUDIT_MIRROR_TASK_DEF" \
+              --network-configuration "$NETCONF" \
+              --started-by "gha-build-images-${GITHUB_RUN_ID}" \
+              --query 'tasks[0].taskArn' \
+              --output text
+          )"
+          echo "::notice::Started audit-mirror task ${task_arn}"
+          echo "Failures surface through the uknomi-cp-audit-mirror-failure CloudWatch alarm."

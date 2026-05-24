@@ -93,9 +93,14 @@ The mac-mini-rollout install-package bootstrap key from #10 (`uknomi/cp/bootstra
 
 `terraform fmt + validate` clean. `terraform apply` not run from this checkout — applies are deploy events.
 
-## CI/CD image-publish role (Issue #26)
+## CI/CD role: image publish + auto-deploy (Issue #26 + ADR-027)
 
-`ci-oidc.tf` provisions the GitHub Actions OIDC provider + an IAM role (`uknomi-gha-image-publish`) trusted only by `repo:emilejacobs/control-plane:ref:refs/heads/main`. The `.github/workflows/build-images.yml` workflow assumes this role on every merge to `main` and pushes `cp-api`, `cp-ingest`, and `dashboard` images to the three ECR repos tagged with the git SHA + `latest`.
+`ci-oidc.tf` provisions the GitHub Actions OIDC provider + an IAM role (`uknomi-gha-image-publish`) trusted only by `repo:emilejacobs/control-plane:ref:refs/heads/main`. The `.github/workflows/build-images.yml` workflow assumes this role on every merge to `main`. Two inline policies hang off the role:
+
+- **`image-publish`** (Issue #26): push the four CP images (`cp-api`, `cp-ingest`, `dashboard`, `audit-mirror`) to ECR tagged with the git SHA + `latest`.
+- **`deploy`** (ADR-027): `ecs:UpdateService` + `wait services-stable` on the three long-running services, `ecs:RunTask` + `iam:PassRole` on audit-mirror, and `events:ListTargetsByRule` to re-derive the audit-mirror network config at workflow runtime.
+
+The workflow uses `dorny/paths-filter` to skip rebuilds + redeploys for unaffected services — a docs-only commit does not roll any ECS task; a `web/**`-only commit rolls only the dashboard.
 
 If the AWS account already has a `token.actions.githubusercontent.com` OIDC provider, `terraform apply` fails with `EntityAlreadyExists`. Recover via:
 
@@ -106,30 +111,35 @@ terraform import aws_iam_openid_connect_provider.github \
 
 The role ARN is in the `gha_image_publish_role_arn` output — the workflow hardcodes it via `env.OIDC_ROLE_ARN` because workflows cannot read TF outputs directly. Update both if the role is ever renamed.
 
-## Deploying the CP (Issue #27)
+## Deploying the CP (Issue #27 + ADR-027)
 
 The task definitions reference ECR via `${repo}:${var.image_tag}`. `image_tag` defaults to `"latest"`, so a vanilla `terraform apply` picks up whatever the build-images workflow most recently pushed.
 
-**Order of operations for the first deploy:**
+**Normal flow (per ADR-027):** merge to `main` is the entire deploy. The workflow builds the affected images, pushes them to ECR, then issues `aws ecs update-service --force-new-deployment` + `aws ecs wait services-stable` for each affected long-running service. Audit-mirror gets `aws ecs run-task` for an immediate smoke run; the existing `uknomi-cp-audit-mirror-failure` alarm catches a non-zero exit.
+
+**Order of operations for the first-ever deploy:**
 
 1. `terraform apply` once — provisions the OIDC role + ECR repos. The task defs reference images that do not exist yet, so ECS service creation succeeds but tasks fail to start. Expected.
-2. Push a commit to `main` (or trigger `.github/workflows/build-images.yml` via `workflow_dispatch`). Wait ~3–5 min; images appear in ECR.
-3. `terraform apply` again — no resource changes, but force a deployment so ECS pulls the now-existing `:latest`:
-   ```bash
-   aws ecs update-service --cluster uknomi-cp --service cp-api      --force-new-deployment
-   aws ecs update-service --cluster uknomi-cp --service cp-ingest   --force-new-deployment
-   aws ecs update-service --cluster uknomi-cp --service dashboard   --force-new-deployment
-   ```
+2. Push a commit to `main` (or trigger `.github/workflows/build-images.yml` via `workflow_dispatch`). Wait ~3–5 min for the build matrix; another ~1–2 min for the deploy matrix to mark services stable.
+3. Done. Subsequent merges follow the normal flow above — no manual `terraform apply` needed unless a task-def field actually changed.
 
-**Pin a specific SHA (rollout):**
+**Manual rollout (escape hatch):**
+
+Useful when redeploying without an image change (e.g. to pick up a Secrets Manager rotation) or when CI is down:
+
+```bash
+aws ecs update-service --cluster uknomi-cp --service cp-api      --force-new-deployment
+aws ecs update-service --cluster uknomi-cp --service cp-ingest   --force-new-deployment
+aws ecs update-service --cluster uknomi-cp --service dashboard   --force-new-deployment
+```
+
+**Pin a specific SHA (rollback):**
 
 ```bash
 terraform apply -var image_tag=7af89d8
 ```
 
-**Roll back:**
-
-Same command with the previous SHA. Because all three services share one `image_tag` they roll back together — the simple case for the AFK-agent dev model where the CP is cut from one commit.
+Same command with the previous SHA to undo a bad roll. Because all three long-running services share one `image_tag` they roll back together — the simple case for the AFK-agent dev model where the CP is cut from one commit. `var.image_tag` pinning takes precedence over the workflow's auto-deploy; the workflow's `update-service --force-new-deployment` pulls whatever `:latest` currently points to, but a pinned `image_tag` reverts the task def to the explicit SHA on the next `terraform apply`.
 
 **Mismatched versions per service:**
 

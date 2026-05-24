@@ -27,10 +27,11 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 017 | [Static bootstrap key bundled in install package](./adr/0017-static-bootstrap-key-in-install-package.md) | Accepted (2026-05-21)         |
 | 018 | [Fargate workers (not Lambda) for all MQTT-side ingest](./adr/0018-fargate-workers-for-ingest.md) | Accepted (2026-05-21)                 |
 | 019 | [Goose for schema migrations, embedded and run on startup](./adr/0019-goose-migrations-on-startup.md) | Accepted (2026-05-21)         |
-| 020 | [CI/CD — trunk-based, prod + staging, manual promotion to prod](./adr/0020-ci-cd-trunk-based-staging-manual-promote.md) | Accepted (2026-05-21) |
+| 020 | [CI/CD — trunk-based, prod + staging, manual promotion to prod](./adr/0020-ci-cd-trunk-based-staging-manual-promote.md) | Accepted (2026-05-21) — amended by ADR-027 (Phase 1 direct-to-prod auto-deploy) |
 | 021 | [All-CloudWatch observability for Phase 1; OpenTelemetry deferred](./adr/0021-observability-all-cloudwatch.md) | Accepted (2026-05-21) |
 | 022 | [Phase 1 deployment-infra shape](./adr/0022-phase-1-deployment-shape.md)                         | Accepted (2026-05-22) — amends ADR-015 |
 | 023 | [Fargate scheduled tasks for periodic batch jobs](./adr/0023-fargate-scheduled-tasks-for-batch-jobs.md) | Accepted (2026-05-23)         |
 | 024 | [Dashboard persists tokens in `localStorage` (Phase 1)](./adr/0024-dashboard-token-persistence-localstorage.md) | Accepted (2026-05-24)         |
 | 025 | [Direct-to-main pushes under AFK-agent dev](./adr/0025-direct-to-main-pushes-under-afk-agent-dev.md) | Accepted (2026-05-24)         |
 | 026 | [Phase 1 cert TTL deferral to Phase 3](./adr/0026-phase-1-cert-ttl-deferral.md) | Accepted (2026-05-24) — amends ADR-013 |
+| 027 | [Phase 1 auto-deploy direct to prod; staging + promote gate deferred](./adr/0027-phase-1-auto-deploy-direct-to-prod.md) | Accepted (2026-05-24) — amends ADR-020 |

@@ -1,8 +1,14 @@
-# GitHub Actions OIDC federation for the image-publish workflow (Issue 26).
+# GitHub Actions OIDC federation for the CI deploy workflow.
 #
-# CI assumes this role via OIDC (no long-lived AWS keys) and pushes the
-# three CP images to ECR on merge to main. The trust policy pins the OIDC
-# sub claim to a single repo + branch so PR builds and forks cannot push.
+# Originally provisioned by Issue 26 (image push only); widened by
+# ADR-027 (Phase 1 auto-deploy direct to prod) to also roll the ECS
+# services after each image push. The role name stays `uknomi-gha-image-publish`
+# for continuity with the workflow's role-to-assume ARN — the `deploy`
+# inline policy below is what actually grants the rollout perms.
+#
+# CI assumes this role via OIDC (no long-lived AWS keys) on merge to main.
+# The trust policy pins the OIDC sub claim to a single repo + branch so
+# PR builds and forks cannot push or deploy.
 #
 # If the account already has a token.actions.githubusercontent.com OIDC
 # provider, terraform apply will fail with EntityAlreadyExists; in that
@@ -65,4 +71,73 @@ resource "aws_iam_role_policy" "gha_image_publish" {
   name   = "image-publish"
   role   = aws_iam_role.gha_image_publish.id
   policy = data.aws_iam_policy_document.gha_image_publish.json
+}
+
+# ── Deploy permissions (ADR-027) ────────────────────────────────────────────
+# The same OIDC role used to push images also rolls the ECS services after
+# each push. Scoped tightly: UpdateService/DescribeServices only on the
+# three long-running CP services; RunTask only on the audit-mirror task
+# def; PassRole only on the task execution + audit-mirror task roles
+# (the two roles RunTask hands to the new task). ListTargetsByRule on
+# the audit-mirror EventBridge rule lets the workflow re-derive the
+# task's network config at runtime rather than hardcoding subnet/SG IDs.
+
+data "aws_iam_policy_document" "gha_deploy" {
+  statement {
+    sid = "UpdateAndDescribeCpServices"
+    actions = [
+      "ecs:UpdateService",
+      "ecs:DescribeServices",
+    ]
+    resources = [
+      "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/cp-api",
+      "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/cp-ingest",
+      "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/dashboard",
+    ]
+  }
+
+  statement {
+    sid       = "RunAuditMirrorTask"
+    actions   = ["ecs:RunTask"]
+    resources = ["${aws_ecs_task_definition.audit_mirror.arn_without_revision}:*"]
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
+  }
+
+  # DescribeTasks is needed to surface a failed run-task in the workflow
+  # output. ResourceTag condition scopes it to tasks in our cluster.
+  statement {
+    sid       = "DescribeTasksInCpCluster"
+    actions   = ["ecs:DescribeTasks"]
+    resources = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.main.name}/*"]
+  }
+
+  statement {
+    sid     = "PassRolesToAuditMirrorTask"
+    actions = ["iam:PassRole"]
+    resources = [
+      aws_iam_role.task_execution.arn,
+      aws_iam_role.audit_mirror.arn,
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+
+  statement {
+    sid       = "ReadAuditMirrorRuleTargets"
+    actions   = ["events:ListTargetsByRule"]
+    resources = [aws_cloudwatch_event_rule.audit_mirror_daily.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "gha_deploy" {
+  name   = "deploy"
+  role   = aws_iam_role.gha_image_publish.id
+  policy = data.aws_iam_policy_document.gha_deploy.json
 }
