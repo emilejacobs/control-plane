@@ -63,6 +63,7 @@ resource "aws_ecs_task_definition" "cp_api" {
         { name = "IOT_POLICY_NAME", value = "UknomiAgentPolicy" },
         { name = "AWS_REGION", value = var.region },
         { name = "CP_BOOTSTRAP_SECRET_ID", value = "uknomi/cp/bootstrap-key" },
+        { name = "CORS_ALLOWED_ORIGINS", value = "https://control.uknomi.com" },
       ]
 
       secrets = [

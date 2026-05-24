@@ -38,6 +38,12 @@ type Deps struct {
 	// request. nil falls back to slog.Default(); tests pass a discard
 	// logger to keep -v output clean.
 	Logger *slog.Logger
+
+	// CORSAllowedOrigins is the exact-match allow list for the CORS
+	// middleware. Empty disables CORS. Production passes the dashboard
+	// origin (https://control.uknomi.com) from main; tests pass nothing
+	// unless they specifically need to exercise CORS.
+	CORSAllowedOrigins []string
 }
 
 // Route names a method + path pair for the CI-gate test to probe.
@@ -124,7 +130,9 @@ func NewBuilderWith(d Deps) *Builder {
 }
 
 // NewRouter returns a ready-to-serve http.Handler with the cplog
-// correlation+access-log middleware wrapped around every route.
+// correlation+access-log middleware wrapped around every route, and the
+// CORS middleware outside cplog so preflight responses are still logged
+// (useful for diagnosing browser-side failures).
 func NewRouter(d Deps) http.Handler {
-	return cplog.Middleware(d.Logger)(NewBuilderWith(d).Handler())
+	return middleware.Cors(d.CORSAllowedOrigins)(cplog.Middleware(d.Logger)(NewBuilderWith(d).Handler()))
 }

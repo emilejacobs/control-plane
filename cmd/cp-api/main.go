@@ -12,6 +12,8 @@
 //
 //	PORT                    listen port (default 8080)
 //	CP_BOOTSTRAP_SECRET_ID  Secrets Manager id of the bootstrap key (default uknomi/cp/bootstrap-key)
+//	CORS_ALLOWED_ORIGINS    comma-separated allow list for the CORS middleware (default: empty = CORS disabled).
+//	                        Production sets this to the dashboard origin (https://control.uknomi.com).
 //	AWS_REGION              AWS region (default from default credentials chain)
 //	AWS_ENDPOINT_URL        override the AWS service endpoint (dev/moto only)
 package main
@@ -25,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -128,12 +131,13 @@ func run(logger *slog.Logger) error {
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
-			Registry:         reg,
-			AuthN:            authnSvc,
-			AuthZ:            authzSvc,
-			IdempotencyStore: idemStore,
-			Audit:            auditW,
-			Logger:           logger,
+			Registry:           reg,
+			AuthN:              authnSvc,
+			AuthZ:              authzSvc,
+			IdempotencyStore:   idemStore,
+			Audit:              auditW,
+			Logger:             logger,
+			CORSAllowedOrigins: csvEnv("CORS_ALLOWED_ORIGINS"),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -177,4 +181,22 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// csvEnv reads a comma-separated env var and returns the trimmed,
+// non-empty entries. An unset var returns nil so a downstream "empty
+// disables" check (CORSAllowedOrigins) reads naturally.
+func csvEnv(name string) []string {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
