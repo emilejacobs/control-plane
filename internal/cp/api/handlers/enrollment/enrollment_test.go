@@ -92,6 +92,38 @@ func TestEnrollmentAuditsSuccess(t *testing.T) {
 	}
 }
 
+// TestEnrollmentAcceptsFieldNamingConvention covers the in-field hostname
+// convention `<id>-<chain>-<store>-macmini` (e.g. `07-eegees-mesa-macmini`)
+// adopted by the existing fleet — those hostnames should NOT raise the
+// anomaly alert. The legacy `<kind>-<site>-<NN>` convention stays valid.
+func TestEnrollmentAcceptsFieldNamingConvention(t *testing.T) {
+	cases := []string{
+		"07-eegees-mesa-macmini",
+		"123-bigchain-store-42-macmini",
+		"1-a-b-macmini",
+	}
+	for _, hostname := range cases {
+		t.Run(hostname, func(t *testing.T) {
+			var logs bytes.Buffer
+			h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}}, nil)
+
+			rec := enroll(h, &logs, map[string]any{
+				"bootstrap_key": "k",
+				"hostname":      hostname,
+				"hardware_uuid": "11111111-2222-3333-4444-555555555555",
+				"hardware_kind": "mac",
+			})
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status: got %d want 201", rec.Code)
+			}
+			if strings.Contains(logs.String(), "audit.enrollment.anomaly") {
+				t.Errorf("field-convention hostname %q raised anomaly alert:\n%s", hostname, logs.String())
+			}
+		})
+	}
+}
+
 func TestEnrollmentAlertsOnHostnameAnomaly(t *testing.T) {
 	var logs bytes.Buffer
 	h := New(&fakeService{out: registry.EnrollOutput{DeviceID: "dev-1"}}, nil)

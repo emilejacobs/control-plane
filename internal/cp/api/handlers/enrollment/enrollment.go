@@ -19,7 +19,15 @@ import (
 // hostnameConvention is the project device-naming pattern (ADR-017). A
 // hostname that does not match still enrolls — the regex is a sanity check
 // that raises an audit alert, not an allowlist that blocks.
-var hostnameConvention = regexp.MustCompile(`^(mac-mini|pi|radxa)-[a-z0-9-]+-\d{2}$`)
+//
+// Two patterns are accepted:
+//  1. Legacy bench/lab pattern: `<kind>-<site>-<NN>`, e.g. `mac-mini-bench-01`.
+//  2. In-field fleet pattern:   `<id>-<chain>-<store>-macmini`, e.g.
+//     `07-eegees-mesa-macmini`. `<id>` is a numeric asset id, `<store>` may
+//     contain hyphens for compound names (e.g. `store-42`).
+var hostnameConvention = regexp.MustCompile(
+	`^((mac-mini|pi|radxa)-[a-z0-9-]+-\d{2}|\d+-[a-z0-9]+-[a-z0-9-]+-macmini)$`,
+)
 
 // sourceIP is the client address an enrollment request arrived from, without
 // the port — the audit log keys anomaly detection on it (ADR-017).
