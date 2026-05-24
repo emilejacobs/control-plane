@@ -153,3 +153,36 @@ func TestServiceStatusCollectorStateSinceUpdatesOnTransition(t *testing.T) {
 		t.Errorf("r2 StateSince should advance to the transition time; got %v, want %v", got, second)
 	}
 }
+
+// An empty AllowList must still produce a valid Report (with an empty
+// Services slice). The publisher loop will still tick; cp-ingest will
+// still UPSERT zero rows. The fleet-wide query "which devices have no
+// services reporting" then correctly identifies misconfigured agents
+// rather than dropping them silently.
+func TestServiceStatusCollectorEmptyAllowListProducesEmptyReport(t *testing.T) {
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	c := &telemetry.ServiceStatusCollector{
+		Backend:   &service.Fake{},
+		DeviceID:  "dev-test",
+		AllowList: nil,
+		Now:       func() time.Time { return now },
+	}
+
+	report := c.Collect(context.Background())
+
+	if report.DeviceID != "dev-test" {
+		t.Errorf("DeviceID: got %q, want %q", report.DeviceID, "dev-test")
+	}
+	if report.CorrelationID == "" {
+		t.Error("CorrelationID empty; expected a non-empty value even for empty AllowList")
+	}
+	if !report.ReportedAt.Equal(now) {
+		t.Errorf("ReportedAt: got %v, want %v", report.ReportedAt, now)
+	}
+	if report.Services == nil {
+		t.Error("Services is nil; want an empty (but non-nil) slice for JSON marshal stability")
+	}
+	if len(report.Services) != 0 {
+		t.Errorf("Services: got %d entries, want 0", len(report.Services))
+	}
+}
