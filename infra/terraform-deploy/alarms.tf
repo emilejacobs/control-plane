@@ -166,9 +166,9 @@ resource "aws_cloudwatch_log_metric_filter" "sweeper_tick" {
   name = "uknomi-cp-sweeper-tick"
   # cp-ingest is wired through the standalone module under
   # infra/terraform/modules/cp-ingest-service, which manages its own log
-  # group (/uknomi/cp-ingest). The deploy root's aws_cloudwatch_log_group
-  # .service["cp-ingest"] is unused — pointing the filter at the module's
-  # output keeps the metric in sync with where logs actually land.
+  # group (/uknomi/cp-ingest). The deploy root does not create a
+  # service["cp-ingest"] entry (see local.services in ecs.tf), so the
+  # filter has to read the module's output to land in the right group.
   log_group_name = module.cp_ingest.log_group_name
   pattern        = "{ $.msg = \"sweeper.tick\" }"
 

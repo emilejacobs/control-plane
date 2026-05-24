@@ -15,7 +15,12 @@ resource "aws_ecs_cluster" "main" {
 }
 
 locals {
-  services = toset(["cp-api", "cp-ingest", "dashboard", "tailscale-subnet-router", "audit-mirror"])
+  # cp-ingest deliberately omitted — it runs under the standalone
+  # infra/terraform/modules/cp-ingest-service module which manages its
+  # own /uknomi/cp-ingest log group. A deploy-root group would just sit
+  # empty (and earlier confused the sweeper-tick metric filter into
+  # reading the wrong group; see git history for the fix).
+  services = toset(["cp-api", "dashboard", "tailscale-subnet-router", "audit-mirror"])
 }
 
 resource "aws_cloudwatch_log_group" "service" {
