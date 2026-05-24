@@ -118,3 +118,38 @@ func TestServiceStatusCollectorStateSinceStableAcrossCalls(t *testing.T) {
 		t.Errorf("r2 StateSince should still be the original observation time; got %v, want %v", got, first)
 	}
 }
+
+// When the observed state changes between two Collect calls, StateSince
+// must advance to the second call's time. This is the converse of the
+// stability test — together they pin the "since" semantics.
+func TestServiceStatusCollectorStateSinceUpdatesOnTransition(t *testing.T) {
+	first := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	second := first.Add(5 * time.Minute)
+
+	tick := first
+	backend := &service.Fake{States: map[string]service.State{
+		"nginx": service.StateRunning,
+	}}
+
+	c := &telemetry.ServiceStatusCollector{
+		Backend:   backend,
+		DeviceID:  "dev-test",
+		AllowList: []string{"nginx"},
+		Now:       func() time.Time { return tick },
+	}
+
+	_ = c.Collect(context.Background())
+
+	// Service transitions Running → Stopped between calls.
+	backend.States["nginx"] = service.StateStopped
+	tick = second
+
+	r2 := c.Collect(context.Background())
+
+	if got := r2.Services[0].State; got != service.StateStopped {
+		t.Fatalf("r2 State: got %q, want %q", got, service.StateStopped)
+	}
+	if got := r2.Services[0].StateSince; !got.Equal(second) {
+		t.Errorf("r2 StateSince should advance to the transition time; got %v, want %v", got, second)
+	}
+}
