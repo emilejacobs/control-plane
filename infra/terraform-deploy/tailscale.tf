@@ -14,9 +14,6 @@
 # State is ephemeral; on task restart Tailscale re-registers with the
 # reusable auth key and gets a fresh node identity. Stale node entries
 # get cleaned manually in the Tailscale admin console.
-#
-# desired_count = 0 by design — bring up after the auth key is set
-# in Secrets Manager.
 
 resource "aws_ecs_task_definition" "tailscale" {
   family                   = "uknomi-cp-tailscale"
@@ -64,7 +61,7 @@ resource "aws_ecs_service" "tailscale" {
   name            = "tailscale-subnet-router"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.tailscale.arn
-  desired_count   = 0 # dormant until the operator sets the real auth key
+  desired_count   = 1
   launch_type     = "FARGATE"
 
   network_configuration {
