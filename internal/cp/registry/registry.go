@@ -396,6 +396,35 @@ func (r *Registry) SetServiceConfig(ctx context.Context, deviceID string, allowL
 	return nil
 }
 
+// RecordServiceConfigApplied stamps the (timestamp, correlation_id)
+// of a config.update ACK on the device row (Phase 2 slice 2). The
+// cp-ingest cmd-result handler calls this on every successful ACK;
+// the dashboard reads the fields back via GetServiceConfig to render
+// the EditServicesModal's "applied" badge. UPDATE semantics are
+// latest-wins — a re-delivered ACK with the same (id, corr_id) is a
+// no-op rewrite. A non-UUID or unknown deviceID returns
+// ErrDeviceNotFound so the cmd-result handler can DLQ a late ACK
+// from a decommissioned device.
+func (r *Registry) RecordServiceConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET service_config_last_applied_at      = $2,
+		    service_config_last_applied_corr_id = $3,
+		    updated_at                          = now()
+		WHERE id = $1
+	`, deviceID, at, correlationID)
+	if err != nil {
+		return fmt.Errorf("record service config applied: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
 // SetPresence records a device's online/offline state and the time it
 // changed. Callers pass it only on a real transition (the Presence module
 // reports which devices changed). An id matching no row — including a
