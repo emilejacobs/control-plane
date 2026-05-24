@@ -18,6 +18,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
+	"github.com/emilejacobs/control-plane/internal/service"
 )
 
 // ErrInvalidBootstrapKey is returned by Enroll when the supplied bootstrap
@@ -73,6 +74,17 @@ type EnrollOutput struct {
 // PresenceChangedAt is when IsOnline last flipped. MtlsCertExpiresAt is the
 // notAfter of the per-device mTLS cert minted at enrollment (nil only for
 // rows that predate migration 006).
+// DeviceService is one (device, service_name) row from the device_services
+// table. Combines the agent's observation (state, state_since) with cp's
+// receive timestamp (last_reported); the API handler maps it to its
+// public JSON shape.
+type DeviceService struct {
+	Name         string
+	State        service.State
+	StateSince   time.Time
+	LastReported time.Time
+}
+
 type Device struct {
 	ID                string
 	Hostname          string
@@ -244,6 +256,39 @@ func (r *Registry) RecordServiceStates(ctx context.Context, deviceID string, sta
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// ListServices returns the per-service rows for a device, ordered by
+// service_name. An empty (but non-nil) slice for a device that has
+// never reported. A non-UUID deviceID returns an empty slice rather
+// than ErrDeviceNotFound — the per-device API surface treats it as
+// "no services" so the page still renders identity + presence even if
+// the URL path was mangled.
+func (r *Registry) ListServices(ctx context.Context, deviceID string) ([]DeviceService, error) {
+	out := []DeviceService{}
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT service_name, state, state_since, last_reported
+		FROM device_services
+		WHERE device_id = $1
+		ORDER BY service_name
+	`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("list device_services: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ds DeviceService
+		var stateStr string
+		if err := rows.Scan(&ds.Name, &stateStr, &ds.StateSince, &ds.LastReported); err != nil {
+			return nil, fmt.Errorf("scan device_service: %w", err)
+		}
+		ds.State = service.State(stateStr)
+		out = append(out, ds)
+	}
+	return out, rows.Err()
 }
 
 // SetPresence records a device's online/offline state and the time it

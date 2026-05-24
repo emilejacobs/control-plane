@@ -15,6 +15,10 @@ import (
 type Service interface {
 	GetByID(ctx context.Context, id string) (registry.Device, error)
 	List(ctx context.Context) ([]registry.Device, error)
+	// ListServices returns the per-service rows for one device, ordered
+	// by service_name (the dashboard renders them in that order). Returns
+	// an empty slice (not nil) for a device that has never reported.
+	ListServices(ctx context.Context, deviceID string) ([]registry.DeviceService, error)
 }
 
 type GetHandler struct {
@@ -43,6 +47,18 @@ type response struct {
 	// the per-device view shows "Unassigned" for those.
 	SiteName   *string `json:"site_name"`
 	ClientName *string `json:"client_name"`
+	// Services is the per-service state snapshot from the agent's last
+	// service-status report (Phase 2). Empty array (not null) for a
+	// device that has never reported — the dashboard distinguishes
+	// "no report yet" from a missing field.
+	Services []serviceItem `json:"services"`
+}
+
+type serviceItem struct {
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	StateSince   string `json:"state_since"`   // RFC3339
+	LastReported string `json:"last_reported"` // RFC3339
 }
 
 // ListHandler serves GET /devices — the site-scoped fleet list. It runs
@@ -122,6 +138,24 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		certDaysRemaining = &d
 	}
 
+	// Services for the per-device "Services" panel. A failure to read
+	// the panel data should not 500 the whole device-view fetch —
+	// presence + cert + identity all stay useful. Log the error and
+	// surface an empty array; the dashboard then renders "no report yet".
+	rows, err := h.svc.ListServices(r.Context(), dev.ID)
+	if err != nil {
+		rows = nil
+	}
+	services := make([]serviceItem, 0, len(rows))
+	for _, row := range rows {
+		services = append(services, serviceItem{
+			Name:         row.Name,
+			State:        string(row.State),
+			StateSince:   row.StateSince.UTC().Format(time.RFC3339),
+			LastReported: row.LastReported.UTC().Format(time.RFC3339),
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response{
 		DeviceID:              dev.ID,
@@ -138,5 +172,6 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		EnrolledAt:            dev.EnrolledAt.UTC().Format(time.RFC3339),
 		SiteName:              dev.SiteName,
 		ClientName:            dev.ClientName,
+		Services:              services,
 	})
 }

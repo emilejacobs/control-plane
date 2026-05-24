@@ -2,7 +2,10 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -170,4 +173,107 @@ func TestRegistryRecordServiceStatesEmptyIsNoOp(t *testing.T) {
 	if count != 0 {
 		t.Errorf("device_services rows after empty report: got %d, want 0", count)
 	}
+}
+
+// The dashboard's Services panel pulls from the same per-device endpoint
+// it already polls every 10s. GET /devices/{id} must surface the rows
+// written by RecordServiceStates as a "services" array ordered by name,
+// with state, state_since, and last_reported all round-tripped as the
+// expected types (string state, RFC3339 timestamps).
+func TestGetDeviceByIDIncludesServices(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "mac-mini-svcstatus-api", "99999999-9999-aaaa-bbbb-cccccccccccc")
+
+	reportedAt := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	if err := srv.Registry.RecordServiceStates(ctx, deviceID, []servicestatus.ServiceState{
+		{Name: "com.uknomi.edge-ui", State: service.StateRunning, StateSince: reportedAt.Add(-2 * time.Hour)},
+		{Name: "nginx", State: service.StateStopped, StateSince: reportedAt.Add(-30 * time.Second)},
+	}, reportedAt); err != nil {
+		t.Fatalf("RecordServiceStates: %v", err)
+	}
+
+	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t, ctx, srv))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /devices/%s: status %d; body=%s", deviceID, resp.StatusCode, raw)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	rawServices, ok := body["services"].([]any)
+	if !ok {
+		t.Fatalf("response missing 'services' array; got body keys: %v", keysOf(body))
+	}
+	if len(rawServices) != 2 {
+		t.Fatalf("services: got %d entries, want 2", len(rawServices))
+	}
+
+	// Services must be ordered by name so the dashboard rendering is
+	// stable across reads.
+	first := rawServices[0].(map[string]any)
+	if got := first["name"]; got != "com.uknomi.edge-ui" {
+		t.Errorf("services[0].name: got %v, want com.uknomi.edge-ui", got)
+	}
+	if got := first["state"]; got != "running" {
+		t.Errorf("services[0].state: got %v, want running", got)
+	}
+	if _, err := time.Parse(time.RFC3339, first["state_since"].(string)); err != nil {
+		t.Errorf("services[0].state_since not RFC3339: %v (got %v)", err, first["state_since"])
+	}
+	if _, err := time.Parse(time.RFC3339, first["last_reported"].(string)); err != nil {
+		t.Errorf("services[0].last_reported not RFC3339: %v (got %v)", err, first["last_reported"])
+	}
+
+	second := rawServices[1].(map[string]any)
+	if got := second["name"]; got != "nginx" {
+		t.Errorf("services[1].name: got %v, want nginx", got)
+	}
+	if got := second["state"]; got != "stopped" {
+		t.Errorf("services[1].state: got %v, want stopped", got)
+	}
+}
+
+// A device with no service-status report yet must serialize "services"
+// as [] not null. The dashboard's render code distinguishes "no report
+// yet" (empty array) from "not present" (missing field).
+func TestGetDeviceByIDServicesEmptyArrayNotNull(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "mac-mini-svcstatus-empty", "bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
+
+	resp := doDeviceGet(t, srv.URL, deviceID, mintAccessToken(t, ctx, srv))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /devices/%s: status %d; body=%s", deviceID, resp.StatusCode, raw)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, present := body["services"]
+	if !present {
+		t.Fatalf("response missing 'services' field; want [] for a device with no reports")
+	}
+	arr, ok := got.([]any)
+	if !ok {
+		t.Fatalf("services: got %T (%v), want []any (empty array, not null)", got, got)
+	}
+	if len(arr) != 0 {
+		t.Errorf("services: got %d entries for an un-reported device, want 0", len(arr))
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

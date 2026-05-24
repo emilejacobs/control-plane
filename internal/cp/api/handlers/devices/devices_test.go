@@ -26,6 +26,10 @@ func (f fakeService) List(_ context.Context) ([]registry.Device, error) {
 	return nil, f.err
 }
 
+func (f fakeService) ListServices(_ context.Context, _ string) ([]registry.DeviceService, error) {
+	return nil, nil
+}
+
 // getDevice drives GetHandler.ServeHTTP and returns the decoded JSON body.
 func getDevice(t *testing.T, h *GetHandler) map[string]any {
 	t.Helper()
