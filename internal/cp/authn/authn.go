@@ -303,6 +303,23 @@ func (a *AuthN) Authenticate(token string) (TokenClaims, error) {
 	return a.signer.Verify(token)
 }
 
+// Logout revokes the presented refresh token. An unknown, already-revoked,
+// or expired token is a no-op (no row is updated) — the caller cannot
+// distinguish between these cases and a successful revoke. The access
+// token in the same session keeps working until its ~1h TTL expires;
+// only the refresh side is durably revoked.
+func (a *AuthN) Logout(ctx context.Context, refreshToken string) error {
+	sum := sha256.Sum256([]byte(refreshToken))
+	if _, err := a.pool.Exec(ctx, `
+		UPDATE refresh_tokens
+		SET revoked_at = now()
+		WHERE token_hash = $1 AND revoked_at IS NULL
+	`, sum[:]); err != nil {
+		return fmt.Errorf("revoke refresh token: %w", err)
+	}
+	return nil
+}
+
 // TotpEnrollment is the one-time result of EnrollTotp: the otpauth:// URI an
 // authenticator app renders as a QR code, and the single-use recovery codes.
 // Both are shown to the operator exactly once and never recoverable after.

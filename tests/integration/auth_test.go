@@ -539,6 +539,82 @@ func doRefresh(t *testing.T, baseURL, refreshToken, idempotencyKey string) *http
 	return resp
 }
 
+// TestLogoutRevokesRefreshToken end-to-ends POST /auth/logout. After a
+// signed-out refresh token is presented to /auth/refresh, the rotation
+// is rejected — proving the revoke landed in the refresh_tokens row.
+// A second logout on the same (now-revoked) token still returns 204, so
+// callers cannot probe token validity.
+func TestLogoutRevokesRefreshToken(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	const email = "operator@acmecorp.test"
+	const password = "correct-horse-battery-staple"
+	if code := doFirstRun(t, srv.URL, email, password,
+		"00000000-0000-0000-0000-0000000000f2"); code != http.StatusCreated {
+		t.Fatalf("first-run setup: got %d want 201", code)
+	}
+
+	loginResp := doLogin(t, srv.URL, email, password, "00000000-0000-0000-0000-000000000901")
+	if loginResp.StatusCode != http.StatusOK {
+		loginResp.Body.Close()
+		t.Fatalf("login setup: got %d want 200", loginResp.StatusCode)
+	}
+	_, refresh := decodeTokens(t, loginResp)
+	loginResp.Body.Close()
+
+	// Sign out — 204 No Content.
+	logoutResp := doLogout(t, srv.URL, refresh, "00000000-0000-0000-0000-000000000902")
+	if logoutResp.StatusCode != http.StatusNoContent {
+		raw, _ := io.ReadAll(logoutResp.Body)
+		logoutResp.Body.Close()
+		t.Fatalf("logout: got %d want 204; body=%s", logoutResp.StatusCode, raw)
+	}
+	logoutResp.Body.Close()
+
+	// The refresh token is now durably revoked: rotation rejects it.
+	rotateResp := doRefresh(t, srv.URL, refresh, "00000000-0000-0000-0000-000000000903")
+	if rotateResp.StatusCode != http.StatusUnauthorized {
+		rotateResp.Body.Close()
+		t.Fatalf("rotate-after-logout: got %d want 401", rotateResp.StatusCode)
+	}
+	rotateResp.Body.Close()
+
+	// A second logout on the same token is also 204 — the handler does not
+	// surface revocation state.
+	again := doLogout(t, srv.URL, refresh, "00000000-0000-0000-0000-000000000904")
+	if again.StatusCode != http.StatusNoContent {
+		again.Body.Close()
+		t.Fatalf("second logout: got %d want 204", again.StatusCode)
+	}
+	again.Body.Close()
+
+	if !auditLogged(srv.Logs.String(), "audit.logout", map[string]any{"outcome": "success"}) {
+		t.Errorf("no audit.logout success log line.\nFull log buffer:\n%s", srv.Logs.String())
+	}
+}
+
+// doLogout POSTs /auth/logout. The caller owns resp.Body.
+func doLogout(t *testing.T, baseURL, refreshToken, idempotencyKey string) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"refresh_token": refreshToken})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/auth/logout", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
+
 // decodeTokens reads the {access_token, refresh_token} body. It does not
 // close resp.Body.
 func decodeTokens(t *testing.T, resp *http.Response) (access, refresh string) {

@@ -116,6 +116,7 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN, auditW))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN, auditW))
 		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN, auditW))
+		b.Post("/auth/logout", auth.NewLogout(d.AuthN, auditW))
 		// Authenticated routes require a valid operator bearer token.
 		// Every authenticated route except enrollment itself also sits
 		// behind the forced-TOTP-enrollment gate; device reads additionally

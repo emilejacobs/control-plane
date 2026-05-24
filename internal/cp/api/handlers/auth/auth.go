@@ -31,6 +31,7 @@ type Service interface {
 	ClaimFirstRunAdmin(ctx context.Context, email, password string) (authn.Tokens, error)
 	Login(ctx context.Context, in authn.LoginInput) (authn.LoginResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authn.Tokens, error)
+	Logout(ctx context.Context, refreshToken string) error
 }
 
 type tokensResponse struct {
@@ -279,6 +280,50 @@ func (h *RefreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeTokens(w, http.StatusOK, tokens)
+}
+
+// LogoutHandler serves POST /auth/logout. It revokes the presented refresh
+// token so a leaked pair cannot rotate forward after Sign out. The endpoint
+// is unauthenticated — the refresh token itself is the credential, same as
+// /auth/refresh — and intentionally returns 204 for both real revocations
+// and unknown tokens so callers cannot probe refresh-token validity.
+type LogoutHandler struct {
+	svc   Service
+	audit audit.Writer
+}
+
+func NewLogout(svc Service, auditW audit.Writer) *LogoutHandler {
+	return &LogoutHandler{svc: svc, audit: auditW}
+}
+
+type logoutRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (h *LogoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log := cplog.FromContext(r.Context())
+
+	var req logoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.svc.Logout(r.Context(), req.RefreshToken); err != nil {
+		log.Error("audit.logout", "outcome", "error", "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_ = h.audit.Write(r.Context(), audit.Entry{
+		Action:    "audit.logout",
+		ActorType: audit.ActorOperator,
+		Outcome:   "success",
+		SourceIP:  clientIP(r),
+		UserAgent: r.UserAgent(),
+	})
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // TotpEnroller is the AuthN surface the enrollment handler needs.
