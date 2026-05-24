@@ -86,3 +86,35 @@ func TestServiceStatusCollectorReportsUnknownForNotFound(t *testing.T) {
 		t.Errorf("nginx State: got %q, want %q", got, service.StateUnknown)
 	}
 }
+
+// When the observed state hasn't changed between two Collect calls,
+// StateSince must remain at the original observation time. The
+// dashboard renders "running since N hours" off this value; if it
+// reset every tick, every service would always read "running since 5 min".
+func TestServiceStatusCollectorStateSinceStableAcrossCalls(t *testing.T) {
+	first := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	second := first.Add(5 * time.Minute)
+
+	tick := first
+	backend := &service.Fake{States: map[string]service.State{
+		"nginx": service.StateRunning,
+	}}
+
+	c := &telemetry.ServiceStatusCollector{
+		Backend:   backend,
+		DeviceID:  "dev-test",
+		AllowList: []string{"nginx"},
+		Now:       func() time.Time { return tick },
+	}
+
+	r1 := c.Collect(context.Background())
+	tick = second
+	r2 := c.Collect(context.Background())
+
+	if got := r1.Services[0].StateSince; !got.Equal(first) {
+		t.Fatalf("r1 StateSince: got %v, want %v", got, first)
+	}
+	if got := r2.Services[0].StateSince; !got.Equal(first) {
+		t.Errorf("r2 StateSince should still be the original observation time; got %v, want %v", got, first)
+	}
+}
