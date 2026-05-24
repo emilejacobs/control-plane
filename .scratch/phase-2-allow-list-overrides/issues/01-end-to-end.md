@@ -1,8 +1,8 @@
 # Issue 01 — Per-device allow-list overrides end-to-end
 
-Status: ready-for-agent
+Status: done (2026-05-24 — code complete across 13 TDD cycles, awaiting live deploy)
 Type: AFK
-Estimate: 4–6 days
+Estimate: 4–6 days (actual: ~1 session, 13 cycles)
 
 ## Parent
 
@@ -154,3 +154,45 @@ A full vertical slice for editing the per-device service allow-list (and cadence
 
 - **MQTT cmd-channel retention semantics.** The QoS / clean-session settings on the agent's cmd-subscription decide whether an offline-at-save device gets the override on reconnect via broker buffering, or whether we need a `pending-config` reconcile loop. Investigate before writing the "offline operator save" acceptance test.
 - **Audit log entry for `service-config.updated`.** Slice 1 audit log already captures device-touching writes. Confirm the new endpoint flows through the same middleware; add a row type if not.
+
+## Comments
+
+### 2026-05-24 — code complete; live deploy pending
+
+All 13 TDD cycles landed on `main` in one session (commits `ca8c439` → `90a8f57`). Issue 01's vertical scope is implemented end-to-end and tested at every layer (Go unit + integration, vitest); awaiting live `terraform apply` against prod + the bench-Mac agent upgrade to verify the loop on real hardware.
+
+**Order shipped (commit / cycle):**
+
+1. `ca8c439` — migration 012 + Registry.GetServiceConfig/SetServiceConfig round-trip
+2. `d19ad82` — Collector.SetAllowList + Publisher.SetInterval hot-reload (race-safe)
+3. `3add343` — agent dispatcher handler (configupdate, strict whitelist per ADR-028)
+4. `08b0ea2` — ConfigUpdateApplier (atomic tmp+rename disk write + hot-reload trigger)
+5. `c3a6583` — wire config.update into agent.go; ConfigPath threaded
+6. `bd877ef` — CP PUT handler + shared validation in `internal/protocol/configupdate`
+7. `98bbd60` — CP Builder.Put + iotpublisher + cmd/cp-api/main.go wiring
+8. `ecd0611` — GET /devices/{id} surfaces service_config block
+9. `6c0b33d` — envelope.Result.Type + scope GetServiceConfig (authz gate fix)
+10. `1efee76` — cmd-result ingest handler + RecordServiceConfigApplied
+11. `43bf967` — cp-ingest cmd-result consumer wiring
+12. `d84e492` — terraform: cmd-result SQS + cp-api iot:Publish on /cmd
+13. `90a8f57` — EditServicesModal + service_config wiring on the device page
+
+**Five things that surfaced mid-implementation (PRD § Refinements expected was right to expect them):**
+
+1. **`time.Duration.String()` lossily canonicalises** — `2 * time.Minute` formats to `"2m0s"` not `"2m"`. The operator's input string is preserved verbatim through the API → registry → cmd args → agent → ACK by skipping the round-trip-through-time.Duration in the CP handler. Documented in cycle 6's commit.
+
+2. **`envelope.Result` had no Type field** — cycle 9 added it so cp-ingest can route ACKs without an in-memory pending-cmd map. Wire-compatible (omitempty); older agents send empty Type and the handler silently ignores.
+
+3. **`Registry.GetServiceConfig` triggered the authz CI gate** — the ADR-012 gate flags any unscoped `SELECT … FROM devices` from a real handler. Fix in cycle 9: route through `ScopedDeviceQuery`; tests use `staffCtx`.
+
+4. **Publisher behavior change** — slice 1 only constructed the `ServiceStatusPublisher` when the initial allow-list was non-empty. Slice 2 always constructs it when a backend is available so `config.update` can enable service-status on an empty-start agent. Empty-list ticks are a no-op on cp-ingest (`RecordServiceStates` skips on empty `services`), so the operational cost is a harmless empty publish on the 5m cadence.
+
+5. **Enrollment hand-off — deferred.** The original scope said "include override in enrollment response for repeat installs." Slice 1's handoff established that re-enrollment via module 11 mints a fresh `device_id`, so the "preserve override across re-enrollment" feature needs orphan-GC + hardware_uuid lookup before it makes sense. Out of scope for slice 2; revisit when the orphan-GC followup lands.
+
+**Live deploy that's still needed:**
+
+- `terraform apply` against `infra/terraform-deploy/` to provision `module "sqs_cmd_result"` + the IoT Rule + the cp-api task role widening (iot:Publish on `devices/*/cmd`). Auto-deploy (ADR-027) rolls cp-api + cp-ingest with the new code on merge.
+- Bench-Mac upgrade via hot-swap (per slice 1's pattern — not module-11 reinstall) to get the agent binary carrying the new `config.update` handler. Procedure: scp new binary, `install` it, `launchctl kickstart -k system/com.uknomi.agent`.
+- Smoke: PUT a new allow-list from `curl`, observe the `config.update` log line in agent stdout (or `/var/log/uknomi-agent.log`), confirm `agent-config.json` updated atomically, then refresh the dashboard and watch the badge flip to `(overridden)`.
+
+**Documentation updated:** `docs/architecture.md` § Phase 2 second slice paragraph + `internal/protocol/configupdate` row in the shared-packages table; `docs/CONTEXT.md` gains "Service allow-list override" and "`config.update`" glossary entries; ADR-028 created (`docs/adr/0028-unsigned-config-update-phase-2.md`); the architecture-decisions memory at `~/.claude/projects/.../memory/architecture_decisions.md` carries the ADR-028 headline.
