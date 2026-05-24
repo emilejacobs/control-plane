@@ -9,7 +9,7 @@ This folder is an **ephemeral working tray** (per [`docs/agents/issue-tracker.md
 | #  | File                                                                     | Type | Estimate |
 |----|--------------------------------------------------------------------------|------|----------|
 | 01 | [Postgres `devices` orphan GC tool](./issues/01-orphan-gc-tool.md)       | AFK  | 2–3 hr   |
-| 02 | [Empty deploy-root log group cleanup](./issues/02-empty-log-group.md)    | AFK  | 15 min   |
+| 02 | [Empty deploy-root log group cleanup](./issues/02-empty-log-group.md) ✅ done 2026-05-24 | AFK  | 15 min   |
 | 03 | [§5b smoke: network-drop + power-yank on next bench device](./issues/03-bench-smoke-physical.md) | HITL | 30 min on hardware |
 | 04 | [DB connectivity from operator laptop — design decision](./issues/04-db-connectivity-decision.md) | HITL | 30 min decision, then implementation |
 

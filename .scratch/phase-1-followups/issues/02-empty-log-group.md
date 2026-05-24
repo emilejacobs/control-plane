@@ -1,6 +1,6 @@
 # Issue 02 — Empty deploy-root log group cleanup
 
-Status: ready-for-agent
+Status: done (2026-05-24 — landed in the same commit that filed this issue, `2c0ac41`)
 Type: AFK
 Estimate: 15 min
 
