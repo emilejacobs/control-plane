@@ -163,8 +163,13 @@ locals {
 # pass; the alarm reads the metric as the gap signal.
 
 resource "aws_cloudwatch_log_metric_filter" "sweeper_tick" {
-  name           = "uknomi-cp-sweeper-tick"
-  log_group_name = aws_cloudwatch_log_group.service["cp-ingest"].name
+  name = "uknomi-cp-sweeper-tick"
+  # cp-ingest is wired through the standalone module under
+  # infra/terraform/modules/cp-ingest-service, which manages its own log
+  # group (/uknomi/cp-ingest). The deploy root's aws_cloudwatch_log_group
+  # .service["cp-ingest"] is unused — pointing the filter at the module's
+  # output keeps the metric in sync with where logs actually land.
+  log_group_name = module.cp_ingest.log_group_name
   pattern        = "{ $.msg = \"sweeper.tick\" }"
 
   metric_transformation {
