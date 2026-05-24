@@ -253,6 +253,95 @@ func TestAgentDispatchesServiceStatus(t *testing.T) {
 	}
 }
 
+// Phase 2 slice 2: the agent registers a config.update handler when
+// constructed with a ConfigPath. A delivered config.update payload
+// flows through the dispatcher, persists to disk, and ACKs on
+// cmd-result with the effective values.
+func TestAgentDispatchesConfigUpdate(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent-config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{
+		"device_id": "dev-cfg",
+		"version": "0.1.0",
+		"broker_url": "wss://example.test",
+		"client_id": "dev-cfg",
+		"cert_path": "/var/uknomi/cert.pem",
+		"key_path": "/var/uknomi/key.pem",
+		"ca_cert_path": "/var/uknomi/ca.pem",
+		"service_allow_list": ["nginx"],
+		"service_status_interval": "5m"
+	}`), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	tr := newFakeTransport()
+	backend := &service.Fake{States: map[string]service.State{"nginx": service.StateRunning, "anydesk": service.StateRunning}}
+	a, err := agent.New(agent.Config{
+		CertPath:         cert,
+		DeviceID:         "dev-cfg",
+		Version:          "0.1.0",
+		ConfigPath:       cfgPath,
+		ServiceAllowList: []string{"nginx"},
+	}, tr, agent.WithServiceBackend(backend))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	cmd := envelope.Command{
+		Type:          "config.update",
+		CorrelationID: "corr-99",
+		CommandID:     "cmd-99",
+		Args:          json.RawMessage(`{"service_allow_list":["nginx","anydesk"],"service_status_interval":"45s"}`),
+		IssuedAt:      time.Now(),
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	tr.deliverTo("devices/dev-cfg/cmd", cmdBytes)
+
+	results := tr.publishedOn("devices/dev-cfg/cmd-result")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 cmd-result, got %d", len(results))
+	}
+	var result envelope.Result
+	if err := json.Unmarshal(results[0], &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got: %+v error=%+v", result, result.Error)
+	}
+	if result.CorrelationID != "corr-99" {
+		t.Errorf("correlation_id round-trip: got %q, want corr-99", result.CorrelationID)
+	}
+
+	// Effective values returned to the cp.
+	var payload struct {
+		EffectiveAllowList []string `json:"effective_allow_list"`
+		EffectiveInterval  string   `json:"effective_interval"`
+	}
+	if err := json.Unmarshal(result.Result, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(payload.EffectiveAllowList) != 2 || payload.EffectiveAllowList[1] != "anydesk" {
+		t.Errorf("effective_allow_list: got %v", payload.EffectiveAllowList)
+	}
+	if payload.EffectiveInterval != "45s" {
+		t.Errorf("effective_interval: got %q, want 45s", payload.EffectiveInterval)
+	}
+
+	// On-disk persistence.
+	raw, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(raw), "anydesk") {
+		t.Errorf("agent-config.json should contain new service; got: %s", raw)
+	}
+	if !strings.Contains(string(raw), "45s") {
+		t.Errorf("agent-config.json should contain new interval; got: %s", raw)
+	}
+}
+
 func TestAgentDispatchesServiceRestart(t *testing.T) {
 	cert := writeTestCert(t, time.Now().Add(time.Hour))
 	tr := newFakeTransport()

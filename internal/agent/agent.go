@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
+	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
@@ -35,6 +36,13 @@ type Config struct {
 	// on Linux. ServiceStatusInterval defaults to 5 minutes when unset.
 	ServiceAllowList      []string
 	ServiceStatusInterval time.Duration
+
+	// ConfigPath is the absolute path to the agent's JSON config file
+	// (the same file that produced this Config via config.Load). When
+	// non-empty, the Phase 2 slice 2 config.update dispatcher handler
+	// is registered, allowing CP to push allow-list + cadence overrides
+	// down via the cmd channel. Empty disables the downward channel.
+	ConfigPath string
 }
 
 type Transport interface {
@@ -52,11 +60,15 @@ type Agent struct {
 	serviceBackend service.Backend
 	startTime      time.Time
 	telemetry      *telemetry.Publisher
-	// serviceStatus is set only when cfg.ServiceAllowList is non-empty
-	// AND a service backend was supplied via WithServiceBackend. nil
-	// otherwise — Start treats that as "feature disabled".
-	serviceStatus     *telemetry.ServiceStatusPublisher
-	serviceStatusDone chan struct{}
+	// serviceStatus + serviceStatusCollector are set whenever a service
+	// backend was supplied via WithServiceBackend (Phase 2 slice 2:
+	// always constructed, even with an empty initial allow-list, so
+	// config.update can hot-reload an allow-list onto an empty start).
+	// Both stay nil when no backend is supplied — agent unit-tests that
+	// don't need service surfaces leave them nil.
+	serviceStatusCollector *telemetry.ServiceStatusCollector
+	serviceStatus          *telemetry.ServiceStatusPublisher
+	serviceStatusDone      chan struct{}
 
 	pubCancel context.CancelFunc
 	pubDone   chan struct{}
@@ -107,16 +119,19 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		Logger:     a.logger,
 	}
 
-	// Phase 2: optional service-status publisher. Skipped silently when
-	// ServiceAllowList is empty OR when no service backend was provided
-	// (the agent unit-tests construct a stub backend; production cmd/agent
-	// always wires the real one).
-	if len(cfg.ServiceAllowList) > 0 && a.serviceBackend != nil {
+	// Phase 2: service-status publisher. Constructed whenever the
+	// agent has a service backend, even if the initial allow-list is
+	// empty — slice 2 needs the publisher running so config.update can
+	// hot-reload an allow-list onto an agent that started empty.
+	// Empty-list ticks produce empty Reports which cp-ingest's
+	// RecordServiceStates treats as a no-op, so the operational cost
+	// is a harmless 5-min heartbeat-shaped publish.
+	if a.serviceBackend != nil {
 		ssInterval := cfg.ServiceStatusInterval
 		if ssInterval <= 0 {
 			ssInterval = defaultServiceStatusInterval
 		}
-		collector := &telemetry.ServiceStatusCollector{
+		a.serviceStatusCollector = &telemetry.ServiceStatusCollector{
 			Backend:   a.serviceBackend,
 			DeviceID:  cfg.DeviceID,
 			AllowList: cfg.ServiceAllowList,
@@ -126,9 +141,17 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		a.serviceStatus = &telemetry.ServiceStatusPublisher{
 			Interval:  ssInterval,
 			DeviceID:  cfg.DeviceID,
-			Collect:   collector.Collect,
+			Collect:   a.serviceStatusCollector.Collect,
 			Transport: transport,
 			Logger:    a.logger,
+		}
+
+		// Phase 2 slice 2: register the config.update handler when a
+		// config path was supplied. The Applier persists the override
+		// to disk and hot-reloads the collector + publisher (ADR-028).
+		if cfg.ConfigPath != "" {
+			applier := NewConfigUpdateApplier(cfg.ConfigPath, a.serviceStatusCollector, a.serviceStatus)
+			a.dispatcher.Register("config.update", configupdate.New(applier))
 		}
 	}
 

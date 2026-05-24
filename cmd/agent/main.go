@@ -86,6 +86,7 @@ func main() {
 		TelemetryInterval:     telemetryInterval,
 		ServiceAllowList:      cfg.ServiceAllowList,
 		ServiceStatusInterval: serviceStatusInterval,
+		ConfigPath:            *configPath,
 	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend()))
 	if err != nil {
 		logger.Error("agent", "error", err)
