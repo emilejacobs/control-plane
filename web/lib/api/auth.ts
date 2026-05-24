@@ -1,6 +1,6 @@
 // Auth API calls against cp-api: first-run admin claim, login, TOTP
 // enrollment. Each stores the returned token pair on success.
-import { apiRequest, setTokens } from "./client";
+import { apiRequest, currentTokens, setTokens } from "./client";
 
 // ApiError carries cp-api's HTTP status so callers can branch on it.
 export class ApiError extends Error {
@@ -78,6 +78,25 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   const body = (await res.json()) as TokenPair & { requires_totp_enrollment: boolean };
   setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
   return { requiresTotpEnrollment: body.requires_totp_enrollment };
+}
+
+// logout asks cp-api to revoke the operator's refresh token so a stolen
+// pair cannot rotate forward after Sign out. It is fire-and-forget — the
+// access token in memory is the source of truth for the local session, so
+// callers (Topbar) clear tokens + navigate regardless of network outcome.
+// A best-effort revoke is materially safer than a no-op, but a failed
+// revoke must not strand the operator on the dashboard.
+export async function logout(): Promise<void> {
+  const tokens = currentTokens();
+  if (tokens === null) return;
+  try {
+    await apiRequest("/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: tokens.refreshToken }),
+    });
+  } catch {
+    // Network errors are intentionally swallowed; see comment above.
+  }
 }
 
 export interface TotpEnrollment {

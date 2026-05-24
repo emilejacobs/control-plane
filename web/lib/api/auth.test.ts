@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/server";
-import { API_BASE, clearTokens, currentTokens } from "./client";
-import { firstRun, login } from "./auth";
+import { API_BASE, clearTokens, currentTokens, setTokens } from "./client";
+import { firstRun, login, logout } from "./auth";
 
 describe("firstRun", () => {
   beforeEach(() => clearTokens());
@@ -83,5 +83,50 @@ describe("login", () => {
     });
 
     expect(await captured!.json()).toMatchObject({ recovery_code: "abcd-efgh" });
+  });
+});
+
+describe("logout", () => {
+  beforeEach(() => clearTokens());
+
+  it("posts the current refresh token to /auth/logout", async () => {
+    let captured: Request | undefined;
+    server.use(
+      http.post(`${API_BASE}/auth/logout`, ({ request }) => {
+        captured = request.clone();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    setTokens({ accessToken: "a-9", refreshToken: "r-9" });
+    await logout();
+
+    expect(captured).toBeDefined();
+    expect(await captured!.json()).toEqual({ refresh_token: "r-9" });
+  });
+
+  it("is a no-op when no tokens are set (defensive)", async () => {
+    let called = false;
+    server.use(
+      http.post(`${API_BASE}/auth/logout`, () => {
+        called = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    await logout();
+
+    expect(called).toBe(false);
+  });
+
+  it("swallows network errors so Sign out always completes locally", async () => {
+    server.use(
+      http.post(`${API_BASE}/auth/logout`, () => HttpResponse.error()),
+    );
+
+    setTokens({ accessToken: "a", refreshToken: "r" });
+    await expect(logout()).resolves.toBeUndefined();
+    // currentTokens is untouched — logout() doesn't clear, callers do.
+    expect(currentTokens()).not.toBeNull();
   });
 });

@@ -9,6 +9,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Dot } from "./Dot";
 import { clearTokens } from "../../lib/api/client";
+import { logout } from "../../lib/api/auth";
 
 interface NavItem {
   id: string;
@@ -48,7 +49,12 @@ export function Topbar({ userInitials = "EJ" }: Props) {
   const pathname = usePathname() ?? "/";
   const router = useRouter();
 
-  function onSignOut() {
+  async function onSignOut() {
+    // Revoke the refresh token server-side first (fire-and-forget — see
+    // logout()'s comment for why this is best-effort), then clear local
+    // tokens and navigate. The order matters: clearing before revoking
+    // would lose the refresh-token value we need to send.
+    await logout();
     clearTokens();
     router.push("/login");
   }
