@@ -244,6 +244,137 @@ func TestServiceStatusCollectorTransientErrorLogsAndReturnsUnknown(t *testing.T)
 	}
 }
 
+// --- Hot-reload (Phase 2 slice 2) -----------------------------------------
+
+// SetAllowList swaps the collector's allow-list mid-run. The next Collect
+// call must reflect the new list. This is the in-process arm of the
+// config.update flow: cmd dispatcher → collector.SetAllowList →
+// publisher next tick reports the new set.
+func TestServiceStatusCollectorSetAllowListMidFlight(t *testing.T) {
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	backend := &service.Fake{States: map[string]service.State{
+		"com.uknomi.edge-ui":      service.StateRunning,
+		"com.tailscale.tailscaled": service.StateRunning,
+		"anydesk":                 service.StateRunning,
+	}}
+	c := &telemetry.ServiceStatusCollector{
+		Backend:   backend,
+		DeviceID:  "dev-test",
+		AllowList: []string{"com.uknomi.edge-ui"},
+		Now:       func() time.Time { return now },
+	}
+
+	r1 := c.Collect(context.Background())
+	if len(r1.Services) != 1 || r1.Services[0].Name != "com.uknomi.edge-ui" {
+		t.Fatalf("r1: got %+v, want one entry for edge-ui", r1.Services)
+	}
+
+	c.SetAllowList([]string{"com.tailscale.tailscaled", "anydesk"})
+
+	r2 := c.Collect(context.Background())
+	names := []string{}
+	for _, s := range r2.Services {
+		names = append(names, s.Name)
+	}
+	if len(names) != 2 || names[0] != "anydesk" && names[1] != "anydesk" {
+		t.Errorf("r2 names: got %v, want tailscale + anydesk in some order", names)
+	}
+	for _, s := range r2.Services {
+		if s.Name == "com.uknomi.edge-ui" {
+			t.Errorf("r2 still reports the removed service edge-ui: %+v", s)
+		}
+	}
+}
+
+// Concurrent SetAllowList + Collect must be race-free. Run under -race
+// to catch unprotected reads/writes on AllowList or lastSeen.
+func TestServiceStatusCollectorSetAllowListConcurrentSafe(t *testing.T) {
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	backend := &service.Fake{States: map[string]service.State{
+		"a": service.StateRunning, "b": service.StateRunning,
+		"c": service.StateRunning, "d": service.StateRunning,
+	}}
+	c := &telemetry.ServiceStatusCollector{
+		Backend:   backend,
+		DeviceID:  "dev-test",
+		AllowList: []string{"a"},
+		Now:       func() time.Time { return now },
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		lists := [][]string{{"a"}, {"b", "c"}, {"a", "d"}, {"a", "b", "c", "d"}}
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+				c.SetAllowList(lists[i%len(lists)])
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = c.Collect(context.Background())
+			}
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+}
+
+// SetInterval updates the publisher's tick cadence. With an injected
+// ticker via the public method, the next tick after Set fires at the
+// new cadence — observable by an integer count of publishes within
+// a fixed wall-clock window.
+func TestServiceStatusPublisherSetIntervalSpeedsUpTicks(t *testing.T) {
+	tr := newRecordingTransport()
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	report := telemetry.Report{DeviceID: "dev-test", CorrelationID: "c", ReportedAt: now}
+
+	p := &telemetry.ServiceStatusPublisher{
+		Interval:  500 * time.Millisecond, // slow start
+		DeviceID:  "dev-test",
+		Collect:   func(_ context.Context) telemetry.Report { return report },
+		Transport: tr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+
+	// Give the slow ticker one publish (or wait a bit for the first
+	// tick to arm). 500ms cadence ⇒ ≤2 publishes in the first 200ms.
+	time.Sleep(50 * time.Millisecond)
+	beforeFast := len(tr.snapshot("devices/dev-test/service-status"))
+
+	// Speed up the cadence dramatically.
+	p.SetInterval(5 * time.Millisecond)
+
+	// In 100ms at 5ms cadence we expect roughly 10–20 publishes.
+	time.Sleep(100 * time.Millisecond)
+	afterFast := len(tr.snapshot("devices/dev-test/service-status"))
+
+	cancel()
+	<-done
+
+	delta := afterFast - beforeFast
+	if delta < 5 {
+		t.Errorf("publishes after SetInterval(5ms) over 100ms window: got %d, want ≥5 (before=%d, after=%d)",
+			delta, beforeFast, afterFast)
+	}
+}
+
 // --- ServiceStatusPublisher ------------------------------------------------
 
 // recordingTransport is a thread-safe Transport that captures every
