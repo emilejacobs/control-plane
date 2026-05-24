@@ -5,15 +5,23 @@ import "context"
 // Fake is an in-memory Backend for tests.
 //
 //   - Status: populate States with the desired result for each name;
-//     names absent from States produce ErrNotFound.
+//     names absent from States produce ErrNotFound. Populate StatusErrors[name]
+//     to force Status to return a non-ErrNotFound error (e.g. an *ExecError)
+//     and exercise the caller's transient-failure path.
 //   - Restart: by default returns nil (success). Populate RestartErrors[name]
 //     to make Restart return that error for the named service.
+//
+// StatusErrors takes precedence over States for the same name.
 type Fake struct {
 	States        map[string]State
+	StatusErrors  map[string]error
 	RestartErrors map[string]error
 }
 
 func (f *Fake) Status(_ context.Context, name string) (State, error) {
+	if err, ok := f.StatusErrors[name]; ok {
+		return "", err
+	}
 	if f.States == nil {
 		return "", ErrNotFound
 	}

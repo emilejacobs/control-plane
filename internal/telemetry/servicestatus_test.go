@@ -1,7 +1,10 @@
 package telemetry_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -184,5 +187,57 @@ func TestServiceStatusCollectorEmptyAllowListProducesEmptyReport(t *testing.T) {
 	}
 	if len(report.Services) != 0 {
 		t.Errorf("Services: got %d entries, want 0", len(report.Services))
+	}
+}
+
+// A non-ErrNotFound error from Backend.Status (e.g. launchctl returned
+// a permission error, or the systemd socket is unreachable) must:
+//   - report State=unknown, not crash the collection;
+//   - emit a slog warning so operators can see the underlying error.
+//
+// ErrNotFound is the *expected* "service isn't loaded" case and stays
+// quiet (verified by the absence of a log line for the missing service
+// in the existing #2 test).
+func TestServiceStatusCollectorTransientErrorLogsAndReturnsUnknown(t *testing.T) {
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	transientErr := errors.New("launchctl: permission denied")
+	backend := &service.Fake{
+		States: map[string]service.State{
+			"com.uknomi.edge-ui": service.StateRunning,
+		},
+		StatusErrors: map[string]error{
+			"nginx": transientErr,
+		},
+	}
+
+	logBuf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	c := &telemetry.ServiceStatusCollector{
+		Backend:   backend,
+		DeviceID:  "dev-test",
+		AllowList: []string{"com.uknomi.edge-ui", "nginx"},
+		Now:       func() time.Time { return now },
+		Logger:    logger,
+	}
+
+	report := c.Collect(context.Background())
+
+	byName := map[string]telemetry.ServiceState{}
+	for _, s := range report.Services {
+		byName[s.Name] = s
+	}
+	if got := byName["com.uknomi.edge-ui"].State; got != service.StateRunning {
+		t.Errorf("edge-ui State: got %q, want %q (transient error on a sibling must not poison this one)", got, service.StateRunning)
+	}
+	if got := byName["nginx"].State; got != service.StateUnknown {
+		t.Errorf("nginx State: got %q, want %q", got, service.StateUnknown)
+	}
+
+	if !bytes.Contains(logBuf.Bytes(), []byte("permission denied")) {
+		t.Errorf("expected log to mention the underlying error; got: %s", logBuf.String())
+	}
+	if !bytes.Contains(logBuf.Bytes(), []byte("nginx")) {
+		t.Errorf("expected log to identify the failing service by name; got: %s", logBuf.String())
 	}
 }

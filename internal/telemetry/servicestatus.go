@@ -2,6 +2,9 @@ package telemetry
 
 import (
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/service"
@@ -39,6 +42,10 @@ type ServiceStatusCollector struct {
 	DeviceID  string
 	AllowList []string
 	Now       func() time.Time
+	// Logger receives a warn-level line for every Backend.Status error
+	// other than ErrNotFound (which is the expected "service not loaded"
+	// case and stays quiet). Optional; nil defaults to a discard logger.
+	Logger *slog.Logger
 
 	// lastSeen memoises (state, since) per service name so that StateSince
 	// only advances when the observed state actually changes. Reset on
@@ -55,14 +62,26 @@ type observation struct {
 // Report stamped with a fresh correlation_id and the current time.
 func (c *ServiceStatusCollector) Collect(ctx context.Context) Report {
 	now := c.Now()
+	log := c.Logger
+	if log == nil {
+		log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
 	if c.lastSeen == nil {
 		c.lastSeen = map[string]observation{}
 	}
+	correlationID := newCorrelationID()
 	services := make([]ServiceState, 0, len(c.AllowList))
 	for _, name := range c.AllowList {
 		st, err := c.Backend.Status(ctx, name)
 		if err != nil {
 			st = service.StateUnknown
+			if !errors.Is(err, service.ErrNotFound) {
+				log.Warn("service status query failed",
+					"service", name,
+					"error", err.Error(),
+					"correlation_id", correlationID,
+				)
+			}
 		}
 		prev, seen := c.lastSeen[name]
 		since := now
@@ -78,7 +97,7 @@ func (c *ServiceStatusCollector) Collect(ctx context.Context) Report {
 	}
 	return Report{
 		DeviceID:      c.DeviceID,
-		CorrelationID: newCorrelationID(),
+		CorrelationID: correlationID,
 		ReportedAt:    now,
 		Services:      services,
 	}
