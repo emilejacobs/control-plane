@@ -17,6 +17,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
+	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 )
 
 // ErrInvalidBootstrapKey is returned by Enroll when the supplied bootstrap
@@ -197,6 +198,52 @@ func (r *Registry) UpdateLastSeen(ctx context.Context, deviceID string, at time.
 		return ErrDeviceNotFound
 	}
 	return nil
+}
+
+// RecordServiceStates persists a service-status report: per-(device,
+// service_name) UPSERT of the agent's observed state + agent's
+// best-effort state_since + cp-side ingest timestamp. An empty slice
+// is a valid no-op. An id matching no row — including a non-UUID —
+// returns ErrDeviceNotFound so the ingester can DLQ a late report from
+// a decommissioned device instead of looping.
+//
+// The per-service UPSERTs run inside a single transaction so a partial
+// failure leaves storage in its prior state. At Phase 2 fleet scale
+// the allow-list is small (~5–10 services per device) so the loop is
+// cheap; if it ever stops being so we switch to a bulk INSERT with
+// unnest() — same semantics, no test changes needed.
+func (r *Registry) RecordServiceStates(ctx context.Context, deviceID string, states []servicestatus.ServiceState, reportedAt time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1)`, deviceID).Scan(&exists); err != nil {
+		return fmt.Errorf("device exists check: %w", err)
+	}
+	if !exists {
+		return ErrDeviceNotFound
+	}
+	if len(states) == 0 {
+		return nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	for _, s := range states {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO device_services (device_id, service_name, state, state_since, last_reported)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (device_id, service_name) DO UPDATE SET
+				state         = EXCLUDED.state,
+				state_since   = EXCLUDED.state_since,
+				last_reported = EXCLUDED.last_reported
+		`, deviceID, s.Name, string(s.State), s.StateSince, reportedAt); err != nil {
+			return fmt.Errorf("upsert device_service %s: %w", s.Name, err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // SetPresence records a device's online/offline state and the time it
