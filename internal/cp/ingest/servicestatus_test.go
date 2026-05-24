@@ -1,8 +1,10 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -137,5 +139,44 @@ func TestServiceStatusIngesterTransientErrorRedelivers(t *testing.T) {
 	}
 	if !errors.Is(err, transient) {
 		t.Errorf("expected underlying error preserved; got %v", err)
+	}
+}
+
+// The Phase 2 alarm's log-metric-filter counts "service-status.stopped"
+// occurrences in cp-ingest logs. The handler must emit one such line
+// per stopped service in the report (running + unknown stay quiet).
+// This pins the metric-filter integration point that the alarm relies on.
+func TestServiceStatusIngesterLogsStoppedServices(t *testing.T) {
+	w := &fakeServiceStatusWriter{}
+	ing := NewServiceStatusIngester(w, fixedClock(time.Now()))
+	buf := &bytes.Buffer{}
+	ing.Logger = slog.New(slog.NewJSONHandler(buf, nil))
+
+	report := servicestatus.Report{
+		DeviceID:      "dev-bbe0540c",
+		CorrelationID: "corr-stopped",
+		Services: []servicestatus.ServiceState{
+			{Name: "com.uknomi.edge-ui", State: service.StateRunning, StateSince: time.Now()},
+			{Name: "nginx", State: service.StateStopped, StateSince: time.Now().Add(-1 * time.Minute)},
+			{Name: "postfix", State: service.StateUnknown, StateSince: time.Now()},
+		},
+	}
+	if err := ing.Handle(context.Background(), report); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if !bytes.Contains(buf.Bytes(), []byte(`"msg":"service-status.stopped"`)) {
+		t.Errorf("expected a service-status.stopped log line; got: %s", buf.String())
+	}
+	if !bytes.Contains(buf.Bytes(), []byte(`"service":"nginx"`)) {
+		t.Errorf("expected the log line to identify nginx by name; got: %s", buf.String())
+	}
+	// Running + unknown must stay quiet — otherwise the alarm metric
+	// would count them too.
+	if bytes.Contains(buf.Bytes(), []byte(`"service":"com.uknomi.edge-ui"`)) {
+		t.Errorf("running service emitted a log line (alarm would count false positives): %s", buf.String())
+	}
+	if bytes.Contains(buf.Bytes(), []byte(`"service":"postfix"`)) {
+		t.Errorf("unknown service emitted a log line (alarm would count false positives): %s", buf.String())
 	}
 }

@@ -3,11 +3,14 @@ package ingest
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
+	"github.com/emilejacobs/control-plane/internal/service"
 )
 
 // ServiceStatusWriter persists a service-status report. The writer
@@ -28,6 +31,12 @@ type ServiceStatusWriter interface {
 type ServiceStatusIngester struct {
 	writer ServiceStatusWriter
 	now    func() time.Time
+	// Logger receives one structured info line per service in the
+	// report. The "service-status.stopped" message is what the Phase 2
+	// CloudWatch alarm's metric filter counts; emitting it here keeps
+	// the alarm-firing signal next to the data that fires it. Nil
+	// defaults to a discard logger so tests stay quiet.
+	Logger *slog.Logger
 }
 
 // NewServiceStatusIngester builds the ingester. now defaults to time.Now.
@@ -51,6 +60,25 @@ func (i *ServiceStatusIngester) Handle(ctx context.Context, r servicestatus.Repo
 			return sqsconsumer.Poison(err)
 		}
 		return err
+	}
+	// One line per stopped service — the Phase 2 alarm's metric filter
+	// counts "service-status.stopped" occurrences. Emitting here (not
+	// in the writer) keeps the alarm signal next to the protocol fact
+	// rather than the storage fact: a write failure suppresses both
+	// rightly. Running + unknown stay quiet to keep the noise low.
+	log := i.Logger
+	if log == nil {
+		log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+	for _, s := range r.Services {
+		if s.State == service.StateStopped {
+			log.Info("service-status.stopped",
+				"device_id", r.DeviceID,
+				"service", s.Name,
+				"state_since", s.StateSince.UTC().Format(time.RFC3339),
+				"correlation_id", r.CorrelationID,
+			)
+		}
 	}
 	return nil
 }

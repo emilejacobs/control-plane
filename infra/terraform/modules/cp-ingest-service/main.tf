@@ -40,6 +40,11 @@ resource "aws_ecs_task_definition" "this" {
         { name = "HEARTBEAT_DLQ_URL", value = var.heartbeat_dlq_url },
         { name = "LIFECYCLE_QUEUE_URL", value = var.lifecycle_queue_url },
         { name = "LIFECYCLE_DLQ_URL", value = var.lifecycle_dlq_url },
+        # Phase 2: empty strings keep cp-ingest's service-status consumer
+        # silently disabled. The deploy root populates them once the new
+        # sqs-ingest instantiation lands.
+        { name = "SERVICE_STATUS_QUEUE_URL", value = var.service_status_queue_url },
+        { name = "SERVICE_STATUS_DLQ_URL", value = var.service_status_dlq_url },
       ]
 
       # The DSN carries the DB password — injected from Secrets Manager,

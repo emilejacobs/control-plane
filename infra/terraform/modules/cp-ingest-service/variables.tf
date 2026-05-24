@@ -87,3 +87,19 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# Phase 2 service-status reporting (Issue 01). Empty defaults so the
+# module stays applyable in environments that haven't provisioned the
+# service-status SQS queue yet — cp-ingest's main.go skips the consumer
+# when these are unset.
+variable "service_status_queue_url" {
+  description = "SQS URL of the service-status queue (sqs-ingest module output queue_url). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "service_status_dlq_url" {
+  description = "SQS URL of the service-status dead-letter queue (sqs-ingest module output dlq_url). Optional."
+  type        = string
+  default     = ""
+}

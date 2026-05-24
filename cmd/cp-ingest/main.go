@@ -123,9 +123,13 @@ func run(logger *slog.Logger) error {
 	serviceStatusQueueURL := os.Getenv("SERVICE_STATUS_QUEUE_URL")
 	serviceStatusDLQURL := os.Getenv("SERVICE_STATUS_DLQ_URL")
 	if serviceStatusQueueURL != "" && serviceStatusDLQURL != "" {
+		ssIngester := ingest.NewServiceStatusIngester(reg, nil)
+		// Surface stopped-service log lines so the Phase 2 alarm's
+		// log-metric-filter can count them.
+		ssIngester.Logger = logger
 		serviceStatusConsumer = sqsconsumer.NewConsumer[servicestatus.Report](
 			sqsClient,
-			ingest.NewServiceStatusIngester(reg, nil).Handle,
+			ssIngester.Handle,
 			sqsconsumer.Config{QueueURL: serviceStatusQueueURL, DLQURL: serviceStatusDLQURL, Logger: logger, Audit: auditW},
 		)
 	}

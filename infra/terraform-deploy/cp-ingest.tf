@@ -39,6 +39,26 @@ module "sqs_lifecycle" {
   tags = var.tags
 }
 
+# ── Service-status pipeline (Phase 2, Issue 01) ────────────────────────────
+
+module "sqs_service_status" {
+  source = "../terraform/modules/sqs-ingest"
+
+  name          = "uknomi-cp-service-status"
+  iot_rule_name = "uknomi_cp_service_status"
+  # Agent publishes its servicestatus.Report payload on
+  # devices/{device_id}/service-status. The IoT Rule passes the body
+  # through as-is; the agent already stamps a correlation_id and a
+  # device_id in the JSON, so no topic-derived columns are needed.
+  # Cadence is 5 minutes per ADR-018 throughput math
+  # (~25 devices × 1 report / 5 min ≈ 5 msg/min). Visibility timeout
+  # left at the module default (30s) — the per-service UPSERT loop is
+  # cheap; the long-poll Wait + UPSERT roundtrip well inside that window.
+  iot_sql = "SELECT * FROM 'devices/+/service-status'"
+
+  tags = var.tags
+}
+
 # ── cp-ingest Fargate service ───────────────────────────────────────────────
 
 module "cp_ingest" {
@@ -57,6 +77,9 @@ module "cp_ingest" {
   heartbeat_dlq_url   = module.sqs_heartbeat.dlq_url
   lifecycle_queue_url = module.sqs_lifecycle.queue_url
   lifecycle_dlq_url   = module.sqs_lifecycle.dlq_url
+
+  service_status_queue_url = module.sqs_service_status.queue_url
+  service_status_dlq_url   = module.sqs_service_status.dlq_url
 
   db_dsn_secret_arn = aws_secretsmanager_secret.db_dsn.arn
 

@@ -198,6 +198,43 @@ resource "aws_cloudwatch_metric_alarm" "sweeper_lag" {
   tags = { Name = "uknomi-cp-sweeper-lag" }
 }
 
+# Service-status stopped — Phase 2 (Issue 01). Counts the
+# "service-status.stopped" lines cp-ingest's ServiceStatusIngester
+# emits, one per stopped service per report. Slice 1 uses 'stopped'
+# (the only "not running" state the agent's launchctl/systemctl
+# backend can reliably emit today; the PRD § Refinements explains the
+# false-positive risk on operator-initiated stops).
+resource "aws_cloudwatch_log_metric_filter" "service_status_stopped" {
+  name           = "uknomi-cp-service-status-stopped"
+  log_group_name = module.cp_ingest.log_group_name
+  pattern        = "{ $.msg = \"service-status.stopped\" }"
+
+  metric_transformation {
+    name          = "ServiceStatusStopped"
+    namespace     = local.cp_audit_namespace
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "service_status_stopped" {
+  alarm_name          = "uknomi-cp-service-stopped"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3 # require ≥3 consecutive 5-min windows = 15 min
+  metric_name         = aws_cloudwatch_log_metric_filter.service_status_stopped.metric_transformation[0].name
+  namespace           = local.cp_audit_namespace
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_description   = "An allow-listed service has been in the stopped state for ≥15 minutes (3 consecutive 5-min reports). Runbook: docs/runbooks/alarms/service-stopped.md"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+
+  tags = { Name = "uknomi-cp-service-stopped" }
+}
+
 # Login failure spike — paged when /auth/login failure lines breach 100
 # in a 5-minute window. ADR-017 hardens against bursts; the alarm calls
 # it out before lockout thresholds quietly absorb a brute-force attempt.
