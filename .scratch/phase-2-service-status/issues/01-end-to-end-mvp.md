@@ -1,8 +1,8 @@
 # Issue 01 — Service-status reporting end-to-end (MVP)
 
-Status: ready-for-agent
+Status: done (2026-05-24 — landed live on the Wave 0 bench Mac across ~25 commits)
 Type: AFK
-Estimate: 7–9 days
+Estimate: 7–9 days (actual: ~1 long session)
 
 ## Parent
 
@@ -58,6 +58,10 @@ A full vertical slice: agent collects service state on a 5-min cadence, publishe
 - New `module "sqs_service_status" { source = "../terraform/modules/sqs-ingest" }` block, mirroring the heartbeat module instantiation. IoT SQL: `SELECT *, topic(2) as device_id FROM 'devices/+/service-status'` (correlation_id already in the agent payload, so no `newuuid()` needed).
 - Pass the queue URLs + DLQ into `module.cp_ingest` (extend the module's variables in `infra/terraform/modules/cp-ingest-service/` to accept the new queue, plus env-var wiring for `SERVICE_STATUS_QUEUE_URL` / `SERVICE_STATUS_DLQ_URL`).
 
+**Infra (`infra/terraform/policy.tf`):** ⚠️ **PREREQUISITE — easy to miss, caught the hard way.**
+
+The agent's `UknomiAgentPolicy` (in the IoT-core root, NOT the deploy root) must list `topic/devices/${iot:Connection.Thing.ThingName}/service-status` in the `iot:Publish` ARN set. AWS IoT silently drops publishes to disallowed topics — the MQTT broker still ACKs at session layer, so the agent thinks the publish succeeded. Symptoms: heartbeats flow fine, service-status queue stays at zero, no error log entries. Verified during Wave 0 bench upgrade.
+
 **API (`internal/cp/api/handlers/devices/`):**
 
 - Extend the existing `GET /devices/{id}` handler response with a `services` field: `[{name, state, state_since, last_reported}]`. Computed by joining `device_services` where `device_id = $1`. Order by `name`.
@@ -100,3 +104,23 @@ A full vertical slice: agent collects service state on a 5-min cadence, publishe
 - The TDD memory `feedback_tdd_commit_cadence` applies: commit per red→green cycle, don't batch. Per `feedback_tdd_auto_proceed`, start the next cycle without asking permission.
 - Existing heartbeat tests in `internal/cp/ingest/heartbeat_test.go` are the canonical template; the new service-status tests should mirror their structure for paradigm parsimony.
 - The Wave 0 bench Mac's agent will need a manual reinstall to pick up the new binary (no Phase 3 self-update yet). Plan the rollout window with that in mind.
+
+## Completion notes (2026-05-24)
+
+Slice 1 landed and is live on the Wave 0 bench Mac (`bbe0540c-d58e-435e-8b20-cef6fde8ddcc`). Dashboard's per-device Services panel renders both default-allow-list entries (`com.uknomi.webui`, `com.tailscale.tailscaled`) as `running` with green pills.
+
+**Notable things that surfaced during implementation:**
+
+1. **State vocabulary tightened to `running | stopped | unknown`** (originally PRD listed `failed` too). The agent's existing `service.Backend` can't distinguish "intentionally stopped" from "failed" in a single launchctl/systemctl call. Deferred to Phase 3 where service-control commands will need exit-code parsing anyway. Schema column stays `text` so Phase 3 adds the new value without a migration.
+
+2. **IoT policy widening prerequisite** (now in the "Scope" section above). The agent's `UknomiAgentPolicy` had to gain `service-status` in its publish ARN list. The original Terraform pass added the IoT Rule + SQS but missed the device-side policy. Took ~5 min to diagnose in prod (heartbeats fine, queue empty, no agent error). Now documented; future per-topic additions need to update both halves.
+
+3. **Bench Mac upgrade was a hot-swap, not a reinstall.** Module 11's idempotent path can re-enroll → orphan the existing device_id. Did instead: scp new binary + python-edit JSON config to add the two new fields + `launchctl kickstart -k system/com.uknomi.agent`. Phase 3's self-update primitive will eventually replace this manual ritual.
+
+4. **`StateSince` cosmetic clock-skew.** Agent stamps `state_since` against its local clock; cp-side wall clock can drift. First publish on the bench Mac rendered as "37 min ago" instead of the expected "seconds ago" because of a clock offset. Documented behavior per the PRD; tightens on the next state transition.
+
+5. **Two messages instead of one on first successful publish.** Almost certainly Paho MQTT client's reconnect-retry behavior re-publishing the earlier policy-rejected message. UPSERT semantics in storage make duplicate writes a no-op; not worth investigating further unless it recurs at scale.
+
+**Commits:** ~25 across this session, plus 1 in sister repo (`mac-mini-rollout/modules/11-cp-agent.sh` + the new agent binary in `bin/`). See git log for the full list; `74c5487` is the protocol extraction, `da5ec0e` is the IoT policy fix.
+
+**Open follow-on (small):** the version string in the agent's config is install-time-frozen — the upgraded bench Mac still reports `"version": "2b6cfd0"` in its config even though the running binary is `a93470f`. Cosmetic for now; tighten when Phase 3's self-update lands a real binary-version stamp (e.g. via `-ldflags -X main.version=...`).
