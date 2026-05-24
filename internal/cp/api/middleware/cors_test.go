@@ -59,7 +59,7 @@ func TestCorsTerminatesPreflightWithoutCallingInner(t *testing.T) {
 		t.Errorf("Allow-Origin = %q, want %q", got, "https://control.uknomi.com")
 	}
 	allowMethods := rec.Header().Get("Access-Control-Allow-Methods")
-	for _, m := range []string{"GET", "POST", "OPTIONS"} {
+	for _, m := range []string{"GET", "POST", "PUT", "OPTIONS"} {
 		if !strings.Contains(allowMethods, m) {
 			t.Errorf("Allow-Methods missing %s, got %q", m, allowMethods)
 		}
