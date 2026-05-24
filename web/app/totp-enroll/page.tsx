@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import { useEnrollTotp } from "../../lib/api/hooks";
+import { RequireAuth } from "../../components/RequireAuth";
 
 // TotpEnrollPage runs the mandatory one-time TOTP enrollment: it mints the
 // secret, renders it as a QR code, and shows the recovery codes once. The
@@ -13,6 +14,14 @@ import { useEnrollTotp } from "../../lib/api/hooks";
 // + recovery-code checkbox text are preserved verbatim for the existing
 // auth-flow test.
 export default function TotpEnrollPage() {
+  return (
+    <RequireAuth>
+      <TotpEnrollBody />
+    </RequireAuth>
+  );
+}
+
+function TotpEnrollBody() {
   const router = useRouter();
   const enroll = useEnrollTotp();
   const [savedCodes, setSavedCodes] = useState(false);

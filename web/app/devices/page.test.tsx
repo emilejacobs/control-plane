@@ -1,18 +1,27 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/server";
 import { renderWithClient } from "../../test/render";
-import { API_BASE } from "../../lib/api/client";
+import { API_BASE, setTokens, clearTokens } from "../../lib/api/client";
 import DevicesPage from "./page";
 
 // Topbar uses useRouter for its sign-out handler; stub it for tests that
-// render a full page (the page mounts Topbar).
+// render a full page (the page mounts Topbar). RequireAuth (the page's
+// auth gate) also calls router.replace, which the same stub absorbs.
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   usePathname: () => "/devices",
 }));
+
+beforeEach(() => {
+  // RequireAuth bounces to /login when no tokens are set, so the rendered
+  // page would be empty. Tests below want to exercise the fleet view as it
+  // appears to a signed-in operator.
+  setTokens({ accessToken: "test-access", refreshToken: "test-refresh" });
+  return () => clearTokens();
+});
 
 function devicesReturn(devices: Array<Record<string, unknown>>) {
   server.use(

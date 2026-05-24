@@ -9,6 +9,7 @@ import { Card } from "../../components/ui/Card";
 import { Dot } from "../../components/ui/Dot";
 import { Pill } from "../../components/ui/Pill";
 import { Placeholder } from "../../components/ui/Placeholder";
+import { RequireAuth } from "../../components/RequireAuth";
 
 // OverviewPage — fleet health at a glance.
 //
@@ -18,7 +19,20 @@ import { Placeholder } from "../../components/ui/Placeholder";
 // activity, event stream) render as Phase-2 placeholders rather than
 // fake numbers — see the bundle integration decision: "Build from
 // useDevices() only; everything else is a Phase 2 callout."
+//
+// The /overview route's auth gate lives on this component. OverviewBody
+// is the unguarded body, which app/page.tsx (the root /) reuses behind
+// its own composite first-run + token gate — wrapping the body twice
+// would race the root's /first-run redirect.
 export default function OverviewPage() {
+  return (
+    <RequireAuth>
+      <OverviewBody />
+    </RequireAuth>
+  );
+}
+
+export function OverviewBody() {
   const devices = useDevices();
 
   const stats = useMemo(() => {

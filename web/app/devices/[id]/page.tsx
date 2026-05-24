@@ -11,6 +11,7 @@ import { Card } from "../../../components/ui/Card";
 import { KV } from "../../../components/ui/KV";
 import { Pill } from "../../../components/ui/Pill";
 import { Placeholder } from "../../../components/ui/Placeholder";
+import { RequireAuth } from "../../../components/RequireAuth";
 import { formatAgo } from "../../../lib/ago";
 
 // DevicePage is the per-device view: static record + live presence + the
@@ -47,7 +48,7 @@ export default function DevicePage() {
         : `${d.certDaysRemaining}d left`;
 
   return (
-    <>
+    <RequireAuth>
       <Topbar />
       <main className="page">
         {device.isPending && (
@@ -199,6 +200,6 @@ export default function DevicePage() {
           </>
         )}
       </main>
-    </>
+    </RequireAuth>
   );
 }

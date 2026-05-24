@@ -14,7 +14,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useFirstRunStatus } from "../lib/api/hooks";
 import { currentTokens } from "../lib/api/client";
-import OverviewPage from "./overview/page";
+import { OverviewBody } from "./overview/page";
 
 export default function Home() {
   const router = useRouter();
@@ -31,5 +31,5 @@ export default function Home() {
     }
   }, [data, router]);
 
-  return <OverviewPage />;
+  return <OverviewBody />;
 }

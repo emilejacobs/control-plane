@@ -9,6 +9,7 @@ import { Topbar } from "../../components/ui/Topbar";
 import { Card } from "../../components/ui/Card";
 import { Dot } from "../../components/ui/Dot";
 import { Segmented } from "../../components/ui/Segmented";
+import { RequireAuth } from "../../components/RequireAuth";
 import type { DeviceSummary } from "../../lib/api/devices";
 
 type PresenceFilter = "all" | "online" | "offline";
@@ -90,7 +91,7 @@ export default function DevicesPage() {
   }
 
   return (
-    <>
+    <RequireAuth>
       <Topbar />
       <main className="page">
         <div className="page-header">
@@ -266,7 +267,7 @@ export default function DevicesPage() {
           </>
         )}
       </main>
-    </>
+    </RequireAuth>
   );
 }
 

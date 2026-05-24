@@ -1,6 +1,7 @@
 "use client";
 
 import { PlaceholderPage } from "../../components/ui/PlaceholderPage";
+import { RequireAuth } from "../../components/RequireAuth";
 
 // /events — Phase 2. The event stream (heartbeats, cert rotations, operator
 // actions, service state changes) lands when the events surface comes
@@ -8,10 +9,12 @@ import { PlaceholderPage } from "../../components/ui/PlaceholderPage";
 // alarm messages keep working.
 export default function EventsPage() {
   return (
-    <PlaceholderPage
-      title="Events"
-      subtitle="Stream of heartbeats, cert rotations, operator actions, and service state changes."
-      phase="Phase 2"
-    />
+    <RequireAuth>
+      <PlaceholderPage
+        title="Events"
+        subtitle="Stream of heartbeats, cert rotations, operator actions, and service state changes."
+        phase="Phase 2"
+      />
+    </RequireAuth>
   );
 }

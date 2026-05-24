@@ -1,19 +1,27 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../test/server";
 import { renderWithClient } from "../../../test/render";
-import { API_BASE } from "../../../lib/api/client";
+import { API_BASE, setTokens, clearTokens } from "../../../lib/api/client";
 import DevicePage from "./page";
 
 // The page reads its device id from the route; the per-device tests all
-// pin it to "dev-1".
+// pin it to "dev-1". RequireAuth (the page's auth gate) also calls
+// router.replace, which the same stub absorbs.
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "dev-1" }),
   usePathname: () => "/devices/dev-1",
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
+
+beforeEach(() => {
+  // RequireAuth bounces to /login when no tokens are set; these tests
+  // exercise the page as it appears to a signed-in operator.
+  setTokens({ accessToken: "test-access", refreshToken: "test-refresh" });
+  return () => clearTokens();
+});
 
 // device is a full GET /devices/{id} body; tests override the fields they
 // exercise and leave the rest at these benign defaults.
