@@ -39,8 +39,13 @@ data "aws_iam_policy_document" "cp_api" {
   statement {
     sid     = "IoTAttachAgentPolicyOnly"
     actions = ["iot:AttachPolicy", "iot:DetachPolicy"]
+    # AWS evaluates iot:AttachPolicy against BOTH the policy and the target
+    # (cert) resource — listing only the policy ARN here denies on the cert
+    # side. The cert wildcard is bounded because the only action allowed on
+    # it is AttachPolicy/DetachPolicy of UknomiAgentPolicy, not full mgmt.
     resources = [
       "arn:aws:iot:${var.region}:${data.aws_caller_identity.current.account_id}:policy/UknomiAgentPolicy",
+      "arn:aws:iot:${var.region}:${data.aws_caller_identity.current.account_id}:cert/*",
     ]
   }
   statement {
