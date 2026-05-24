@@ -109,7 +109,7 @@ resource "aws_security_group" "tailscale" {
 
 # ── VPC interface endpoints ─────────────────────────────────────────────────
 # Each interface endpoint exposes its AWS API on a private IP per AZ; this
-# SG controls who can reach those IPs. HTTPS from the task SG only.
+# SG controls who can reach those IPs. HTTPS from the task and tailscale SGs.
 
 resource "aws_security_group" "vpc_endpoints" {
   name        = "uknomi-cp-vpc-endpoints"
@@ -117,11 +117,11 @@ resource "aws_security_group" "vpc_endpoints" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "HTTPS from tasks"
+    description     = "HTTPS from tasks + tailscale (tailscale fetches its auth key from Secrets Manager at task start)"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    security_groups = [aws_security_group.tasks.id]
+    security_groups = [aws_security_group.tasks.id, aws_security_group.tailscale.id]
   }
 
   tags = { Name = "uknomi-cp-vpc-endpoints" }
