@@ -32,3 +32,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 022 | [Phase 1 deployment-infra shape](./adr/0022-phase-1-deployment-shape.md)                         | Accepted (2026-05-22) — amends ADR-015 |
 | 023 | [Fargate scheduled tasks for periodic batch jobs](./adr/0023-fargate-scheduled-tasks-for-batch-jobs.md) | Accepted (2026-05-23)         |
 | 024 | [Dashboard persists tokens in `localStorage` (Phase 1)](./adr/0024-dashboard-token-persistence-localstorage.md) | Accepted (2026-05-24)         |
+| 025 | [Direct-to-main pushes under AFK-agent dev](./adr/0025-direct-to-main-pushes-under-afk-agent-dev.md) | Accepted (2026-05-24)         |
