@@ -16,8 +16,13 @@ resource "aws_db_parameter_group" "main" {
   description = "uknomi-cp Postgres 16 parameters: TLS-only, log DDL + slow queries."
 
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    # Static param — RDS requires a reboot to apply it. The provider's
+    # default apply_method ("immediate") is silently coerced to
+    # "pending-reboot" server-side, producing perpetual drift on every
+    # plan. Setting it explicitly matches what AWS actually stores.
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   parameter {
