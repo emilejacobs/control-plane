@@ -34,6 +34,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
+	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -44,6 +45,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
+	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
 )
@@ -99,10 +101,14 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("aws config: %w", err)
 	}
 	var iotOpts []func(*iot.Options)
+	var iotDataOpts []func(*iotdataplane.Options)
 	var smOpts []func(*secretsmanager.Options)
 	if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
 		logger.Info("AWS_ENDPOINT_URL override active", "endpoint", endpoint)
 		iotOpts = append(iotOpts, func(o *iot.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+		})
+		iotDataOpts = append(iotDataOpts, func(o *iotdataplane.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 		})
 		smOpts = append(smOpts, func(o *secretsmanager.Options) {
@@ -110,6 +116,12 @@ func run(logger *slog.Logger) error {
 		})
 	}
 	iotClient := iot.NewFromConfig(awsCfg, iotOpts...)
+	// IoT Data Plane has a region-derived endpoint
+	// (data.iot.<region>.amazonaws.com) — the SDK resolves it from
+	// awsCfg unless overridden. Phase 2 slice 2 uses it for the
+	// PUT /devices/{id}/service-config → config.update publish.
+	iotDataClient := iotdataplane.NewFromConfig(awsCfg, iotDataOpts...)
+	cmdPublisher := iotpublisher.NewAWS(iotDataClient)
 
 	// The bootstrap key's store of record is Secrets Manager (ADR-017). The
 	// verifier loads it eagerly — a key store it cannot reach fails startup.
@@ -138,6 +150,7 @@ func run(logger *slog.Logger) error {
 			Audit:              auditW,
 			Logger:             logger,
 			CORSAllowedOrigins: csvEnv("CORS_ALLOWED_ORIGINS"),
+			CmdPublisher:       cmdPublisher,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

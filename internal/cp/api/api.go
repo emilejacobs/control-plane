@@ -29,6 +29,12 @@ type Deps struct {
 	AuthZ            *authz.AuthZ
 	IdempotencyStore middleware.IdempotencyStore
 
+	// CmdPublisher is the IoT-Core data-plane publisher used by the
+	// Phase 2 slice 2 service-config PUT to push a config.update down
+	// the cmd channel. nil disables the route (the rest of the API
+	// continues to serve; tests that don't need the surface omit it).
+	CmdPublisher devices.CmdPublisher
+
 	// Audit is the sink every state-mutating handler writes audit entries
 	// through. nil falls back to a discard Writer so tests that do not
 	// care about audit assertions can omit it.
@@ -81,6 +87,14 @@ func (b *Builder) Post(path string, h http.Handler) {
 	b.mutating = append(b.mutating, Route{Method: http.MethodPost, Path: path})
 }
 
+// Put registers a state-mutating PUT route. Same middleware stack as
+// Post (audit innermost, idempotency outermost); recorded for the CI-
+// gate test on the same footing.
+func (b *Builder) Put(path string, h http.Handler) {
+	b.mux.Handle("PUT "+path, b.idem(b.auditMW(h)))
+	b.mutating = append(b.mutating, Route{Method: http.MethodPut, Path: path})
+}
+
 // Handler returns the underlying mux for serving.
 func (b *Builder) Handler() http.Handler { return b.mux }
 
@@ -127,6 +141,14 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN, auditW)))
 		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
+		// Phase 2 slice 2: PUT /devices/{id}/service-config. Requires
+		// auth + TOTP + site scope (same gates as the read surface).
+		// Skipped silently when CmdPublisher is nil — keeps tests that
+		// don't exercise the downward channel running unchanged.
+		if d.CmdPublisher != nil {
+			b.Put("/devices/{id}/service-config",
+				requireAuth(requireEnrolled(requireScope(devices.NewServiceConfigPut(d.Registry, d.CmdPublisher)))))
+		}
 	}
 	return b
 }
