@@ -86,6 +86,32 @@ func TestDispatcherEchoesCorrelationAndCommandID(t *testing.T) {
 	if result.CommandID != cmd.CommandID {
 		t.Errorf("CommandID: got %q, want %q", result.CommandID, cmd.CommandID)
 	}
+	if result.Type != cmd.Type {
+		t.Errorf("Type: got %q, want %q (Phase 2 slice 2: cp-ingest cmd-result handler routes by Type)", result.Type, cmd.Type)
+	}
+}
+
+// Failure paths also echo Type so cp-side can route a failure ACK to
+// the right per-command-type handler (and surface the error code).
+func TestDispatcherFailureResultEchoesType(t *testing.T) {
+	d := dispatcher.New()
+	d.Register("explode", dispatcher.HandlerFunc(func(_ context.Context, _ json.RawMessage) (any, error) {
+		return nil, envelope.NewCodedError("explode.boom", "kaboom")
+	}))
+	cmd := envelope.Command{Type: "explode", CorrelationID: "c", CommandID: "x"}
+	cmdBytes, _ := json.Marshal(cmd)
+	resultBytes, err := d.Dispatch(context.Background(), cmdBytes)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	var result envelope.Result
+	_ = json.Unmarshal(resultBytes, &result)
+	if result.Success {
+		t.Fatal("expected failure")
+	}
+	if result.Type != "explode" {
+		t.Errorf("Type on failure: got %q, want explode", result.Type)
+	}
 }
 
 func TestDispatcherLogsCorrelationID(t *testing.T) {

@@ -21,6 +21,7 @@ func TestRegistryServiceConfigRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	srv := newTestServer(t, ctx)
 	deviceID := enrollForTest(t, srv, "mac-mini-cfg-01", "11111111-2222-3333-4444-aaaaaaaaaaaa")
+	ctx = staffCtx(ctx) // GetServiceConfig is site-scoped (ADR-012 gate); test uses staff scope
 
 	// 1. Fresh device: no override on either field.
 	cfg, err := srv.Registry.GetServiceConfig(ctx, deviceID)

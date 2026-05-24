@@ -18,9 +18,14 @@ type Command struct {
 type Result struct {
 	CorrelationID string          `json:"correlation_id"`
 	CommandID     string          `json:"command_id"`
-	Success       bool            `json:"success"`
-	Result        json.RawMessage `json:"result,omitempty"`
-	Error         *ResultError    `json:"error,omitempty"`
+	// Type echoes the originating Command.Type so cp-side consumers
+	// can route an ACK to the right per-type handler without keeping
+	// an in-memory map of pending commands. Empty when produced by
+	// pre-Phase-2-slice-2 agents (handler treats those as ignorable).
+	Type    string          `json:"type,omitempty"`
+	Success bool            `json:"success"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *ResultError    `json:"error,omitempty"`
 }
 
 type ResultError struct {

@@ -314,22 +314,31 @@ type ServiceConfig struct {
 // tracking. A non-UUID deviceID returns ErrDeviceNotFound. A row that
 // exists but has never had an override set returns a zero-valued
 // ServiceConfig (all fields nil).
+//
+// Site-scoped via ScopedDeviceQuery — an operator who is out of scope
+// for the device sees ErrDeviceNotFound (fail-closed); the SQL gate
+// flags any devices SELECT that bypasses this path.
 func (r *Registry) GetServiceConfig(ctx context.Context, deviceID string) (ServiceConfig, error) {
 	if _, err := uuid.Parse(deviceID); err != nil {
 		return ServiceConfig{}, ErrDeviceNotFound
 	}
-	var (
-		listRaw []byte
-		cfg     ServiceConfig
-	)
-	err := r.pool.QueryRow(ctx, `
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return ServiceConfig{}, ErrDeviceNotFound
+	}
+	sql, args := authz.ScopedDeviceQuery(filter, `
 		SELECT service_allow_list_override,
 		       service_status_interval_override,
 		       service_config_last_applied_at,
 		       service_config_last_applied_corr_id
 		FROM devices
 		WHERE id = $1
-	`, deviceID).Scan(&listRaw, &cfg.IntervalOverride, &cfg.LastAppliedAt, &cfg.LastAppliedCorrelationID)
+	`, deviceID)
+	var (
+		listRaw []byte
+		cfg     ServiceConfig
+	)
+	err := r.pool.QueryRow(ctx, sql, args...).Scan(&listRaw, &cfg.IntervalOverride, &cfg.LastAppliedAt, &cfg.LastAppliedCorrelationID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ServiceConfig{}, ErrDeviceNotFound

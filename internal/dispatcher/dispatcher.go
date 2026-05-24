@@ -76,6 +76,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 		return json.Marshal(envelope.Result{
 			CorrelationID: cmd.CorrelationID,
 			CommandID:     cmd.CommandID,
+			Type:          cmd.Type,
 			Success:       false,
 			Error: &envelope.ResultError{
 				Code:    "command.unknown_type",
@@ -90,6 +91,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 			out, err = json.Marshal(envelope.Result{
 				CorrelationID: cmd.CorrelationID,
 				CommandID:     cmd.CommandID,
+				Type:          cmd.Type,
 				Success:       false,
 				Error: &envelope.ResultError{
 					Code:    "handler.panic",
@@ -110,6 +112,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 		return json.Marshal(envelope.Result{
 			CorrelationID: cmd.CorrelationID,
 			CommandID:     cmd.CommandID,
+			Type:          cmd.Type,
 			Success:       false,
 			Error: &envelope.ResultError{
 				Code:    code,
@@ -132,6 +135,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 	return json.Marshal(envelope.Result{
 		CorrelationID: cmd.CorrelationID,
 		CommandID:     cmd.CommandID,
+		Type:          cmd.Type,
 		Success:       true,
 		Result:        resultBytes,
 	})
