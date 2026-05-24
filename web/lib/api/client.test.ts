@@ -1,12 +1,68 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { apiRequest, setTokens, clearTokens, currentTokens } from "./client";
+import {
+  apiRequest,
+  setTokens,
+  clearTokens,
+  currentTokens,
+  TOKEN_STORAGE_KEY,
+} from "./client";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
+describe("token persistence (ADR-024)", () => {
+  beforeEach(() => {
+    clearTokens();
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  });
+
+  it("mirrors setTokens into localStorage so a reload keeps the operator signed in", () => {
+    setTokens({ accessToken: "a-1", refreshToken: "r-1" });
+
+    const raw = localStorage.getItem(TOKEN_STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!)).toEqual({ accessToken: "a-1", refreshToken: "r-1" });
+  });
+
+  it("clearTokens removes the localStorage entry", () => {
+    setTokens({ accessToken: "a-1", refreshToken: "r-1" });
+    clearTokens();
+
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
+    expect(currentTokens()).toBeNull();
+  });
+
+  it("rehydrates tokens from localStorage when the module is freshly imported", async () => {
+    localStorage.setItem(
+      TOKEN_STORAGE_KEY,
+      JSON.stringify({ accessToken: "persisted-access", refreshToken: "persisted-refresh" }),
+    );
+
+    vi.resetModules();
+    const fresh = await import("./client");
+
+    expect(fresh.currentTokens()).toEqual({
+      accessToken: "persisted-access",
+      refreshToken: "persisted-refresh",
+    });
+  });
+
+  it("treats malformed localStorage state as no session, without throwing", async () => {
+    localStorage.setItem(TOKEN_STORAGE_KEY, "not json");
+
+    vi.resetModules();
+    const fresh = await import("./client");
+
+    expect(fresh.currentTokens()).toBeNull();
+  });
+});
+
 describe("apiRequest", () => {
-  beforeEach(() => clearTokens());
+  beforeEach(() => {
+    clearTokens();
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("attaches the operator's bearer token when one is set", async () => {

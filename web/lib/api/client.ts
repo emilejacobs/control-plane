@@ -1,5 +1,7 @@
 // The dashboard's HTTP client for cp-api. It holds the operator's tokens in
-// memory and attaches the bearer token to every request (Issue 16).
+// memory and attaches the bearer token to every request (Issue 16). The
+// pair is mirrored to localStorage so the operator stays signed in across
+// reloads — see ADR-024.
 
 export interface Tokens {
   accessToken: string;
@@ -9,14 +11,47 @@ export interface Tokens {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
-let tokens: Tokens | null = null;
+// TOKEN_STORAGE_KEY is exported only so tests can poke the same key. The
+// dashboard never reads it directly outside of setTokens/clearTokens.
+export const TOKEN_STORAGE_KEY = "uknomi.tokens";
+
+function hasStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
+function loadFromStorage(): Tokens | null {
+  if (!hasStorage()) return null;
+  const raw = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.accessToken === "string" &&
+      typeof parsed.refreshToken === "string"
+    ) {
+      return { accessToken: parsed.accessToken, refreshToken: parsed.refreshToken };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+let tokens: Tokens | null = loadFromStorage();
 
 export function setTokens(t: Tokens): void {
   tokens = t;
+  if (hasStorage()) {
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(t));
+  }
 }
 
 export function clearTokens(): void {
   tokens = null;
+  if (hasStorage()) {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  }
 }
 
 export function currentTokens(): Tokens | null {
