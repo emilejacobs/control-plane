@@ -63,6 +63,11 @@ type InitChecker interface {
 	Initialized(ctx context.Context) (bool, error)
 }
 
+// Compile-time check that *authn.AuthN satisfies InitChecker — keeps a
+// future refactor of AuthN.Initialized from silently breaking the GET
+// handler.
+var _ InitChecker = (*authn.AuthN)(nil)
+
 // FirstRunStatusHandler serves GET /auth/first-run. It is the read
 // counterpart of the POST claim endpoint and is intentionally
 // unauthenticated — the dashboard needs to call it before the operator

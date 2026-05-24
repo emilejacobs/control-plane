@@ -106,6 +106,17 @@ type Tokens struct {
 	RefreshToken string
 }
 
+// Initialized reports whether any operator row exists. The dashboard
+// uses GET /auth/first-run to call this and route a visitor to the
+// claim page when the system is still empty.
+func (a *AuthN) Initialized(ctx context.Context) (bool, error) {
+	var existing int
+	if err := a.pool.QueryRow(ctx, `SELECT count(*) FROM operators`).Scan(&existing); err != nil {
+		return false, fmt.Errorf("count operators: %w", err)
+	}
+	return existing > 0, nil
+}
+
 // ClaimFirstRunAdmin atomically (modulo the EXISTS race, bounded by the
 // UNIQUE constraint on email) creates the first operator row and returns
 // a token pair. Subsequent calls return ErrSystemAlreadyInitialized.

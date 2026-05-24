@@ -112,6 +112,7 @@ func NewBuilderWith(d Deps) *Builder {
 	enrollLimiter := middleware.NewRateLimiter(enrollmentRateLimit, enrollmentRateWindow)
 	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry, auditW)))
 	if d.AuthN != nil {
+		b.Get("/auth/first-run", auth.NewFirstRunStatus(d.AuthN))
 		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN, auditW))
 		b.Post("/auth/login", auth.NewLogin(d.AuthN, auditW))
 		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN, auditW))
