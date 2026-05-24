@@ -19,13 +19,22 @@ import (
 	"github.com/emilejacobs/control-plane/internal/telemetry"
 )
 
-const defaultTelemetryInterval = 30 * time.Second
+const (
+	defaultTelemetryInterval     = 30 * time.Second
+	defaultServiceStatusInterval = 5 * time.Minute
+)
 
 type Config struct {
 	CertPath          string
 	DeviceID          string
 	Version           string
 	TelemetryInterval time.Duration
+
+	// ServiceAllowList enables the Phase 2 service-status reporter when
+	// non-empty. Names are launchd unit names on Mac, systemd unit names
+	// on Linux. ServiceStatusInterval defaults to 5 minutes when unset.
+	ServiceAllowList      []string
+	ServiceStatusInterval time.Duration
 }
 
 type Transport interface {
@@ -43,6 +52,11 @@ type Agent struct {
 	serviceBackend service.Backend
 	startTime      time.Time
 	telemetry      *telemetry.Publisher
+	// serviceStatus is set only when cfg.ServiceAllowList is non-empty
+	// AND a service backend was supplied via WithServiceBackend. nil
+	// otherwise — Start treats that as "feature disabled".
+	serviceStatus     *telemetry.ServiceStatusPublisher
+	serviceStatusDone chan struct{}
 
 	pubCancel context.CancelFunc
 	pubDone   chan struct{}
@@ -93,6 +107,31 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		Logger:     a.logger,
 	}
 
+	// Phase 2: optional service-status publisher. Skipped silently when
+	// ServiceAllowList is empty OR when no service backend was provided
+	// (the agent unit-tests construct a stub backend; production cmd/agent
+	// always wires the real one).
+	if len(cfg.ServiceAllowList) > 0 && a.serviceBackend != nil {
+		ssInterval := cfg.ServiceStatusInterval
+		if ssInterval <= 0 {
+			ssInterval = defaultServiceStatusInterval
+		}
+		collector := &telemetry.ServiceStatusCollector{
+			Backend:   a.serviceBackend,
+			DeviceID:  cfg.DeviceID,
+			AllowList: cfg.ServiceAllowList,
+			Now:       time.Now,
+			Logger:    a.logger,
+		}
+		a.serviceStatus = &telemetry.ServiceStatusPublisher{
+			Interval:  ssInterval,
+			DeviceID:  cfg.DeviceID,
+			Collect:   collector.Collect,
+			Transport: transport,
+			Logger:    a.logger,
+		}
+	}
+
 	return a, nil
 }
 
@@ -140,6 +179,14 @@ func (a *Agent) Start() error {
 		defer close(a.pubDone)
 		a.telemetry.Run(pubCtx)
 	}()
+
+	if a.serviceStatus != nil {
+		a.serviceStatusDone = make(chan struct{})
+		go func() {
+			defer close(a.serviceStatusDone)
+			a.serviceStatus.Run(pubCtx)
+		}()
+	}
 	return nil
 }
 
@@ -147,6 +194,9 @@ func (a *Agent) Stop() error {
 	if a.pubCancel != nil {
 		a.pubCancel()
 		<-a.pubDone
+		if a.serviceStatusDone != nil {
+			<-a.serviceStatusDone
+		}
 	}
 	return a.transport.Close()
 }

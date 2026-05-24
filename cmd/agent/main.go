@@ -69,12 +69,23 @@ func main() {
 		}
 		telemetryInterval = d
 	}
+	var serviceStatusInterval time.Duration
+	if cfg.ServiceStatusInterval != "" {
+		d, err := time.ParseDuration(cfg.ServiceStatusInterval)
+		if err != nil {
+			logger.Error("parse service_status_interval", "value", cfg.ServiceStatusInterval, "error", err)
+			os.Exit(1)
+		}
+		serviceStatusInterval = d
+	}
 
 	a, err := agent.New(agent.Config{
-		CertPath:          cfg.CertPath,
-		DeviceID:          cfg.DeviceID,
-		Version:           cfg.Version,
-		TelemetryInterval: telemetryInterval,
+		CertPath:              cfg.CertPath,
+		DeviceID:              cfg.DeviceID,
+		Version:               cfg.Version,
+		TelemetryInterval:     telemetryInterval,
+		ServiceAllowList:      cfg.ServiceAllowList,
+		ServiceStatusInterval: serviceStatusInterval,
 	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend()))
 	if err != nil {
 		logger.Error("agent", "error", err)

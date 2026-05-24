@@ -14,8 +14,16 @@
 //
 // Optional env:
 //
-//	AWS_REGION           AWS region (default from the credentials chain)
-//	AWS_ENDPOINT_URL     override the AWS service endpoint (dev/moto only)
+//	AWS_REGION                 AWS region (default from the credentials chain)
+//	AWS_ENDPOINT_URL           override the AWS service endpoint (dev/moto only)
+//	SERVICE_STATUS_QUEUE_URL   SQS URL of the service-status queue (Phase 2)
+//	SERVICE_STATUS_DLQ_URL     dead-letter queue for service-status (Phase 2)
+//
+// SERVICE_STATUS_* are optional so a deploy that lands the code before
+// Terraform provisions the queue does not crash. When both are set, the
+// service-status consumer joins the heartbeat + lifecycle consumers; when
+// either is missing, the consumer is silently skipped and the rest of
+// cp-ingest runs as before.
 package main
 
 import (
@@ -39,6 +47,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
+	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 )
 
 func main() {
@@ -107,17 +116,42 @@ func run(logger *slog.Logger) error {
 	)
 	sweeper := ingest.NewPresenceSweeper(pres, reg, ingest.SweeperConfig{Logger: logger})
 
-	logger.Info("cp-ingest starting",
-		"heartbeat_queue", heartbeatQueueURL, "lifecycle_queue", lifecycleQueueURL)
+	// Optional service-status consumer (Phase 2). Skipped silently if
+	// the env vars aren't set yet — lets the code deploy before
+	// Terraform provisions the queue.
+	var serviceStatusConsumer *sqsconsumer.Consumer[servicestatus.Report]
+	serviceStatusQueueURL := os.Getenv("SERVICE_STATUS_QUEUE_URL")
+	serviceStatusDLQURL := os.Getenv("SERVICE_STATUS_DLQ_URL")
+	if serviceStatusQueueURL != "" && serviceStatusDLQURL != "" {
+		serviceStatusConsumer = sqsconsumer.NewConsumer[servicestatus.Report](
+			sqsClient,
+			ingest.NewServiceStatusIngester(reg, nil).Handle,
+			sqsconsumer.Config{QueueURL: serviceStatusQueueURL, DLQURL: serviceStatusDLQURL, Logger: logger, Audit: auditW},
+		)
+	}
 
-	// Run all three until the signal context is cancelled, then wait for a
-	// clean drain. The consumers report drain errors; the sweeper does not.
+	logger.Info("cp-ingest starting",
+		"heartbeat_queue", heartbeatQueueURL,
+		"lifecycle_queue", lifecycleQueueURL,
+		"service_status_queue", serviceStatusQueueURL,
+		"service_status_enabled", serviceStatusConsumer != nil)
+
+	// Run all consumers + the sweeper until the signal context is cancelled,
+	// then wait for a clean drain. The consumers report drain errors; the
+	// sweeper does not.
 	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	wg.Add(3)
+	workers := 3 // heartbeat + lifecycle + sweeper
+	if serviceStatusConsumer != nil {
+		workers++
+	}
+	errs := make(chan error, workers)
+	wg.Add(workers)
 	go func() { defer wg.Done(); errs <- heartbeatConsumer.Run(ctx) }()
 	go func() { defer wg.Done(); errs <- lifecycleConsumer.Run(ctx) }()
 	go func() { defer wg.Done(); sweeper.Run(ctx) }()
+	if serviceStatusConsumer != nil {
+		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
+	}
 	wg.Wait()
 	close(errs)
 

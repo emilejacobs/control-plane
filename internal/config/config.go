@@ -17,6 +17,17 @@ type Config struct {
 	// TelemetryInterval is parsed with time.ParseDuration (e.g. "30s"). Empty
 	// or absent means use the agent's default (30s).
 	TelemetryInterval string `json:"telemetry_interval,omitempty"`
+
+	// ServiceAllowList is the Phase 2 per-device list of services to report
+	// status on (launchd unit names on Mac, systemd unit names on Linux).
+	// Empty / absent disables service-status reporting entirely — safe
+	// default for agents shipped before the per-OS bundle is decided.
+	ServiceAllowList []string `json:"service_allow_list,omitempty"`
+
+	// ServiceStatusInterval is parsed with time.ParseDuration (e.g. "5m").
+	// Empty / absent means use the agent's default (5m). Ignored when
+	// ServiceAllowList is empty.
+	ServiceStatusInterval string `json:"service_status_interval,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
