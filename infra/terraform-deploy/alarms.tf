@@ -145,6 +145,50 @@ resource "aws_cloudwatch_metric_alarm" "lifecycle_dlq" {
   tags = { Name = "uknomi-cp-lifecycle-dlq" }
 }
 
+# Phase 2 slice 1 service-status DLQ + slice 2 cmd-result DLQ. Both
+# should be empty in steady state; any message means a payload the
+# ingester couldn't process (unknown device, schema drift, validation
+# bug). Same posture as heartbeat/lifecycle alarms above.
+resource "aws_cloudwatch_metric_alarm" "service_status_dlq" {
+  alarm_name          = "uknomi-cp-service-status-dlq"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  alarm_description   = "Service-status ingest DLQ is non-empty (Phase 2 slice 1 pipeline)."
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+
+  dimensions = {
+    QueueName = "uknomi-cp-service-status-dlq"
+  }
+
+  tags = { Name = "uknomi-cp-service-status-dlq" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "cmd_result_dlq" {
+  alarm_name          = "uknomi-cp-cmd-result-dlq"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  alarm_description   = "Cmd-result ingest DLQ is non-empty (Phase 2 slice 2 config.update + slice 3 log.tail ACK pipeline)."
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+
+  dimensions = {
+    QueueName = "uknomi-cp-cmd-result-dlq"
+  }
+
+  tags = { Name = "uknomi-cp-cmd-result-dlq" }
+}
+
 # ── Log-derived alarms (Issue 21) ───────────────────────────────────────────
 # Each pairs an aws_cloudwatch_log_metric_filter (JSON-pattern over the
 # service's structured slog stream) with an aws_cloudwatch_metric_alarm.
