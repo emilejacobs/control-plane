@@ -119,6 +119,11 @@ func run(logger *slog.Logger) error {
 	)
 	sweeper := ingest.NewPresenceSweeper(pres, reg, ingest.SweeperConfig{Logger: logger})
 
+	// Phase 2 slice 3: log-tail row sweeper. Default 1h cadence, 24h
+	// retention (per PRD). Independent of presence sweeper — separate
+	// goroutine, separate cadence.
+	logTailSweeper := ingest.NewLogTailSweeper(reg, ingest.LogTailSweeperConfig{Logger: logger})
+
 	// Optional service-status consumer (Phase 2). Skipped silently if
 	// the env vars aren't set yet — lets the code deploy before
 	// Terraform provisions the queue.
@@ -166,7 +171,7 @@ func run(logger *slog.Logger) error {
 	// then wait for a clean drain. The consumers report drain errors; the
 	// sweeper does not.
 	var wg sync.WaitGroup
-	workers := 3 // heartbeat + lifecycle + sweeper
+	workers := 4 // heartbeat + lifecycle + presence sweeper + log-tail sweeper
 	if serviceStatusConsumer != nil {
 		workers++
 	}
@@ -178,6 +183,7 @@ func run(logger *slog.Logger) error {
 	go func() { defer wg.Done(); errs <- heartbeatConsumer.Run(ctx) }()
 	go func() { defer wg.Done(); errs <- lifecycleConsumer.Run(ctx) }()
 	go func() { defer wg.Done(); sweeper.Run(ctx) }()
+	go func() { defer wg.Done(); logTailSweeper.Run(ctx) }()
 	if serviceStatusConsumer != nil {
 		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
 	}
