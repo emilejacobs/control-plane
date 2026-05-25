@@ -124,6 +124,14 @@ func run(logger *slog.Logger) error {
 	// goroutine, separate cadence.
 	logTailSweeper := ingest.NewLogTailSweeper(reg, ingest.LogTailSweeperConfig{Logger: logger})
 
+	// Phase 2 followups #01: device_services sweeper. Default 10min
+	// cadence, 15min stale threshold (= 3× the 5min service-status
+	// cadence). Drops rows for services an operator removed from the
+	// device's allow-list — without this, the Services panel shows
+	// the removed service forever (RecordServiceStates is per-service
+	// UPSERT, not replace-all-per-device, by design).
+	deviceServicesSweeper := ingest.NewDeviceServicesSweeper(reg, ingest.DeviceServicesSweeperConfig{Logger: logger})
+
 	// Optional service-status consumer (Phase 2). Skipped silently if
 	// the env vars aren't set yet — lets the code deploy before
 	// Terraform provisions the queue.
@@ -171,7 +179,7 @@ func run(logger *slog.Logger) error {
 	// then wait for a clean drain. The consumers report drain errors; the
 	// sweeper does not.
 	var wg sync.WaitGroup
-	workers := 4 // heartbeat + lifecycle + presence sweeper + log-tail sweeper
+	workers := 5 // heartbeat + lifecycle + presence sweeper + log-tail sweeper + device-services sweeper
 	if serviceStatusConsumer != nil {
 		workers++
 	}
@@ -184,6 +192,7 @@ func run(logger *slog.Logger) error {
 	go func() { defer wg.Done(); errs <- lifecycleConsumer.Run(ctx) }()
 	go func() { defer wg.Done(); sweeper.Run(ctx) }()
 	go func() { defer wg.Done(); logTailSweeper.Run(ctx) }()
+	go func() { defer wg.Done(); deviceServicesSweeper.Run(ctx) }()
 	if serviceStatusConsumer != nil {
 		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
 	}

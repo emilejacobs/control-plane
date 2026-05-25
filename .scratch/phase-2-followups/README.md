@@ -10,10 +10,10 @@ When closing an item, add a one-line "done YYYY-MM-DD (commit `xxx`)" stamp to t
 
 | #  | File                                                                          | Type | Estimate | Source slice |
 |----|-------------------------------------------------------------------------------|------|----------|--------------|
-| 01 | [`device_services` sweeper for stale rows](./issues/01-device-services-sweeper.md) | AFK  | 2–4 hr   | slice 1 (more visible after slice 2) |
-| 02 | [CloudWatch alarm for `cmd-result` DLQ](./issues/02-cmd-result-dlq-alarm.md)  | AFK  | 30 min   | slice 2 |
+| 01 | [`device_services` sweeper for stale rows](./issues/01-device-services-sweeper.md) ✅ done 2026-05-25 (cycle in hygiene pass) | AFK  | 2–4 hr   | slice 1 (more visible after slice 2) |
+| 02 | [CloudWatch alarm for `cmd-result` DLQ](./issues/02-cmd-result-dlq-alarm.md) ✅ done 2026-05-25 (commit `e1dbf63`; service-status-dlq alarm added in same pass) | AFK  | 30 min   | slice 2 |
 | 03 | [Path-filter for `internal/dispatcher/**`](./issues/03-dispatcher-path-filter.md) | AFK  | 5 min    | slice 2 |
-| 04 | [Repo-root cleanup: `cp-ingest` binary + `slice2.tfplan`](./issues/04-repo-root-cleanup.md) | AFK | 5 min | slice 2 |
+| 04 | [Repo-root cleanup: `cp-ingest` binary + `slice2.tfplan`](./issues/04-repo-root-cleanup.md) ✅ done 2026-05-25 (commit `9ee25f7`; gitignore extended to prevent recurrence) | AFK | 5 min | slice 2 |
 
 ## Future Phase 2 slices (each gets its own PRD when picked up)
 

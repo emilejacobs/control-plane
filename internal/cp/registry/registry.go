@@ -429,6 +429,26 @@ func (r *Registry) RecordServiceConfigApplied(ctx context.Context, deviceID, cor
 	return nil
 }
 
+// DeleteStaleDeviceServices removes rows from device_services whose
+// last_reported is older than the threshold. Called by cp-ingest's
+// DeviceServicesSweeper on a tick; the threshold should be set to
+// ~3× the service-status reporting cadence so a single missed
+// report (transient network glitch) doesn't drop a row.
+//
+// Rationale: when an operator removes a service from a device's
+// allow-list via the dashboard (Phase 2 slice 2's EditServicesModal),
+// the agent stops reporting on it, last_reported stops advancing,
+// and after the threshold the row disappears from the Services panel.
+func (r *Registry) DeleteStaleDeviceServices(ctx context.Context, olderThan time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM device_services WHERE last_reported < $1
+	`, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale device_services: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // SetPresence records a device's online/offline state and the time it
 // changed. Callers pass it only on a real transition (the Presence module
 // reports which devices changed). An id matching no row — including a
