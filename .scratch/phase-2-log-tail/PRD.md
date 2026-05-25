@@ -50,7 +50,7 @@ Same async-via-poll pattern slice 2 established (operator-PUT → cmd → ACK �
 
 ## Mac allow-list (slice 3 starter)
 
-Sourced from what's actually present on a uknomi-managed Mac. Sister-repo cross-check: both the agent's plist and the Edge UI's [`webui/app.py`](../../../mac-mini-rollout/webui/app.py) `LOG_PATHS` dict already surface this set (the Edge UI exposes them on its `/logs/` route), so we know they're the operationally relevant ones.
+Sourced from what's actually present on a uknomi-managed Mac. Sister-repo cross-check: both the agent's plist and the Edge UI's [`webui/app.py`](../../../mac-mini-rollout/webui/app.py) `LOG_PATHS` dict surface this set (the Edge UI exposes them on its `/logs/` route), so we know they're the operationally relevant ones.
 
 | Logical name | Path | Source |
 |---|---|---|
@@ -60,10 +60,11 @@ Sourced from what's actually present on a uknomi-managed Mac. Sister-repo cross-
 | `webui-error` | `/var/log/uknomi-webui-error.log` | same plist — Edge UI stderr |
 | `setup` | `/var/log/uknomi-setup.log` | mac-mini-rollout's setup script log (referenced by Edge UI's `LOG_PATHS`) |
 | `install` | `/var/log/install.log` | macOS system installer log — captures every Mosyle / installer.pkg event |
-| `zabbix` | `/var/log/zabbix_agent2.log` | zabbix-rollout install script (referenced by Edge UI's `LOG_PATHS`) |
 | `activation` | `/usr/local/etc/uknomi-setup/activation.log` | Edge UI's `STATE_DIR/activation.log` — activation lifecycle |
 
-Operator picks one of these by **logical name** in the dashboard; the agent resolves to the path. Decoupling the name from the path lets us reorganise file locations later without breaking dashboard bookmarks.
+Seven logical names. Operator picks one by **logical name** in the dashboard; the agent resolves to the path. Decoupling the name from the path lets us reorganise file locations later without breaking dashboard bookmarks.
+
+**Note on Zabbix:** Zabbix is being phased out of the install rollout (project direction 2026-05-24). Its log path appears in the Edge UI's `LOG_PATHS` today but is not in this allow-list — new surfaces should not depend on Zabbix. The Edge UI's own `/logs/` route will drop the zabbix entry on its next iteration.
 
 ### Explicitly out for slice 3
 
@@ -73,7 +74,7 @@ These exist on the device but use access patterns the file-tail slice can't hand
 |---|---|
 | **Tailscale** | Writes to macOS `oslog` (the unified logging system), not a file. Reading requires `log show --predicate '…'` — a different agent capability entirely. Phase 4 if needed. |
 | **Plate-recognizer** | Runs in a Docker container; logs accessible via `docker logs <container>`, not a file. Needs a different agent shim. |
-| **AnyDesk / Transcriber / Raven** | Each writes to a brew/pkg-default path that varies per install. Per-device override slice will let operators add their own. Until then, SSH for these. |
+| **Transcriber / Raven** | Each writes to a brew/pkg-default path that varies per install. Per-device override slice will let operators add their own. Until then, SSH for these. |
 | **`setup-phase{N}.log`** (the phase-script per-step logs in STATE_DIR) | Globs would complicate the allow-list shape. If operators want them, file as explicit names per phase. |
 
 ### What to do at implementation time
@@ -104,7 +105,7 @@ These exist on the device but use access patterns the file-tail slice can't hand
 
 - **Stale row cleanup.** Per-request rows accumulate. Either: (a) a sweeper goroutine in cp-ingest that deletes rows older than ~24h; (b) `pg_cron` job; (c) TTL via partition rotation. Going with (a) for slice scope — mirrors `internal/cp/ingest/sweeper.go`'s presence sweeper. Cap retention at 24h: long enough that a slow operator can re-poll a tab they left open overnight, short enough not to bloat.
 - **Truncation semantics — head or tail when capped?** Operator asked for "last 500 lines" but file is huge. Agent reads from the tail backwards. If 500 lines × avg-line-length exceeds 200 KB, the agent should return the most-recent lines that fit and report `truncated: true` + `truncated_from_lines: 500` + `actual_lines: NNN`. Operator sees the freshest content; the dashboard surfaces the truncation.
-- ~~What's in the per-OS allow-list?~~ **Resolved 2026-05-24** — see [§ Mac allow-list](#mac-allow-list-slice-3-starter) above. 8 logical names spanning agent + Edge UI + setup + system installer + zabbix + activation. Linux allow-list is minimal and out of slice 3 scope.
+- ~~What's in the per-OS allow-list?~~ **Resolved 2026-05-24** — see [§ Mac allow-list](#mac-allow-list-slice-3-starter) above. 7 logical names spanning agent + Edge UI + setup + system installer + activation. Zabbix dropped (software being phased out). Linux allow-list is minimal and out of slice 3 scope.
 
 ## Refinements expected mid-implementation
 
