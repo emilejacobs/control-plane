@@ -83,9 +83,12 @@ type serviceItem struct {
 // SiteFilter.
 type ListHandler struct {
 	svc Service
+	// now is the clock used to compute mtls_cert_days_remaining at
+	// response time. Defaults to time.Now; tests override.
+	now func() time.Time
 }
 
-func NewList(svc Service) *ListHandler { return &ListHandler{svc: svc} }
+func NewList(svc Service) *ListHandler { return &ListHandler{svc: svc, now: time.Now} }
 
 type listItem struct {
 	DeviceID string `json:"device_id"`
@@ -95,6 +98,13 @@ type listItem struct {
 	// the fleet view groups those under "Unassigned".
 	SiteName   *string `json:"site_name"`
 	ClientName *string `json:"client_name"`
+	// Phase 2 Chain A: surface the cert + agent_version fields the
+	// overview tiles aggregate over (Cert expiring ≤ 30d, Agent
+	// version drift, Cert expiring soonest). The data already exists
+	// on registry.Device; the LIST endpoint had been dropping it.
+	AgentVersion          string  `json:"agent_version"`
+	MtlsCertExpiresAt     *string `json:"mtls_cert_expires_at"`     // RFC3339; null for rows that predate migration 006
+	MtlsCertDaysRemaining *int    `json:"mtls_cert_days_remaining"` // computed; null when cert_expires_at is null
 }
 
 type listResponse struct {
@@ -109,12 +119,23 @@ func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]listItem, 0, len(devs))
 	for _, d := range devs {
+		var certExpiresAt *string
+		var certDaysRemaining *int
+		if d.MtlsCertExpiresAt != nil {
+			s := d.MtlsCertExpiresAt.UTC().Format(time.RFC3339)
+			certExpiresAt = &s
+			days := int(d.MtlsCertExpiresAt.Sub(h.now()).Hours() / 24)
+			certDaysRemaining = &days
+		}
 		items = append(items, listItem{
-			DeviceID:   d.ID,
-			Hostname:   d.Hostname,
-			IsOnline:   d.IsOnline,
-			SiteName:   d.SiteName,
-			ClientName: d.ClientName,
+			DeviceID:              d.ID,
+			Hostname:              d.Hostname,
+			IsOnline:              d.IsOnline,
+			SiteName:              d.SiteName,
+			ClientName:            d.ClientName,
+			AgentVersion:          d.AgentVersion,
+			MtlsCertExpiresAt:     certExpiresAt,
+			MtlsCertDaysRemaining: certDaysRemaining,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

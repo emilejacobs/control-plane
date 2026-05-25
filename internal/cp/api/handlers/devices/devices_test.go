@@ -15,6 +15,7 @@ import (
 // (or error) so handler tests stay free of Postgres.
 type fakeService struct {
 	dev           registry.Device
+	devs          []registry.Device
 	err           error
 	serviceConfig registry.ServiceConfig
 	serviceCfgErr error
@@ -25,7 +26,7 @@ func (f fakeService) GetByID(_ context.Context, _ string) (registry.Device, erro
 }
 
 func (f fakeService) List(_ context.Context) ([]registry.Device, error) {
-	return nil, f.err
+	return f.devs, f.err
 }
 
 func (f fakeService) ListServices(_ context.Context, _ string) ([]registry.DeviceService, error) {
@@ -51,6 +52,73 @@ func getDevice(t *testing.T, h *GetHandler) map[string]any {
 		t.Fatalf("decode: %v", err)
 	}
 	return out
+}
+
+// Phase 2 Chain A: the fleet LIST endpoint must surface cert expiry +
+// agent_version per device so the overview tiles (Cert expiring ≤ 30d,
+// Agent version drift, Cert expiring soonest rollup) can compute their
+// summaries client-side without an extra fetch per device.
+func TestListDevicesSurfacesCertAndAgentVersion(t *testing.T) {
+	now := time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC)
+	expiry1 := now.Add(20 * 24 * time.Hour) // 20 days
+	expiry2 := now.Add(180 * 24 * time.Hour)
+	h := NewList(fakeService{devs: []registry.Device{
+		{ID: "dev-a", Hostname: "mac-a", AgentVersion: "0.1.0", MtlsCertExpiresAt: &expiry1},
+		{ID: "dev-b", Hostname: "mac-b", AgentVersion: "0.2.0", MtlsCertExpiresAt: &expiry2},
+		{ID: "dev-c", Hostname: "mac-c", AgentVersion: "0.1.0", MtlsCertExpiresAt: nil}, // pre-cert-tracking device
+	}})
+	// Inject a deterministic clock for the days-remaining math.
+	h.now = func() time.Time { return now }
+
+	req := httptest.NewRequest(http.MethodGet, "/devices", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Devices []map[string]any `json:"devices"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Devices) != 3 {
+		t.Fatalf("expected 3 devices, got %d", len(body.Devices))
+	}
+
+	// Index by hostname for stable assertions.
+	byHost := map[string]map[string]any{}
+	for _, d := range body.Devices {
+		byHost[d["hostname"].(string)] = d
+	}
+
+	// dev-a: 20 days remaining + agent_version present.
+	if got := byHost["mac-a"]["mtls_cert_days_remaining"]; got != float64(20) {
+		t.Errorf("mac-a cert_days_remaining: got %v, want 20", got)
+	}
+	if got := byHost["mac-a"]["agent_version"]; got != "0.1.0" {
+		t.Errorf("mac-a agent_version: got %v, want 0.1.0", got)
+	}
+	if got := byHost["mac-a"]["mtls_cert_expires_at"]; got == nil {
+		t.Errorf("mac-a cert_expires_at should not be null")
+	}
+
+	// dev-b: 180 days remaining, different agent_version.
+	if got := byHost["mac-b"]["mtls_cert_days_remaining"]; got != float64(180) {
+		t.Errorf("mac-b cert_days_remaining: got %v, want 180", got)
+	}
+	if got := byHost["mac-b"]["agent_version"]; got != "0.2.0" {
+		t.Errorf("mac-b agent_version: got %v, want 0.2.0", got)
+	}
+
+	// dev-c: cert fields null (pre-tracking), but agent_version present.
+	if got, ok := byHost["mac-c"]["mtls_cert_days_remaining"]; !ok || got != nil {
+		t.Errorf("mac-c cert_days_remaining: got %v, want null", got)
+	}
+	if got, ok := byHost["mac-c"]["mtls_cert_expires_at"]; !ok || got != nil {
+		t.Errorf("mac-c cert_expires_at: got %v, want null", got)
+	}
 }
 
 func TestGetDeviceComputesCertDaysRemaining(t *testing.T) {
