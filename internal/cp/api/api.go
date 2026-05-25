@@ -148,6 +148,14 @@ func NewBuilderWith(d Deps) *Builder {
 		if d.CmdPublisher != nil {
 			b.Put("/devices/{id}/service-config",
 				requireAuth(requireEnrolled(requireScope(devices.NewServiceConfigPut(d.Registry, d.CmdPublisher)))))
+			// Phase 2 slice 3: log-tail. POST initiates a tail request,
+			// publishes the log.tail cmd; GET polls the per-request row
+			// until status flips to done|error. Same CmdPublisher gate
+			// as service-config (no publisher → no downward surfaces).
+			b.Post("/devices/{id}/logs/tail",
+				requireAuth(requireEnrolled(requireScope(devices.NewLogTailPost(d.Registry, d.CmdPublisher)))))
+			b.Get("/devices/{id}/logs/tail/{correlation_id}",
+				requireAuth(requireEnrolled(requireScope(devices.NewLogTailGet(d.Registry)))))
 		}
 	}
 	return b
