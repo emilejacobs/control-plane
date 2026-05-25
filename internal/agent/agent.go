@@ -14,11 +14,23 @@ import (
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
+	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
+	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	"github.com/emilejacobs/control-plane/internal/service"
 	"github.com/emilejacobs/control-plane/internal/telemetry"
 )
+
+// defaultLogTailReader wraps PerOSAllowList + TailFile so the agent
+// can register the log.tail handler without test-only injection. Tests
+// pass a stub via WithLogTailReader.
+type defaultLogTailReader struct{}
+
+func (defaultLogTailReader) AllowList() map[string]string { return PerOSAllowList() }
+func (defaultLogTailReader) Tail(path string, lines int) (protologtail.Response, error) {
+	return TailFile(path, lines, protologtail.MaxContentSize)
+}
 
 const (
 	defaultTelemetryInterval     = 30 * time.Second
@@ -58,6 +70,7 @@ type Agent struct {
 	version        string
 	logger         *slog.Logger
 	serviceBackend service.Backend
+	logTailReader  logtail.Reader
 	startTime      time.Time
 	telemetry      *telemetry.Publisher
 	// serviceStatus + serviceStatusCollector are set whenever a service
@@ -84,6 +97,14 @@ func WithServiceBackend(b service.Backend) Option {
 	return func(a *Agent) { a.serviceBackend = b }
 }
 
+// WithLogTailReader overrides the default file-reader the log.tail
+// handler delegates to. Production wires defaultLogTailReader (which
+// uses PerOSAllowList + TailFile); tests pass a stub so they can
+// assert against in-memory paths.
+func WithLogTailReader(r logtail.Reader) Option {
+	return func(a *Agent) { a.logTailReader = r }
+}
+
 func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	if err := validateCertFile(cfg.CertPath); err != nil {
 		return nil, err
@@ -106,6 +127,15 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		a.dispatcher.Register("service.status", servicestatus.New(a.serviceBackend))
 		a.dispatcher.Register("service.restart", servicerestart.New(a.serviceBackend))
 	}
+
+	// Phase 2 slice 3: log.tail handler. Always registered when the
+	// agent runs in production; tests can pass WithLogTailReader to
+	// substitute a stub (or omit it to disable the handler entirely
+	// for tests that don't care about the surface).
+	if a.logTailReader == nil {
+		a.logTailReader = defaultLogTailReader{}
+	}
+	a.dispatcher.Register("log.tail", logtail.New(a.logTailReader))
 
 	interval := cfg.TelemetryInterval
 	if interval <= 0 {

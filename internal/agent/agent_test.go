@@ -17,6 +17,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/envelope"
+	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
 
@@ -340,6 +341,97 @@ func TestAgentDispatchesConfigUpdate(t *testing.T) {
 	if !strings.Contains(string(raw), "45s") {
 		t.Errorf("agent-config.json should contain new interval; got: %s", raw)
 	}
+}
+
+// Phase 2 slice 3: log.tail cmd round-trips through the dispatcher
+// into the wired Reader, returns the Response in the cmd-result
+// envelope with Type=="log.tail" so cp-ingest can route the ACK.
+func TestAgentDispatchesLogTail(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+
+	// Stub reader returns canned content for a known log_name.
+	reader := &stubLogTailReader{
+		allow: map[string]string{"agent": "/var/log/uknomi-agent.log"},
+		resp:  logtailResponse{content: "line 1\nline 2\n"},
+	}
+
+	tr := newFakeTransport()
+	a, err := agent.New(agent.Config{
+		CertPath: cert,
+		DeviceID: "dev-lt",
+		Version:  "099dd7f",
+	}, tr, agent.WithLogTailReader(reader))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	cmd := envelope.Command{
+		Type:          "log.tail",
+		CorrelationID: "corr-lt-1",
+		CommandID:     "cmd-lt-1",
+		Args:          json.RawMessage(`{"log_name":"agent","lines":100}`),
+		IssuedAt:      time.Now(),
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	tr.deliverTo("devices/dev-lt/cmd", cmdBytes)
+
+	results := tr.publishedOn("devices/dev-lt/cmd-result")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 cmd-result, got %d", len(results))
+	}
+	var result envelope.Result
+	if err := json.Unmarshal(results[0], &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got: %+v err=%+v", result, result.Error)
+	}
+	if result.Type != "log.tail" {
+		t.Errorf("Type: got %q, want log.tail", result.Type)
+	}
+	if result.CorrelationID != "corr-lt-1" {
+		t.Errorf("correlation_id: got %q", result.CorrelationID)
+	}
+	var payload struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal(result.Result, &payload)
+	if payload.Content != "line 1\nline 2\n" {
+		t.Errorf("content: got %q", payload.Content)
+	}
+
+	// Verify the reader was called with the right path.
+	if len(reader.calls) != 1 || reader.calls[0].path != "/var/log/uknomi-agent.log" || reader.calls[0].lines != 100 {
+		t.Errorf("reader calls: got %+v", reader.calls)
+	}
+}
+
+// stubLogTailReader implements the logtail.Reader interface for the
+// agent dispatch test above.
+type stubLogTailReader struct {
+	allow map[string]string
+	calls []logtailReadCall
+	resp  logtailResponse
+	err   error
+}
+
+type logtailReadCall struct {
+	path  string
+	lines int
+}
+
+type logtailResponse struct {
+	content string
+}
+
+func (s *stubLogTailReader) AllowList() map[string]string { return s.allow }
+func (s *stubLogTailReader) Tail(path string, lines int) (protologtail.Response, error) {
+	s.calls = append(s.calls, logtailReadCall{path: path, lines: lines})
+	return protologtail.Response{Content: s.resp.content}, s.err
 }
 
 func TestAgentDispatchesServiceRestart(t *testing.T) {
