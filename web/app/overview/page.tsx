@@ -46,12 +46,23 @@ export function OverviewBody() {
       }
       if (d.clientName) clients.add(d.clientName);
     }
+    // Phase 2 Chain A: cert + agent_version aggregates. certExpiring is
+    // the count of devices whose cert is ≤ 30d out (or already expired).
+    // agentVersionCount is the distinct-version count across the fleet —
+    // 1 means everyone's on the same build, >1 means drift to call out.
+    const certExpiring = list.filter(
+      (d) => d.certDaysRemaining != null && d.certDaysRemaining <= 30,
+    ).length;
+    const versions = new Set<string>();
+    for (const d of list) if (d.agentVersion) versions.add(d.agentVersion);
     return {
       total: list.length,
       online,
       offline: list.length - online,
       sites: sites.size,
       clients: clients.size,
+      certExpiring,
+      agentVersionCount: versions.size,
     };
   }, [devices.data]);
 
@@ -59,6 +70,15 @@ export function OverviewBody() {
     return (devices.data ?? [])
       .filter((d) => !d.isOnline)
       .slice(0, 5);
+  }, [devices.data]);
+
+  // Phase 2 Chain A: top 3 devices by soonest cert expiry — surfaces in
+  // the "Needs attention" panel so an operator sees what to rotate next.
+  const certExpiringSoonest = useMemo(() => {
+    return (devices.data ?? [])
+      .filter((d) => d.certDaysRemaining != null)
+      .sort((a, b) => (a.certDaysRemaining ?? 0) - (b.certDaysRemaining ?? 0))
+      .slice(0, 3);
   }, [devices.data]);
 
   const groups = useMemo(() => groupDevices(devices.data ?? []), [devices.data]);
@@ -132,17 +152,21 @@ export function OverviewBody() {
 
               <div className="stat">
                 <div className="stat-label">Cert expiring &le; 30d</div>
-                <div className="stat-value muted">—</div>
-                <div className="stat-sub muted">
-                  Lands when GET /devices summary carries cert data · Phase 2
+                <div className="stat-value">{stats.certExpiring}</div>
+                <div className="stat-sub">
+                  {stats.certExpiring === 0
+                    ? "All certs > 30 days out"
+                    : `${stats.certExpiring} of ${stats.total} need rotation soon`}
                 </div>
               </div>
 
               <div className="stat">
                 <div className="stat-label">Agent version drift</div>
-                <div className="stat-value muted">—</div>
-                <div className="stat-sub muted">
-                  Lands when GET /devices summary carries agent_version · Phase 2
+                <div className="stat-value">{stats.agentVersionCount}</div>
+                <div className="stat-sub">
+                  {stats.agentVersionCount <= 1
+                    ? "Fleet on one version"
+                    : `${stats.agentVersionCount} distinct versions in fleet`}
                 </div>
               </div>
 
@@ -215,10 +239,43 @@ export function OverviewBody() {
                   >
                     Cert expiring soonest
                   </div>
-                  <Placeholder
-                    label="CERT EXPIRY ROLLUP · Phase 2"
-                    height={64}
-                  />
+                  {certExpiringSoonest.length === 0 ? (
+                    <div
+                      className="muted"
+                      style={{ padding: "10px 0", fontSize: 13 }}
+                    >
+                      No cert data yet.
+                    </div>
+                  ) : (
+                    certExpiringSoonest.map((d) => (
+                      <div className="list-row" key={d.deviceId}>
+                        <Dot
+                          tone={
+                            (d.certDaysRemaining ?? 0) < 0
+                              ? "red"
+                              : (d.certDaysRemaining ?? 0) <= 30
+                                ? "amber"
+                                : "gray"
+                          }
+                        />
+                        <Link
+                          href={`/devices/${d.deviceId}`}
+                          className="hostname"
+                          style={{
+                            color: "var(--ink)",
+                            textDecoration: "none",
+                          }}
+                        >
+                          {d.hostname}
+                        </Link>
+                        <span className="meta muted">
+                          {(d.certDaysRemaining ?? 0) < 0
+                            ? `expired ${Math.abs(d.certDaysRemaining ?? 0)}d ago`
+                            : `${d.certDaysRemaining}d left`}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </Card>
             </div>

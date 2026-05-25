@@ -10,6 +10,13 @@ export interface DeviceSummary {
   // null for a device with no site assigned — grouped under "Unassigned".
   siteName: string | null;
   clientName: string | null;
+  // Phase 2 Chain A: per-device fields the overview tiles aggregate
+  // over (Cert expiring ≤ 30d count, Agent version drift count, Cert
+  // expiring soonest rollup). Both null for rows that predate
+  // migration 006; agent_version is "" for pre-Phase-1 devices.
+  agentVersion: string;
+  certExpiresAt: string | null;
+  certDaysRemaining: number | null;
 }
 
 interface DeviceSummaryWire {
@@ -18,6 +25,9 @@ interface DeviceSummaryWire {
   is_online: boolean;
   site_name: string | null;
   client_name: string | null;
+  agent_version: string;
+  mtls_cert_expires_at: string | null;
+  mtls_cert_days_remaining: number | null;
 }
 
 // getDevices fetches the operator's site-scoped fleet from GET /devices.
@@ -33,6 +43,9 @@ export async function getDevices(): Promise<DeviceSummary[]> {
     isOnline: d.is_online,
     siteName: d.site_name,
     clientName: d.client_name,
+    agentVersion: d.agent_version ?? "",
+    certExpiresAt: d.mtls_cert_expires_at ?? null,
+    certDaysRemaining: d.mtls_cert_days_remaining ?? null,
   }));
 }
 
