@@ -28,6 +28,19 @@ build/
 *.tfstate.*
 .terraform.lock.hcl
 cdk.out/
+# Consumed plan files (terraform plan -out=foo.tfplan); stale within
+# minutes of an apply, no value tracking them.
+*.tfplan
+
+# Local-only Go binaries from `go build ./cmd/...` at the repo root.
+# Production builds happen in CI; these accumulate when devs build
+# locally for the agent cross-compile / staging.
+/cp-api
+/cp-ingest
+/cp-agent
+/uknomi-agent
+/audit-mirror
+/agent-cli
 
 # Env / secrets — never commit
 .env
