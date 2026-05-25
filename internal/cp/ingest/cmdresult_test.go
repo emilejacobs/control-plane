@@ -17,9 +17,13 @@ import (
 )
 
 type recordingApplier struct {
-	mu    sync.Mutex
-	calls []applyArgs
-	err   error
+	mu                sync.Mutex
+	calls             []applyArgs
+	logTailCompletes  []registry.LogTailCompletion
+	logTailFailures   []registry.LogTailFailure
+	err               error
+	logTailCompleteErr error
+	logTailFailErr    error
 }
 type applyArgs struct {
 	deviceID, correlationID string
@@ -31,6 +35,20 @@ func (r *recordingApplier) RecordServiceConfigApplied(_ context.Context, deviceI
 	r.calls = append(r.calls, applyArgs{deviceID: deviceID, correlationID: correlationID, at: at})
 	r.mu.Unlock()
 	return r.err
+}
+
+func (r *recordingApplier) CompleteLogTail(_ context.Context, c registry.LogTailCompletion) error {
+	r.mu.Lock()
+	r.logTailCompletes = append(r.logTailCompletes, c)
+	r.mu.Unlock()
+	return r.logTailCompleteErr
+}
+
+func (r *recordingApplier) FailLogTail(_ context.Context, f registry.LogTailFailure) error {
+	r.mu.Lock()
+	r.logTailFailures = append(r.logTailFailures, f)
+	r.mu.Unlock()
+	return r.logTailFailErr
 }
 
 // Happy path: a successful config.update ACK lands → ingester calls
@@ -155,6 +173,91 @@ func TestCmdResultIsCorrelated(t *testing.T) {
 	c := ingest.CmdResult{Result: envelope.Result{CorrelationID: "abc"}}
 	if c.Correlation() != "abc" {
 		t.Errorf("Correlation: got %q want abc", c.Correlation())
+	}
+}
+
+// Phase 2 slice 3: log.tail success ACK → CompleteLogTail called with
+// content + truncation parsed from envelope.Result.Result.
+func TestCmdResultLogTailSuccess(t *testing.T) {
+	applier := &recordingApplier{}
+	now := time.Date(2026, 5, 24, 22, 0, 0, 0, time.UTC)
+	ing := ingest.NewCmdResultIngester(applier, func() time.Time { return now })
+
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-lt-1",
+			Type:          "log.tail",
+			Success:       true,
+			Result:        []byte(`{"content":"line1\nline2\n","truncated":true,"truncated_from":500}`),
+		},
+		DeviceID: "dev-abc",
+	}
+	if err := ing.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(applier.logTailCompletes) != 1 {
+		t.Fatalf("CompleteLogTail calls: got %d, want 1", len(applier.logTailCompletes))
+	}
+	c := applier.logTailCompletes[0]
+	if c.CorrelationID != "corr-lt-1" || c.Content != "line1\nline2\n" {
+		t.Errorf("CompleteLogTail args: got %+v", c)
+	}
+	if !c.Truncated || c.TruncatedFrom != 500 {
+		t.Errorf("truncation: got truncated=%v from=%d", c.Truncated, c.TruncatedFrom)
+	}
+	if !c.ReturnedAt.Equal(now) {
+		t.Errorf("ReturnedAt: got %v, want %v", c.ReturnedAt, now)
+	}
+}
+
+// Failure ACK → FailLogTail called with error code/message from
+// envelope.Result.Error. CompleteLogTail must NOT be called.
+func TestCmdResultLogTailFailure(t *testing.T) {
+	applier := &recordingApplier{}
+	now := time.Date(2026, 5, 24, 22, 0, 0, 0, time.UTC)
+	ing := ingest.NewCmdResultIngester(applier, func() time.Time { return now })
+
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-lt-bad",
+			Type:          "log.tail",
+			Success:       false,
+			Error:         &envelope.ResultError{Code: "log_tail.unknown_log", Message: "not in allow-list"},
+		},
+		DeviceID: "dev-abc",
+	}
+	if err := ing.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(applier.logTailCompletes) != 0 {
+		t.Error("CompleteLogTail should not fire on failure ACK")
+	}
+	if len(applier.logTailFailures) != 1 {
+		t.Fatalf("FailLogTail calls: got %d, want 1", len(applier.logTailFailures))
+	}
+	f := applier.logTailFailures[0]
+	if f.ErrorCode != "log_tail.unknown_log" || f.ErrorMessage != "not in allow-list" {
+		t.Errorf("FailLogTail args: got %+v", f)
+	}
+}
+
+// Unknown log_tail row (ErrLogTailNotFound) → Poison. The request
+// row went away (sweeper ran early); no point retrying.
+func TestCmdResultLogTailUnknownRowIsPoison(t *testing.T) {
+	applier := &recordingApplier{logTailCompleteErr: registry.ErrLogTailNotFound}
+	ing := ingest.NewCmdResultIngester(applier, nil)
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-gone",
+			Type:          "log.tail",
+			Success:       true,
+			Result:        []byte(`{"content":"x"}`),
+		},
+		DeviceID: "dev-abc",
+	}
+	err := ing.Handle(context.Background(), msg)
+	if !errors.Is(err, sqsconsumer.ErrPoison) {
+		t.Errorf("expected poison error, got %v", err)
 	}
 }
 

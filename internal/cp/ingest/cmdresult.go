@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -26,27 +27,32 @@ type CmdResult struct {
 // Correlation satisfies sqsconsumer.Correlated.
 func (r CmdResult) Correlation() string { return r.CorrelationID }
 
-// ConfigUpdateAckWriter is the registry slice the cmd-result handler
-// needs for Phase 2 slice 2's config.update ACK flow. *registry.Registry
-// satisfies it.
-type ConfigUpdateAckWriter interface {
+// CmdResultWriter is the registry slice the cmd-result handler needs.
+// Covers slice 2 (config.update) and slice 3 (log.tail) ACK flows.
+// *registry.Registry satisfies all four methods.
+type CmdResultWriter interface {
+	// Slice 2: config.update ACK stamps last_applied_* on the device row.
 	RecordServiceConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
+	// Slice 3: log.tail success — updates the pending row with content + truncation.
+	CompleteLogTail(ctx context.Context, c registry.LogTailCompletion) error
+	// Slice 3: log.tail failure — updates the pending row with error code + message.
+	FailLogTail(ctx context.Context, f registry.LogTailFailure) error
 }
 
 // CmdResultIngester is the sqsconsumer.Handler[CmdResult]. Routes
-// by Type field — slice 2 only handles "config.update"; other types
-// are silently ignored so Phase 3 can add handlers without breaking
-// existing flow (the Result envelope is the shared shape).
+// by Type field — slice 2 handles "config.update", slice 3 adds
+// "log.tail"; other types are silently ignored so Phase 3 can keep
+// adding handlers without breaking existing flow.
 type CmdResultIngester struct {
-	writer ConfigUpdateAckWriter
+	writer CmdResultWriter
 	now    func() time.Time
 	// Logger receives a warn-level line for every failure ACK and
-	// (at info) for every successful config.update apply. Nil
-	// defaults to a discard logger.
+	// (at info) for every successful apply. Nil defaults to a discard
+	// logger.
 	Logger *slog.Logger
 }
 
-func NewCmdResultIngester(w ConfigUpdateAckWriter, now func() time.Time) *CmdResultIngester {
+func NewCmdResultIngester(w CmdResultWriter, now func() time.Time) *CmdResultIngester {
 	if now == nil {
 		now = time.Now
 	}
@@ -71,12 +77,89 @@ func (i *CmdResultIngester) Handle(ctx context.Context, r CmdResult) error {
 	switch r.Type {
 	case "config.update":
 		return i.handleConfigUpdate(ctx, r, log)
+	case "log.tail":
+		return i.handleLogTail(ctx, r, log)
 	default:
-		// Other cmd types are valid envelopes but not in slice 2's
-		// scope; Phase 3 will add per-type handlers. Silently
-		// ignored so the queue doesn't back up on noise.
+		// Other cmd types are valid envelopes but not in scope here;
+		// Phase 3 will add per-type handlers. Silently ignored so the
+		// queue doesn't back up on noise.
 		return nil
 	}
+}
+
+// handleLogTail routes a log.tail ACK to CompleteLogTail (success)
+// or FailLogTail (error). Both produce DB writes; either way the
+// dashboard's poller sees the row transition out of "pending" on its
+// next fetch. ErrLogTailNotFound is poison — the request row went
+// away (sweeper ran early, or the ACK is from a row the agent had
+// cached past our retention). Either way, no point retrying.
+func (i *CmdResultIngester) handleLogTail(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	returnedAt := i.now()
+
+	if !r.Success {
+		code, message := "", ""
+		if r.Error != nil {
+			code = r.Error.Code
+			message = r.Error.Message
+		}
+		log.Warn("log.tail ACK failure",
+			"device_id", r.DeviceID,
+			"correlation_id", r.CorrelationID,
+			"error_code", code,
+			"error_message", message,
+		)
+		err := i.writer.FailLogTail(ctx, registry.LogTailFailure{
+			CorrelationID: r.CorrelationID,
+			ErrorCode:     code,
+			ErrorMessage:  message,
+			ReturnedAt:    returnedAt,
+		})
+		if err != nil {
+			if errors.Is(err, registry.ErrLogTailNotFound) {
+				return sqsconsumer.Poison(err)
+			}
+			return err
+		}
+		return nil
+	}
+
+	// Success: unmarshal the protologtail.Response from the embedded
+	// envelope's Result field (r.Result.Result — the outer r.Result
+	// resolves to the embedded envelope.Result struct).
+	var resp logTailResultPayload
+	if err := json.Unmarshal(r.Result.Result, &resp); err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	if err := i.writer.CompleteLogTail(ctx, registry.LogTailCompletion{
+		CorrelationID: r.CorrelationID,
+		Content:       resp.Content,
+		Truncated:     resp.Truncated,
+		TruncatedFrom: resp.TruncatedFrom,
+		ReturnedAt:    returnedAt,
+	}); err != nil {
+		if errors.Is(err, registry.ErrLogTailNotFound) {
+			return sqsconsumer.Poison(err)
+		}
+		return err
+	}
+	log.Info("log.tail applied",
+		"device_id", r.DeviceID,
+		"correlation_id", r.CorrelationID,
+		"content_bytes", len(resp.Content),
+		"truncated", resp.Truncated,
+	)
+	return nil
+}
+
+// logTailResultPayload is the shape of the protologtail.Response
+// embedded in envelope.Result.Result for a log.tail ACK. Mirrors the
+// fields the agent sends; defined here as a local type so the ingest
+// package doesn't depend on the agent protocol package directly (it's
+// just JSON shape parity).
+type logTailResultPayload struct {
+	Content       string `json:"content"`
+	Truncated     bool   `json:"truncated"`
+	TruncatedFrom int    `json:"truncated_from"`
 }
 
 func (i *CmdResultIngester) handleConfigUpdate(ctx context.Context, r CmdResult, log *slog.Logger) error {
