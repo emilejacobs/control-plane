@@ -192,6 +192,100 @@ export interface ServiceConfigUpdate {
   serviceStatusInterval?: string | null;
 }
 
+// === Log tail (Phase 2 slice 3) ===
+
+// LogTail is the row state the dashboard polls for. Status walks
+// pending → done | error as the agent's cmd-result lands; content +
+// truncation are populated on the done path, errorCode + errorMessage
+// on the error path.
+export interface LogTail {
+  correlationId: string;
+  logName: string;
+  linesRequested: number;
+  status: "pending" | "done" | "error";
+  content: string | null;
+  truncated: boolean;
+  truncatedFrom: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  requestedAt: string;
+  returnedAt: string | null;
+}
+
+interface LogTailWire {
+  correlation_id: string;
+  log_name: string;
+  lines_requested: number;
+  status: string;
+  content: string | null;
+  truncated: boolean;
+  truncated_from: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  requested_at: string;
+  returned_at: string | null;
+}
+
+export interface LogTailRequest {
+  logName: string;
+  lines: number;
+}
+
+// postLogTail initiates an operator-driven log tail. Returns the
+// server-minted correlation_id; the dashboard polls getLogTail until
+// status flips out of "pending".
+export async function postLogTail(
+  deviceId: string,
+  request: LogTailRequest,
+): Promise<{ correlationId: string }> {
+  const res = await apiRequest(`/devices/${deviceId}/logs/tail`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ log_name: request.logName, lines: request.lines }),
+  });
+  if (res.status === 400) {
+    const detail = (await res.json().catch(() => ({}))) as {
+      code?: string;
+      message?: string;
+    };
+    const code = detail.code ? ` (${detail.code})` : "";
+    throw new ApiError(400, `${detail.message ?? "invalid log tail request"}${code}`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to start log tail");
+  }
+  const payload = (await res.json()) as { correlation_id: string };
+  return { correlationId: payload.correlation_id };
+}
+
+// getLogTail fetches the current row state for a pending or completed
+// log tail. Dashboard polls this every ~2s until status ≠ "pending".
+export async function getLogTail(
+  deviceId: string,
+  correlationId: string,
+): Promise<LogTail> {
+  const res = await apiRequest(
+    `/devices/${deviceId}/logs/tail/${correlationId}`,
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to fetch log tail");
+  }
+  const d = (await res.json()) as LogTailWire;
+  return {
+    correlationId: d.correlation_id,
+    logName: d.log_name,
+    linesRequested: d.lines_requested,
+    status: d.status as LogTail["status"],
+    content: d.content,
+    truncated: d.truncated,
+    truncatedFrom: d.truncated_from,
+    errorCode: d.error_code,
+    errorMessage: d.error_message,
+    requestedAt: d.requested_at,
+    returnedAt: d.returned_at,
+  };
+}
+
 export async function putServiceConfig(
   id: string,
   update: ServiceConfigUpdate,

@@ -10,6 +10,7 @@ import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
 import { EditServicesModal } from "../../../components/EditServicesModal";
+import { LogsPanel } from "../../../components/LogsPanel";
 import { Topbar } from "../../../components/ui/Topbar";
 import { Card } from "../../../components/ui/Card";
 import { KV } from "../../../components/ui/KV";
@@ -232,6 +233,12 @@ export default function DevicePage() {
                 }}
               />
             )}
+
+            <div style={{ height: 16 }} />
+
+            <Card label="Logs">
+              <LogsPanel deviceId={id} />
+            </Card>
 
             <div style={{ height: 16 }} />
 
