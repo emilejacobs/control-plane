@@ -31,6 +31,10 @@ var ErrInvalidBootstrapKey = errors.New("invalid bootstrap key")
 // Handlers translate it to HTTP 404.
 var ErrDeviceNotFound = errors.New("device not found")
 
+// ErrLogTailNotFound is returned by GetLogTail when no row matches the
+// correlation_id. Handlers translate it to HTTP 404.
+var ErrLogTailNotFound = errors.New("log tail not found")
+
 // BootstrapVerifier validates the enrollment bootstrap key. The registry
 // depends on the interface; bootstrap.Verifier is the implementation, which
 // refreshes the key from Secrets Manager on a mismatch (ADR-017).
@@ -445,6 +449,155 @@ func (r *Registry) SetPresence(ctx context.Context, deviceID string, online bool
 		return ErrDeviceNotFound
 	}
 	return nil
+}
+
+// LogTailRequest is the operator-initiated tail request shape — what
+// CreateLogTailRequest persists. CorrelationID is the row PK and is
+// minted CP-side; the agent echoes it on cmd-result so the
+// CmdResultIngester can resolve the right row.
+type LogTailRequest struct {
+	CorrelationID  string
+	DeviceID       string
+	LogName        string
+	LinesRequested int
+	RequestedAt    time.Time
+}
+
+// LogTailCompletion is the success-path agent response shape.
+// Truncated=true with TruncatedFrom means the agent had to cap the
+// content to fit the MQTT envelope; the dashboard surfaces this.
+type LogTailCompletion struct {
+	CorrelationID string
+	Content       string
+	Truncated     bool
+	TruncatedFrom int
+	ReturnedAt    time.Time
+}
+
+// LogTailFailure is the error-path agent response shape. ErrorCode is
+// a stable string (e.g. "log_tail.unknown_log", "log_tail.binary_file")
+// the dashboard can match on; ErrorMessage is the human-readable
+// elaboration.
+type LogTailFailure struct {
+	CorrelationID string
+	ErrorCode     string
+	ErrorMessage  string
+	ReturnedAt    time.Time
+}
+
+// LogTail is the row shape returned by GetLogTail — combines the
+// request fields with the (possibly nil) response fields.
+type LogTail struct {
+	CorrelationID  string
+	DeviceID       string
+	LogName        string
+	LinesRequested int
+	Status         string // pending | done | error
+	Content        *string
+	Truncated      bool
+	TruncatedFrom  *int
+	ErrorCode      *string
+	ErrorMessage   *string
+	RequestedAt    time.Time
+	ReturnedAt     *time.Time
+}
+
+// CreateLogTailRequest persists a fresh "pending" row keyed by
+// correlation_id. The CP API publishes the log.tail cmd immediately
+// after; the agent's ACK lands as a Complete or Fail call from the
+// cmd-result handler.
+func (r *Registry) CreateLogTailRequest(ctx context.Context, req LogTailRequest) error {
+	if _, err := r.pool.Exec(ctx, `
+		INSERT INTO device_log_tails (
+			correlation_id, device_id, log_name, lines_requested,
+			status, requested_at
+		) VALUES ($1, $2, $3, $4, 'pending', $5)
+	`, req.CorrelationID, req.DeviceID, req.LogName, req.LinesRequested, req.RequestedAt); err != nil {
+		return fmt.Errorf("insert device_log_tails: %w", err)
+	}
+	return nil
+}
+
+// GetLogTail returns one row by correlation_id, or ErrLogTailNotFound.
+func (r *Registry) GetLogTail(ctx context.Context, correlationID string) (LogTail, error) {
+	var t LogTail
+	err := r.pool.QueryRow(ctx, `
+		SELECT correlation_id, device_id, log_name, lines_requested,
+		       status, content, truncated, truncated_from,
+		       error_code, error_message, requested_at, returned_at
+		FROM device_log_tails
+		WHERE correlation_id = $1
+	`, correlationID).Scan(
+		&t.CorrelationID, &t.DeviceID, &t.LogName, &t.LinesRequested,
+		&t.Status, &t.Content, &t.Truncated, &t.TruncatedFrom,
+		&t.ErrorCode, &t.ErrorMessage, &t.RequestedAt, &t.ReturnedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return LogTail{}, ErrLogTailNotFound
+		}
+		return LogTail{}, fmt.Errorf("get log tail: %w", err)
+	}
+	return t, nil
+}
+
+// CompleteLogTail transitions a pending row to "done" with the agent's
+// returned content + truncation metadata. UPDATE semantics are
+// idempotent on re-delivery of the same agent ACK.
+func (r *Registry) CompleteLogTail(ctx context.Context, c LogTailCompletion) error {
+	var truncatedFrom *int
+	if c.Truncated {
+		v := c.TruncatedFrom
+		truncatedFrom = &v
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE device_log_tails
+		SET status         = 'done',
+		    content        = $2,
+		    truncated      = $3,
+		    truncated_from = $4,
+		    returned_at    = $5
+		WHERE correlation_id = $1
+	`, c.CorrelationID, c.Content, c.Truncated, truncatedFrom, c.ReturnedAt)
+	if err != nil {
+		return fmt.Errorf("complete log tail: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLogTailNotFound
+	}
+	return nil
+}
+
+// FailLogTail transitions a pending row to "error" with the agent's
+// returned error code + message. Content stays NULL.
+func (r *Registry) FailLogTail(ctx context.Context, f LogTailFailure) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE device_log_tails
+		SET status        = 'error',
+		    error_code    = $2,
+		    error_message = $3,
+		    returned_at   = $4
+		WHERE correlation_id = $1
+	`, f.CorrelationID, f.ErrorCode, f.ErrorMessage, f.ReturnedAt)
+	if err != nil {
+		return fmt.Errorf("fail log tail: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLogTailNotFound
+	}
+	return nil
+}
+
+// DeleteStaleLogTails removes rows older than the threshold. Called
+// by the cp-ingest sweeper goroutine on a ~24h cycle (per PRD).
+func (r *Registry) DeleteStaleLogTails(ctx context.Context, olderThan time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM device_log_tails WHERE requested_at < $1
+	`, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale log tails: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, error) {
