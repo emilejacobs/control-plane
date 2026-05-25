@@ -15,7 +15,6 @@ import { Topbar } from "../../../components/ui/Topbar";
 import { Card } from "../../../components/ui/Card";
 import { KV } from "../../../components/ui/KV";
 import { Pill } from "../../../components/ui/Pill";
-import { Placeholder } from "../../../components/ui/Placeholder";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { formatAgo } from "../../../lib/ago";
 
@@ -238,19 +237,6 @@ export default function DevicePage() {
 
             <Card label="Logs">
               <LogsPanel deviceId={id} />
-            </Card>
-
-            <div style={{ height: 16 }} />
-
-            <Card label="Activity">
-              <Placeholder
-                label="ACTIVITY TIMELINE · Phase 2"
-                height={180}
-              />
-              <p className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
-                Per-device activity (heartbeats, agent updates, service state
-                changes) lands with the events surface in Phase 2.
-              </p>
             </Card>
           </>
         )}

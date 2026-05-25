@@ -8,17 +8,16 @@ import { Topbar } from "../../components/ui/Topbar";
 import { Card } from "../../components/ui/Card";
 import { Dot } from "../../components/ui/Dot";
 import { Pill } from "../../components/ui/Pill";
-import { Placeholder } from "../../components/ui/Placeholder";
 import { RequireAuth } from "../../components/RequireAuth";
 
 // OverviewPage — fleet health at a glance.
 //
-// KPIs that draw from real data (GET /devices summary): Online ratio,
-// site + client counts. KPIs that require fields the summary endpoint
-// does not yet carry (cert expiry per device, agent version drift, 24h
-// activity, event stream) render as Phase-2 placeholders rather than
-// fake numbers — see the bundle integration decision: "Build from
-// useDevices() only; everything else is a Phase 2 callout."
+// All KPIs draw from GET /devices summary: online ratio, site/client
+// counts, cert-expiring-≤30d count, agent-version-drift count, plus
+// the offline + cert-expiring-soonest rollups in the "Needs attention"
+// panel. A fleet-wide event stream / 24h activity rollup was
+// considered and dropped (low signal: alarms already page the
+// actionable things; a firehose of heartbeat events dilutes attention).
 //
 // The /overview route's auth gate lives on this component. OverviewBody
 // is the unguarded body, which app/page.tsx (the root /) reuses behind
@@ -170,33 +169,9 @@ export function OverviewBody() {
                 </div>
               </div>
 
-              <div className="stat">
-                <div className="stat-label">Activity (24h)</div>
-                <div className="stat-value muted">—</div>
-                <div className="stat-sub muted">
-                  Heartbeat metrics land with the events surface · Phase 2
-                </div>
-              </div>
             </div>
 
             <div className="overview-row">
-              <Card label="Recent events" flush>
-                <div style={{ padding: "8px 20px 14px" }}>
-                  <Placeholder
-                    label="EVENT STREAM · Phase 2"
-                    height={140}
-                  />
-                  <p
-                    className="muted"
-                    style={{ fontSize: 12.5, marginTop: 10 }}
-                  >
-                    Heartbeats, cert rotations, operator actions, and service
-                    state changes will land here as the events surface comes
-                    online.
-                  </p>
-                </div>
-              </Card>
-
               <Card label="Needs attention" flush>
                 <div style={{ padding: "8px 20px 12px" }}>
                   <div
