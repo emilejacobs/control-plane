@@ -40,13 +40,47 @@ Same async-via-poll pattern slice 2 established (operator-PUT → cmd → ACK �
 | Storage | **New `device_log_tails` table**, PK `correlation_id`, columns `(device_id, log_name, lines_requested, status, content, error_code, requested_at, returned_at)` | Per-request row with TTL cleanup — easier than JSONB-on-devices, supports concurrent requests cleanly, makes the audit log "operator A read log X at time Y" trivial. |
 | MQTT payload cap | **Content capped at 200 KB** in the cmd-result envelope | AWS IoT MQTT message limit is 256 KB; leaving 50 KB headroom for the envelope + correlation_id + path metadata. ~200 lines at 1 KB/line is the practical ceiling. Agent reports `truncated: true` when it had to cap. |
 | Lines cap | **N ≤ 500 requested, server enforces** | UX: a "tail -500" is plenty for SSH-replacement; longer asks should chain (fetch older content via line offset — Phase 4 nicety). |
-| Path resolution | **Per-OS allow-list bundled in the agent** | Same model as slice 1's `service_allow_list` (Mac: `/var/log/uknomi-agent.log`, `/var/log/uknomi-agent-error.log`, `/var/log/install.log`, `/usr/local/uknomi/<edge-ui logs>`; per-device override is a future slice). Agent refuses any path not in its list — operators can't request arbitrary files. |
+| Path resolution | **Per-OS allow-list bundled in the agent** — see [§ Mac allow-list](#mac-allow-list-slice-3-starter) below for the concrete starter set | Same model as slice 1's `service_allow_list`. Agent refuses any path not in its list — operators can't request arbitrary files. Per-device override is a future slice. |
 | Binary refusal | **Heuristic check (>5% non-printable) → refuse** | Operator gets a clear error rather than garbled binary in the dashboard. Override knob deferred. |
 | Encoding | **UTF-8 with replacement for invalid sequences** | Log files often have mixed encodings (locale-dependent timestamps, occasional non-ASCII). Don't fail the request on a single bad byte. |
 | Auth | **Existing JWT + site-scope middleware** | Same as the PUT endpoint in slice 2. |
 | Audit | **Every tail request audited** (operator_id, device_id, log_name, lines, success) | Phase 2's audit log already takes mutating endpoints; the read here is "operator-initiated remote-file-read of bounded scope", so it counts. |
 | Rate limit | **Per-operator: 30 tail requests/min** | Bounds runaway dashboards / scripts. Same `middleware.NewRateLimiter` pattern enrollment uses. |
 | Dashboard surface | **Card on the per-device page** with a log-name dropdown, lines input, and "Fetch" button. Below: a `<pre>` with the returned content. | Inline (not modal) — operators stay on the device page reading logs. Tabbed if multiple devices is ever a thing (it isn't in Phase 2). |
+
+## Mac allow-list (slice 3 starter)
+
+Sourced from what's actually present on a uknomi-managed Mac. Sister-repo cross-check: both the agent's plist and the Edge UI's [`webui/app.py`](../../../mac-mini-rollout/webui/app.py) `LOG_PATHS` dict already surface this set (the Edge UI exposes them on its `/logs/` route), so we know they're the operationally relevant ones.
+
+| Logical name | Path | Source |
+|---|---|---|
+| `agent` | `/var/log/uknomi-agent.log` | `mac-mini-rollout/modules/11-cp-agent.sh` (LaunchDaemon `StandardOutPath`) — agent stdout |
+| `agent-error` | `/var/log/uknomi-agent-error.log` | same plist, `StandardErrorPath` — structured slog JSON |
+| `webui` | `/var/log/uknomi-webui.log` | `mac-mini-rollout/launchd/com.uknomi.webui.plist` — Edge UI stdout |
+| `webui-error` | `/var/log/uknomi-webui-error.log` | same plist — Edge UI stderr |
+| `setup` | `/var/log/uknomi-setup.log` | mac-mini-rollout's setup script log (referenced by Edge UI's `LOG_PATHS`) |
+| `install` | `/var/log/install.log` | macOS system installer log — captures every Mosyle / installer.pkg event |
+| `zabbix` | `/var/log/zabbix_agent2.log` | zabbix-rollout install script (referenced by Edge UI's `LOG_PATHS`) |
+| `activation` | `/usr/local/etc/uknomi-setup/activation.log` | Edge UI's `STATE_DIR/activation.log` — activation lifecycle |
+
+Operator picks one of these by **logical name** in the dashboard; the agent resolves to the path. Decoupling the name from the path lets us reorganise file locations later without breaking dashboard bookmarks.
+
+### Explicitly out for slice 3
+
+These exist on the device but use access patterns the file-tail slice can't handle. Each is a future slice when an operator actually needs it:
+
+| What | Why deferred |
+|---|---|
+| **Tailscale** | Writes to macOS `oslog` (the unified logging system), not a file. Reading requires `log show --predicate '…'` — a different agent capability entirely. Phase 4 if needed. |
+| **Plate-recognizer** | Runs in a Docker container; logs accessible via `docker logs <container>`, not a file. Needs a different agent shim. |
+| **AnyDesk / Transcriber / Raven** | Each writes to a brew/pkg-default path that varies per install. Per-device override slice will let operators add their own. Until then, SSH for these. |
+| **`setup-phase{N}.log`** (the phase-script per-step logs in STATE_DIR) | Globs would complicate the allow-list shape. If operators want them, file as explicit names per phase. |
+
+### What to do at implementation time
+
+1. Verify each path in the table actually exists on a freshly-installed Mac (most do; `uknomi-setup.log` is the one to confirm — Edge UI references it but the path may be aspirational).
+2. Probe a real bench Mac with `ls -la /var/log/uknomi-*` to validate. Drop any entry that consistently doesn't exist; carry it as a known-empty allow-list slot rather than a hard requirement.
+3. Linux allow-list is **out of slice 3 scope** — slice ships Mac-only. The agent ships per-OS via `runtime.GOOS`; `linux` returns a small allow-list (just `/var/log/syslog` + the agent's own logs) when the Linux fleet matters. Today the Linux fleet is deprecating (per project direction) so this stays minimal.
 
 ## Out of scope (later slices or phases)
 
@@ -70,7 +104,7 @@ Same async-via-poll pattern slice 2 established (operator-PUT → cmd → ACK �
 
 - **Stale row cleanup.** Per-request rows accumulate. Either: (a) a sweeper goroutine in cp-ingest that deletes rows older than ~24h; (b) `pg_cron` job; (c) TTL via partition rotation. Going with (a) for slice scope — mirrors `internal/cp/ingest/sweeper.go`'s presence sweeper. Cap retention at 24h: long enough that a slow operator can re-poll a tab they left open overnight, short enough not to bloat.
 - **Truncation semantics — head or tail when capped?** Operator asked for "last 500 lines" but file is huge. Agent reads from the tail backwards. If 500 lines × avg-line-length exceeds 200 KB, the agent should return the most-recent lines that fit and report `truncated: true` + `truncated_from_lines: 500` + `actual_lines: NNN`. Operator sees the freshest content; the dashboard surfaces the truncation.
-- **What's in the per-OS allow-list?** Need to settle the canonical set before implementation. Talk to operations / read mac-mini-rollout's install modules. Tracked as a blocker in issue 01.
+- ~~What's in the per-OS allow-list?~~ **Resolved 2026-05-24** — see [§ Mac allow-list](#mac-allow-list-slice-3-starter) above. 8 logical names spanning agent + Edge UI + setup + system installer + zabbix + activation. Linux allow-list is minimal and out of slice 3 scope.
 
 ## Refinements expected mid-implementation
 
