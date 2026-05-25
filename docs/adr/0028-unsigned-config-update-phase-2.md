@@ -1,6 +1,6 @@
 # ADR-028: Unsigned `config.update` command in Phase 2; signing arrives with the Phase 3 envelope
 
-**Status:** Accepted (2026-05-24)
+**Status:** Accepted (2026-05-24) — extended (2026-05-24) to cover Phase 2 slice 3's `log.tail` handler on the same blast-radius reasoning. The "fourth handler" framing throughout the ADR reads as "fourth and fifth" once log-tail ships.
 
 **Context.**
 
@@ -41,7 +41,7 @@ The attack model assumes IoT-Core authn is intact (X.509 device cert validation)
 - (+) Slice 2 ships in days, not weeks. The downward-flow pattern (cmd → handler → cmd-result ACK → CP applied-at update) is established and battle-tested before Phase 3 inherits it.
 - (+) Phase 3's signing work has *one* concrete consumer (the four extant handlers) rather than a hypothetical surface; design pressure on the signing layer comes from real usage.
 - (-) For the Phase 2 → Phase 3 window, an attacker who can publish to a device's cmd topic can flip its reporting allow-list. Mitigation: the IoT-Core X.509 device-cert authn restricts cmd publish to the device's own thing-name; an external publisher would need stolen IAM credentials with `iot:Publish` on the broader topic space. Operationally bounded.
-- (-) Two unsigned handlers turn into four. The Phase 3 absorption work grows ~25% in surface area. Acceptable given the per-handler logic is small.
+- (-) Two unsigned handlers turn into four (slice 2) and then five (slice 3's `log.tail`). The Phase 3 absorption work grows ~25% per addition in surface area. Acceptable given the per-handler logic is small and the blast-radius analysis re-applies to each: `log.tail` reads only allow-listed files (no arbitrary path traversal), so an attacker exploiting the unsigned channel can only exfil what the operator could already read via SSH.
 
 **Verification.** TBD — added at implementation. Tests cover:
 
