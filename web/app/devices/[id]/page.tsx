@@ -10,6 +10,7 @@ import {
   putCamera,
   deleteCamera,
   postNetworkScan,
+  edgePreviewURL,
   type Camera,
 } from "../../../lib/api/devices";
 import { UNASSIGNED } from "../../../lib/fleet";
@@ -294,6 +295,10 @@ export default function DevicePage() {
                 onEditCamera={(c) => setCameraDialog({ mode: "edit", camera: c })}
                 onDeleteCamera={(c) => setCameraDialog({ mode: "delete", camera: c })}
                 onScanNetwork={handleScanNetwork}
+                onVerifyAngle={(c) =>
+                  window.open(edgePreviewURL(d, c.cameraId), "_blank", "noopener")
+                }
+                previewURL={(c) => edgePreviewURL(d, c.cameraId)}
               />
             </Card>
             {cameraDialog && (

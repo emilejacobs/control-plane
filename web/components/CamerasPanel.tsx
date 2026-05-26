@@ -25,6 +25,15 @@ interface Props {
   // post-scan correlation_id polling; the panel only renders the
   // button.
   onScanNetwork?: () => void;
+  // onVerifyAngle deep-links the operator to the on-device Edge UI's
+  // /preview/<camera_id> page (issue #4, ADR-030 § 1, ADR-032). The
+  // parent typically wires this to window.open(previewURL(c)). The
+  // previewURL hook lets the panel render the target URL as the
+  // button's title attribute, so the operator sees the destination on
+  // hover and can copy-paste if the tab fails to open over the
+  // tailnet (LAN-IP fallback hint deferred per ADR-032).
+  onVerifyAngle?: (camera: Camera) => void;
+  previewURL?: (camera: Camera) => string;
 }
 
 export function CamerasPanel({
@@ -34,6 +43,8 @@ export function CamerasPanel({
   onEditCamera,
   onDeleteCamera,
   onScanNetwork,
+  onVerifyAngle,
+  previewURL,
 }: Props) {
   const pending = lastAppliedAt === null && cameras.length > 0;
 
@@ -110,8 +121,8 @@ export function CamerasPanel({
               <th style={{ padding: "6px 8px" }}>Label</th>
               <th style={{ padding: "6px 8px", width: 60 }}>LPR</th>
               <th style={{ padding: "6px 8px" }}>RTSP URL</th>
-              {(onEditCamera || onDeleteCamera) && (
-                <th style={{ padding: "6px 8px", width: 120 }}></th>
+              {(onEditCamera || onDeleteCamera || onVerifyAngle) && (
+                <th style={{ padding: "6px 8px", width: 200 }}></th>
               )}
             </tr>
           </thead>
@@ -136,7 +147,7 @@ export function CamerasPanel({
                 >
                   {c.rtspUrl}
                 </td>
-                {(onEditCamera || onDeleteCamera) && (
+                {(onEditCamera || onDeleteCamera || onVerifyAngle) && (
                   <td style={{ padding: "6px 8px", textAlign: "right" }}>
                     {onEditCamera && (
                       <button
@@ -153,6 +164,24 @@ export function CamerasPanel({
                         }}
                       >
                         Edit
+                      </button>
+                    )}
+                    {onVerifyAngle && (
+                      <button
+                        type="button"
+                        onClick={() => onVerifyAngle(c)}
+                        title={previewURL ? previewURL(c) : undefined}
+                        style={{
+                          fontSize: 12,
+                          padding: "2px 8px",
+                          background: "transparent",
+                          border: "1px solid var(--line, #ccc)",
+                          borderRadius: 4,
+                          marginRight: 4,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Verify angle
                       </button>
                     )}
                     {onDeleteCamera && (

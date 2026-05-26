@@ -106,6 +106,66 @@ describe("CamerasPanel — Scan network button (issue #3)", () => {
   });
 });
 
+describe("CamerasPanel — Verify angle button (issue #4)", () => {
+  it("renders a 'Verify angle' button for each camera row when onVerifyAngle is provided", () => {
+    render(
+      <CamerasPanel
+        cameras={[
+          cam({ cameraId: "cam1", label: "Drive-thru" }),
+          cam({ cameraId: "cam2", label: "Entry" }),
+        ]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={vi.fn()}
+      />,
+    );
+    const buttons = screen.getAllByRole("button", { name: /verify angle/i });
+    expect(buttons).toHaveLength(2);
+  });
+
+  it("fires onVerifyAngle with the row's camera when clicked", () => {
+    const onVerifyAngle = vi.fn();
+    const c1 = cam({ cameraId: "cam1", label: "Drive-thru" });
+    render(
+      <CamerasPanel
+        cameras={[c1]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={onVerifyAngle}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /verify angle/i }));
+    expect(onVerifyAngle).toHaveBeenCalledTimes(1);
+    expect(onVerifyAngle).toHaveBeenCalledWith(c1);
+  });
+
+  it("renders the Edge UI URL as the button's title attribute when previewURL is provided", () => {
+    const previewURL = (c: Camera) => `http://device-7.tail.example:5051/preview/${c.cameraId}`;
+    render(
+      <CamerasPanel
+        cameras={[cam({ cameraId: "cam1" })]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={vi.fn()}
+        previewURL={previewURL}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /verify angle/i });
+    expect(btn.getAttribute("title")).toBe(
+      "http://device-7.tail.example:5051/preview/cam1",
+    );
+  });
+
+  it("does not render the button when onVerifyAngle is undefined", () => {
+    render(
+      <CamerasPanel
+        cameras={[cam()]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /verify angle/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("CamerasPanel — pending badge", () => {
   it("shows a 'pending' badge when lastAppliedAt is null", () => {
     render(

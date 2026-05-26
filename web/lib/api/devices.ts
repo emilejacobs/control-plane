@@ -171,6 +171,23 @@ export async function deleteCamera(deviceId: string, cameraId: string): Promise<
   }
 }
 
+// edgePreviewURL builds the deep-link an operator clicks "Verify
+// angle" to open in a new tab (issue #4, ADR-030 § 1, ADR-032). v1
+// targets the device's tailnet hostname at port 5051 over plain HTTP
+// — tailnet membership is the perimeter. The Edge UI binary's Next.js
+// SPA at /preview/<camera_id> renders an <img> pointing at its own
+// /preview/<id>/stream MJPEG endpoint.
+//
+// The LAN-IP fallback hint described in ADR-030 § 1 is deferred per
+// ADR-032 — devices have no lan_ip column today, and surfacing one
+// requires new telemetry plumbing.
+export function edgePreviewURL(
+  device: Pick<Device, "hostname">,
+  cameraId: string,
+): string {
+  return `http://${device.hostname}:5051/preview/${cameraId}`;
+}
+
 export async function getCameras(deviceId: string): Promise<CamerasResponse> {
   const res = await apiRequest(`/devices/${deviceId}/cameras`);
   if (!res.ok) {
