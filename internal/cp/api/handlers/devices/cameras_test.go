@@ -156,6 +156,64 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	}
 }
 
+// POST returns 409 Conflict when the store reports
+// ErrCameraLPRConflict — the DB's partial unique index rejected a
+// second is_lpr=true camera on the same device. Operator must
+// un-flag the existing LPR camera first.
+func TestCameraPostLPRConflictReturns409(t *testing.T) {
+	store := &cameraStore{
+		known:     map[string]bool{"dev-abc": true},
+		nextID:    "cam2",
+		insertErr: registry.ErrCameraLPRConflict,
+	}
+	h := devices.NewCameraPost(store)
+
+	body := `{"label":"second-LPR","rtsp_url":"rtsp://x","is_lpr":true}`
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// PUT returns 409 Conflict on the same condition.
+func TestCameraPutLPRConflictReturns409(t *testing.T) {
+	store := &cameraStore{
+		known: map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{
+			"dev-abc": {{CameraID: "cam2", Label: "x", RtspURL: "rtsp://x", IsLPR: false}},
+		},
+	}
+	// The fake's UpdateCamera doesn't model the partial unique index;
+	// inject the error via a wrapper.
+	wrapped := &lprConflictPutStore{cameraStore: store}
+	h := devices.NewCameraPut(wrapped)
+
+	body := `{"label":"x","rtsp_url":"rtsp://x","is_lpr":true}`
+	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/cameras/cam2", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	req.SetPathValue("camera_id", "cam2")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// lprConflictPutStore makes UpdateCamera always return
+// ErrCameraLPRConflict; other methods delegate to the embedded fake.
+type lprConflictPutStore struct {
+	*cameraStore
+}
+
+func (s *lprConflictPutStore) UpdateCamera(_ context.Context, _, _, _, _ string, _ bool) (cameras.Camera, error) {
+	return cameras.Camera{}, registry.ErrCameraLPRConflict
+}
+
 // All four handlers must return 404 when the store's GetByID
 // reports ErrDeviceNotFound — which covers both "device doesn't
 // exist" and "device exists but is filtered out of the operator's

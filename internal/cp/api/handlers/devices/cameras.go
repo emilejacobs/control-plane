@@ -77,6 +77,10 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	cam, err := h.store.InsertCamera(r.Context(), id, label, req.RtspURL, req.IsLPR)
 	if err != nil {
+		if errors.Is(err, registry.ErrCameraLPRConflict) {
+			http.Error(w, "another camera on this device already has is_lpr=true; unflag it first", http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -176,6 +180,10 @@ func (h *CameraPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, registry.ErrCameraNotFound) {
 			http.Error(w, "camera not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, registry.ErrCameraLPRConflict) {
+			http.Error(w, "another camera on this device already has is_lpr=true; unflag it first", http.StatusConflict)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

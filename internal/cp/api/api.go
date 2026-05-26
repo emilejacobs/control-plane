@@ -95,6 +95,14 @@ func (b *Builder) Put(path string, h http.Handler) {
 	b.mutating = append(b.mutating, Route{Method: http.MethodPut, Path: path})
 }
 
+// Delete registers a state-mutating DELETE route. Same middleware
+// stack as Post / Put (audit innermost, idempotency outermost);
+// recorded for the CI-gate test on the same footing.
+func (b *Builder) Delete(path string, h http.Handler) {
+	b.mux.Handle("DELETE "+path, b.idem(b.auditMW(h)))
+	b.mutating = append(b.mutating, Route{Method: http.MethodDelete, Path: path})
+}
+
 // Handler returns the underlying mux for serving.
 func (b *Builder) Handler() http.Handler { return b.mux }
 
@@ -141,6 +149,15 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN, auditW)))
 		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
+		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
+		// All four routes are site-scoped via the same middleware
+		// chain. The agent-push side (cmd publish after CRUD) is
+		// wired separately when CmdPublisher is present — see the
+		// nested block below.
+		b.Get("/devices/{id}/cameras", requireAuth(requireEnrolled(requireScope(devices.NewCameraList(d.Registry)))))
+		b.Post("/devices/{id}/cameras", requireAuth(requireEnrolled(requireScope(devices.NewCameraPost(d.Registry)))))
+		b.Put("/devices/{id}/cameras/{camera_id}", requireAuth(requireEnrolled(requireScope(devices.NewCameraPut(d.Registry)))))
+		b.Delete("/devices/{id}/cameras/{camera_id}", requireAuth(requireEnrolled(requireScope(devices.NewCameraDelete(d.Registry)))))
 		// Phase 2 slice 2: PUT /devices/{id}/service-config. Requires
 		// auth + TOTP + site scope (same gates as the read surface).
 		// Skipped silently when CmdPublisher is nil — keeps tests that
