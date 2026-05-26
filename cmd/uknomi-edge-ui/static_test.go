@@ -29,10 +29,19 @@ func TestStaticHandler_ServesIndexAtRoot(t *testing.T) {
 	}
 }
 
-// TestStaticHandler_SPAFallback ensures any /preview/<id> URL (a
-// dynamic route Next.js can't pre-render) is served index.html so the
-// client-side router can resolve it.
-func TestStaticHandler_SPAFallback(t *testing.T) {
+// TestStaticHandler_SPAFallbackToPreviewPlaceholder ensures any
+// /preview/<id> URL is served the **preview placeholder** HTML —
+// NOT root index.html. Bench smoke 2026-05-26 surfaced this: the
+// original SPA fallback always served root index.html, so
+// /preview/cam1 rendered "uKnomi Edge / Device-local Edge UI"
+// instead of PreviewClient, and the <img> never reached the DOM.
+//
+// The placeholder lives at edge-ui-out/preview/_.html (Next.js
+// generates it from generateStaticParams returning [{cameraId: "_"}])
+// and contains the PreviewClient pre-rendered HTML; the client side
+// re-reads window.location.pathname on hydration so the build-time
+// "_" gets replaced with the real cameraId at runtime.
+func TestStaticHandler_SPAFallbackToPreviewPlaceholder(t *testing.T) {
 	h := StaticHandler(staticFS)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
@@ -46,9 +55,16 @@ func TestStaticHandler_SPAFallback(t *testing.T) {
 		t.Fatalf("status: %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "uKnomi Edge") {
-		t.Fatalf("SPA fallback did not return index.html for /preview/cam-runtime-id: %s",
-			truncate(body, 200))
+	bs := string(body)
+
+	// Preview-placeholder markers (PreviewClient rendered statically):
+	if !strings.Contains(bs, "Camera live preview") {
+		t.Errorf("response missing 'Camera live preview' marker — likely served root index.html: %s",
+			truncate(body, 300))
+	}
+	// Root-page-only markers (must NOT appear):
+	if strings.Contains(bs, "Device-local Edge UI") {
+		t.Errorf("response contains root-page 'Device-local Edge UI' tagline — SPA fell back to / instead of /preview/_.html")
 	}
 }
 

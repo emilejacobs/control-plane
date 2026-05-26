@@ -75,15 +75,34 @@ func StaticHandler(fsys embed.FS) http.Handler {
 			http.ServeFileFS(w, r, sub, path.Join(name, "index.html"))
 			return
 		}
-		// SPA fallback: serve index.html for any non-asset path. Asset
-		// requests (anything with an extension) get a real 404 — they
-		// shouldn't be rewritten to HTML.
+		// SPA fallback: serve the closest pre-rendered placeholder for
+		// the dynamic segment. Asset requests (anything with an
+		// extension) get a real 404 — they shouldn't be rewritten to
+		// HTML.
 		if hasExt(name) {
 			http.NotFound(w, r)
 			return
 		}
-		http.ServeFileFS(w, r, sub, "index.html")
+		http.ServeFileFS(w, r, sub, spaFallbackTarget(name))
 	})
+}
+
+// spaFallbackTarget picks the right pre-rendered placeholder for an
+// unmatched non-asset path. Next.js's static export emits one HTML
+// file per generateStaticParams entry; our dynamic route
+// /preview/[cameraId] has a single placeholder at preview/_.html
+// (cameraId = "_"). The client component re-reads
+// window.location.pathname after hydration to recover the real id.
+//
+// Without this routing, every /preview/<id> request fell back to
+// root index.html (the "uKnomi Edge / Device-local Edge UI" page),
+// PreviewClient never mounted, and the MJPEG <img> never rendered —
+// caught by bench smoke 2026-05-26.
+func spaFallbackTarget(name string) string {
+	if strings.HasPrefix(name, "preview/") {
+		return "preview/_.html"
+	}
+	return "index.html"
 }
 
 func exists(fsys fs.FS, name string) bool {
