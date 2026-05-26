@@ -4,11 +4,12 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
-import { useDevice, useNow } from "../../../lib/api/hooks";
+import { useDevice, useNow, useCameras } from "../../../lib/api/hooks";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
+import { CamerasPanel } from "../../../components/CamerasPanel";
 import { EditServicesModal } from "../../../components/EditServicesModal";
 import { LogsPanel } from "../../../components/LogsPanel";
 import { Topbar } from "../../../components/ui/Topbar";
@@ -32,8 +33,10 @@ import { formatAgo } from "../../../lib/ago";
 export default function DevicePage() {
   const { id } = useParams<{ id: string }>();
   const device = useDevice(id);
+  const cameras = useCameras(id);
   const now = useNow();
   const d = device.data;
+  const camData = cameras.data;
   const queryClient = useQueryClient();
   const [editingServices, setEditingServices] = useState(false);
 
@@ -233,6 +236,15 @@ export default function DevicePage() {
                 }}
               />
             )}
+
+            <div style={{ height: 16 }} />
+
+            <Card label="Cameras">
+              <CamerasPanel
+                cameras={camData?.cameras ?? []}
+                lastAppliedAt={camData?.lastAppliedAt ?? null}
+              />
+            </Card>
 
             <div style={{ height: 16 }} />
 

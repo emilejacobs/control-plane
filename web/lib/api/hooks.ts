@@ -10,7 +10,7 @@ import {
   enrollTotp,
   type LoginInput,
 } from "./auth";
-import { getDevices, getDevice } from "./devices";
+import { getDevices, getDevice, getCameras } from "./devices";
 
 interface Credentials {
   email: string;
@@ -71,6 +71,17 @@ export function useDevice(id: string) {
   return useQuery({
     queryKey: ["device", id],
     queryFn: () => getDevice(id),
+    refetchInterval: devicePollInterval,
+  });
+}
+
+// useCameras loads the per-device cameras inventory (Phase 2 Edge UI
+// rework, issue #2). Same 10s poll cadence as the rest of the device
+// page so the "pending vs applied" badge flips fresh after an ACK.
+export function useCameras(id: string) {
+  return useQuery({
+    queryKey: ["device", id, "cameras"],
+    queryFn: () => getCameras(id),
     refetchInterval: devicePollInterval,
   });
 }

@@ -89,6 +89,58 @@ export interface Device {
   serviceConfig: ServiceConfig;
 }
 
+// Camera is the per-device camera inventory row (Phase 2 Edge UI
+// rework, issue #2). cameraId is server-assigned (camN per device);
+// isLpr indicates which row's RTSP URL feeds Plate Recognizer.
+export interface Camera {
+  cameraId: string;
+  label: string;
+  rtspUrl: string;
+  isLpr: boolean;
+}
+
+// CamerasResponse is the GET /devices/{id}/cameras body. The
+// lastAppliedAt + lastAppliedCorrelationId mirror the cmd-result ACK
+// stamps; both null until the agent has ACKed at least one
+// cameras.update. The Cameras panel renders a "pending" badge when
+// either is null (operator just edited; ACK hasn't landed yet).
+export interface CamerasResponse {
+  cameras: Camera[];
+  lastAppliedAt: string | null;
+  lastAppliedCorrelationId: string | null;
+}
+
+interface CameraWire {
+  camera_id: string;
+  label: string;
+  rtsp_url: string;
+  is_lpr: boolean;
+}
+
+interface CamerasResponseWire {
+  cameras: CameraWire[];
+  last_applied_at: string | null;
+  last_applied_correlation_id: string | null;
+}
+
+export async function getCameras(deviceId: string): Promise<CamerasResponse> {
+  const res = await apiRequest(`/devices/${deviceId}/cameras`);
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to load cameras");
+  }
+  const d = (await res.json()) as CamerasResponseWire;
+  return {
+    cameras: (d.cameras ?? []).map((c) => ({
+      cameraId: c.camera_id,
+      label: c.label,
+      rtspUrl: c.rtsp_url,
+      isLpr: c.is_lpr,
+    })),
+    lastAppliedAt: d.last_applied_at,
+    lastAppliedCorrelationId: d.last_applied_correlation_id,
+  };
+}
+
 // DeviceService is one row from the device_services table — what the
 // per-device Services panel renders.
 export interface DeviceService {
