@@ -59,7 +59,12 @@ func TestCorsTerminatesPreflightWithoutCallingInner(t *testing.T) {
 		t.Errorf("Allow-Origin = %q, want %q", got, "https://control.uknomi.com")
 	}
 	allowMethods := rec.Header().Get("Access-Control-Allow-Methods")
-	for _, m := range []string{"GET", "POST", "PUT", "OPTIONS"} {
+	// DELETE is in the list: bench smoke 2026-05-26 caught its absence
+	// when CamerasPanel's per-camera delete button surfaced "Method
+	// DELETE is not allowed by Access-Control-Allow-Methods" in the
+	// browser. Whenever we expose a new HTTP verb at the router, it
+	// must show up here too.
+	for _, m := range []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"} {
 		if !strings.Contains(allowMethods, m) {
 			t.Errorf("Allow-Methods missing %s, got %q", m, allowMethods)
 		}
