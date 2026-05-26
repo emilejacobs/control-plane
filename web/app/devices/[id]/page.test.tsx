@@ -86,6 +86,39 @@ describe("per-device view", () => {
     expect(fieldValue("Enrolled")).toBe("2026-05-01");
   });
 
+  // Issue #14 shipped lan_ip + tailscale_ip + tailscale_name into the
+  // device record; issue #15 renders them so operators can read them
+  // off the device page without inspecting the API.
+  it("renders LAN IP, Tailscale IP, and Tailscale name on the System card", async () => {
+    deviceReturns(
+      device({
+        lan_ip: "192.168.54.215",
+        tailscale_ip: "100.122.190.107",
+        tailscale_name: "07-eegees-store54-macmini.tail46201.ts.net",
+      }),
+    );
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("LAN IP")).toBe("192.168.54.215");
+    expect(fieldValue("Tailscale IP")).toBe("100.122.190.107");
+    expect(fieldValue("Tailscale name")).toBe(
+      "07-eegees-store54-macmini.tail46201.ts.net",
+    );
+  });
+
+  it("shows 'Unknown' for null LAN IP / Tailscale IP / Tailscale name (pre-rollout devices)", async () => {
+    deviceReturns(
+      device({ lan_ip: null, tailscale_ip: null, tailscale_name: null }),
+    );
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("LAN IP")).toBe("Unknown");
+    expect(fieldValue("Tailscale IP")).toBe("Unknown");
+    expect(fieldValue("Tailscale name")).toBe("Unknown");
+  });
+
   it("shows Unassigned for a device with no site or client", async () => {
     deviceReturns(device({ site_name: null, client_name: null }));
     renderWithClient(<DevicePage />);

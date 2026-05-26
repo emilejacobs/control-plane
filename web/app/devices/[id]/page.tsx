@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -171,6 +172,9 @@ export default function DevicePage() {
                     ["Hostname", <span className="mono">{d.hostname}</span>],
                     ["Hardware kind", d.hardwareKind],
                     ["OS version", d.osVersion],
+                    ["LAN IP", networkField(d.lanIp)],
+                    ["Tailscale IP", networkField(d.tailscaleIp)],
+                    ["Tailscale name", networkField(d.tailscaleName)],
                   ]}
                 />
               </Card>
@@ -341,4 +345,16 @@ export default function DevicePage() {
       </main>
     </RequireAuth>
   );
+}
+
+// networkField renders a System-card row value for one of the
+// heartbeat-published network identifiers (lanIp / tailscaleIp /
+// tailscaleName, issue #14). Pre-rollout devices and devices whose
+// detectors returned empty (e.g. no Tailscale binary on PATH) leave
+// the field null; surface that as muted "Unknown" rather than blank.
+function networkField(value: string | null): React.ReactNode {
+  if (!value) {
+    return <span className="muted">Unknown</span>;
+  }
+  return <span className="mono">{value}</span>;
 }
