@@ -81,3 +81,33 @@ func TestAsValidationOnNonValidationError(t *testing.T) {
 		t.Error("AsValidation should reject non-ValidationError")
 	}
 }
+
+// Entry is the per-allow-list-row shape the agent's resolver consumes
+// (ADR-030 § 5). Each entry carries a logical Name (what the dashboard
+// surfaces), a Kind discriminator ("file" or "docker"), the Target the
+// kind interprets (file path or container name), and a human Label.
+// The Kind constants are public so the agent + handler can switch on
+// them without re-deriving the string.
+func TestEntryKindsExposed(t *testing.T) {
+	if logtail.KindFile != "file" {
+		t.Errorf("KindFile: got %q, want %q", logtail.KindFile, "file")
+	}
+	if logtail.KindDocker != "docker" {
+		t.Errorf("KindDocker: got %q, want %q", logtail.KindDocker, "docker")
+	}
+}
+
+// Entry struct holds all the fields the resolver needs in one place.
+// Exercised here as a constructability check — the field set is the
+// stable contract the agent + the dashboard both depend on.
+func TestEntryStructShape(t *testing.T) {
+	e := logtail.Entry{
+		Name:   "plate-recognizer",
+		Kind:   logtail.KindDocker,
+		Target: "plate-recognizer-stream",
+		Label:  "Plate Recognizer (Docker)",
+	}
+	if e.Name != "plate-recognizer" || e.Kind != "docker" || e.Target != "plate-recognizer-stream" {
+		t.Errorf("Entry fields: %+v", e)
+	}
+}

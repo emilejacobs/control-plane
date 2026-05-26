@@ -23,6 +23,27 @@ const (
 	MaxContentSize = 200 * 1024 // ~200 KB; leaves 50 KB headroom in the 256 KB MQTT envelope
 )
 
+// Kind discriminates how the agent fetches the log content for an
+// allow-list entry. "file" tails a regular file (slice 3 default);
+// "docker" shells out to `docker logs --tail N <container>` (issue #7,
+// ADR-030 § 5). Operators only see the logical name + label in the
+// dashboard; the resolver picks the executor by kind.
+const (
+	KindFile   = "file"
+	KindDocker = "docker"
+)
+
+// Entry is one row in the agent's per-OS log allow-list. Kind chooses
+// the executor; Target is the kind-specific identifier (absolute path
+// for file, container name for docker). Label is the human-readable
+// string the dashboard surfaces in its picker.
+type Entry struct {
+	Name   string
+	Kind   string
+	Target string
+	Label  string
+}
+
 // Error codes returned on the failure path. Stable strings — the
 // agent's cmd-result envelope carries them back to CP and on to the
 // dashboard's error rendering.
