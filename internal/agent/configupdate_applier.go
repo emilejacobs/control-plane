@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -106,42 +105,7 @@ func atomicWriteJSON(path string, m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	// Match existing 0600 perms (see module 11). Preserve via Stat.
-	mode := os.FileMode(0o600)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := f.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := f.Write(raw); err != nil {
-		_ = f.Close()
-		cleanup()
-		return err
-	}
-	if err := f.Chmod(mode); err != nil {
-		_ = f.Close()
-		cleanup()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		cleanup()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
+	return atomicWriteBytes(path, raw)
 }
 
 func readAllowListFromMap(m map[string]any) []string {
