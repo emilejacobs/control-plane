@@ -2,11 +2,14 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 )
 
@@ -138,5 +141,63 @@ func TestRegistryGetNetworkScanNotFound(t *testing.T) {
 	_, err := srv.Registry.GetNetworkScan(ctx, "corr-does-not-exist")
 	if !errors.Is(err, registry.ErrNetworkScanNotFound) {
 		t.Errorf("expected ErrNetworkScanNotFound, got %v", err)
+	}
+}
+
+// End-to-end: CmdResultIngester routes a network.scan success ACK to
+// CompleteNetworkScan → the pending row transitions to status=done with
+// the hosts list parsed out of the envelope's Result. This is the
+// cycle that closes the loop the dashboard polls.
+func TestCmdResultNetworkScanAckEndToEnd(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "mac-mini-netscan-e2e", "44444444-4444-4444-4444-eeeeeeeeeeee")
+
+	requestedAt := time.Date(2026, 5, 26, 16, 0, 0, 0, time.UTC)
+	corrID := "corr-netscan-e2e"
+	if err := srv.Registry.CreateNetworkScanRequest(ctx, registry.NetworkScanRequest{
+		CorrelationID: corrID,
+		DeviceID:      deviceID,
+		CIDR:          "192.168.1.0/24",
+		RequestedAt:   requestedAt,
+	}); err != nil {
+		t.Fatalf("CreateNetworkScanRequest: %v", err)
+	}
+
+	returnedAt := requestedAt.Add(4 * time.Second)
+	resultBytes, _ := json.Marshal(networkscan.Response{
+		Hosts: []networkscan.Host{
+			{IP: "192.168.1.10", MAC: "44:19:b6:aa:bb:cc", Vendor: "Hikvision", OpenPorts: []int{80, 554}},
+		},
+	})
+
+	ing := ingest.NewCmdResultIngester(srv.Registry, func() time.Time { return returnedAt })
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: corrID,
+			CommandID:     "cmd-netscan-e2e",
+			Type:          "network.scan",
+			Success:       true,
+			Result:        resultBytes,
+		},
+		DeviceID: deviceID,
+	}
+	if err := ing.Handle(ctx, msg); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	got, err := srv.Registry.GetNetworkScan(ctx, corrID)
+	if err != nil {
+		t.Fatalf("GetNetworkScan after ACK: %v", err)
+	}
+	if got.Status != "done" {
+		t.Errorf("status: got %q, want done", got.Status)
+	}
+	if got.Result == nil || len(got.Result.Hosts) != 1 || got.Result.Hosts[0].Vendor != "Hikvision" {
+		t.Errorf("hosts after ACK: got %+v", got.Result)
+	}
+	if got.ReturnedAt == nil || !got.ReturnedAt.Equal(returnedAt) {
+		t.Errorf("ReturnedAt: got %v, want %v", got.ReturnedAt, returnedAt)
 	}
 }
