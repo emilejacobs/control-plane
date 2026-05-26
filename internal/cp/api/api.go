@@ -177,6 +177,14 @@ func NewBuilderWith(d Deps) *Builder {
 				requireAuth(requireEnrolled(requireScope(devices.NewLogTailPost(d.Registry, d.CmdPublisher)))))
 			b.Get("/devices/{id}/logs/tail/{correlation_id}",
 				requireAuth(requireEnrolled(requireScope(devices.NewLogTailGet(d.Registry)))))
+			// Phase 2 Edge UI rework (issue #3): network scan. POST
+			// triggers a LAN scan via the network.scan cmd; GET polls
+			// the per-request row for the agent's hosts list. Same
+			// CmdPublisher gate as the surfaces above.
+			b.Post("/devices/{id}/network-scan",
+				requireAuth(requireEnrolled(requireScope(devices.NewNetworkScanPost(d.Registry, d.CmdPublisher)))))
+			b.Get("/devices/{id}/network-scan/{correlation_id}",
+				requireAuth(requireEnrolled(requireScope(devices.NewNetworkScanGet(d.Registry)))))
 		}
 	}
 	return b
