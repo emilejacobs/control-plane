@@ -16,6 +16,7 @@ Terms used throughout the design documents.
 | **Signed command** | A command payload signed with the CP's Ed25519 key (held in KMS) before being sent to a device. The agent verifies the signature before executing. |
 | **Client** | A uKnomi customer organization. Owns one or more sites — the `clients` and `sites` tables. |
 | **Site** | A physical client location. One client may have multiple sites. |
+| **Asset number** | A fleet-tracking identifier assigned to each device at install time. Stored on `devices.asset_number` (migration 014); NULL until install-module 11 ships it. *Not* the leading numeric prefix on hostnames like `07-eegees-mesa-macmini` — that's something else. Rendered on the per-device Deployment card; "Unassigned" when NULL. |
 | **Operator (staff)** | A uKnomi internal user with full fleet access. Authenticates with local credentials — password + TOTP (ADR-010, which dropped Entra ID); carries the `'*'` site allowlist via the `is_staff` flag. |
 | **Operator (local)** | A future field-operator user with a local CP account, scoped to specific sites. |
 | **Site allowlist** | The set of sites an operator may see. Staff hold the full fleet implicitly via `is_staff`; a non-staff operator's allowlist is the explicit `operator_sites` grants. Enforced on every device read through the `authz` module's `ScopedDeviceQuery` helper. |
