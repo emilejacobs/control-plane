@@ -8,6 +8,33 @@ import (
 	"github.com/emilejacobs/control-plane/internal/protocol/logtail"
 )
 
+// buildDockerLogsArgs is the docker-CLI argv builder used by the
+// production executor. Pinning the args explicitly so a refactor can't
+// silently flip flags (e.g., add --timestamps) without flipping this
+// expectation too.
+func TestBuildDockerLogsArgs(t *testing.T) {
+	args := buildDockerLogsArgs("plate-recognizer-stream", 200)
+	want := []string{"logs", "--tail", "200", "plate-recognizer-stream"}
+	if len(args) != len(want) {
+		t.Fatalf("argv length: got %d, want %d (%v)", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("argv[%d]: got %q, want %q", i, args[i], want[i])
+		}
+	}
+}
+
+// init() wires dockerLogsFn to execDockerLogs in production. The fake
+// swap in withFakeDockerLogs restores that, so an end-to-end "real
+// docker" path is reachable when integration tests need it. This test
+// just confirms the var isn't nil after package init.
+func TestDockerLogsFnWiredToProductionExecutor(t *testing.T) {
+	if dockerLogsFn == nil {
+		t.Fatal("dockerLogsFn nil after init; production wiring missing")
+	}
+}
+
 // White-box tests for TailDocker. Lives in package agent (not
 // agent_test) so it can swap the dockerLogsFn seam without exporting
 // a setter. Real docker invocation is covered by an opt-in integration
