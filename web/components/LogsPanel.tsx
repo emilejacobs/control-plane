@@ -16,7 +16,11 @@ interface Props {
   deviceId: string;
 }
 
-// Mirrors internal/agent/logtail.go PerOSAllowList()["darwin"] keys.
+// Mirrors internal/agent/logtail.go PerOSAllowList()["darwin"] entries
+// — seven file kinds plus the Plate Recognizer docker kind from issue
+// #7 / ADR-030 § 5. The wire payload is still {log_name, lines}; the
+// agent's resolver picks file-tail vs docker-logs based on the
+// allow-list entry's Kind. The dashboard only renders the label.
 // Add a Linux variant when the Linux fleet matters operationally.
 const MAC_LOGS: ReadonlyArray<{ name: string; label: string }> = [
   { name: "agent", label: "uknomi-agent (stdout)" },
@@ -26,6 +30,7 @@ const MAC_LOGS: ReadonlyArray<{ name: string; label: string }> = [
   { name: "setup", label: "Setup script" },
   { name: "install", label: "macOS installer" },
   { name: "activation", label: "Edge UI activation" },
+  { name: "plate-recognizer", label: "Plate Recognizer (Docker)" },
 ];
 
 type FetchState =
