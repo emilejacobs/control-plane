@@ -81,17 +81,31 @@ Local `id` UUIDs stay as PKs; `external_id` is the upsert key. No existing rows 
 
 **Operator-facing IDs**: the upstream `external_id` is what operators refer to when talking about specific sites (per user direction). The dashboard should surface `external_id` alongside or in place of CP's internal UUID where operators interact with site identifiers. Captured in the implementation issue as a UX requirement.
 
-### 7. Auth — HTTPS + IAM role ARN + Bearer token + Secrets Manager
+### 7. Auth — HTTPS + Cognito JWT + Secrets Manager
 
-- **Network**: HTTPS over public internet via existing NAT egress (same path Fargate tasks use for IoT Core). No PrivateLink endpoint to `api.uknomi.com` — overkill for daily sync traffic.
-- **Network-layer auth**: SigV4-signed requests using the `cp-taxonomy-sync` task role's temporary credentials. The API team allowlists the **task role ARN** (not a user ARN — avoids long-lived access keys).
-- **Application-layer auth**: Bearer token from `POST /user/signin` (service-account credentials), held in memory for the run. Re-signs on HTTP 401. No cross-run token caching (runs are 24h apart; one extra sign-in per day is cheap).
-- **Credential storage**: AWS Secrets Manager (`uknomi-cp/taxonomy-api-creds`, JSON `{"username","password"}`). Task role gets `secretsmanager:GetSecretValue` on the specific ARN.
+Read-only AWS investigation (2026-05-26) confirmed the upstream API's actual auth shape:
+
+- `api.uknomi.com` is a REGIONAL API Gateway REST API (`qahlxg7rq8`, prod stage) in **the same AWS account** (`523612763411`, us-east-1) — same account as CP.
+- **Resource policy**: `Principal: *` — open. No IAM-based gating at the resource-policy layer.
+- **`POST /user/signin`**: `authorizationType: NONE`. Public endpoint; exchanges `{username, password}` for a Cognito-issued JWT.
+- **`GET /brand`** and **`GET /brand/{id}/store`**: `authorizationType: COGNITO_USER_POOLS` with the `MyCognitoAuthorizer` against user pool `arn:aws:cognito-idp:us-east-1:523612763411:userpool/us-east-1_c8l8JVBwU`. No API key required.
+
+**Auth flow (single layer, Cognito JWT):**
+
+1. **Network**: HTTPS over public internet via existing NAT egress (same path Fargate tasks use for IoT Core). No PrivateLink endpoint — overkill for daily sync traffic. No SigV4 signing required.
+2. **Application-layer auth**: `cmd/taxonomy-sync` reads its Cognito service-account credentials from Secrets Manager, calls `POST /user/signin` once per run, holds the returned JWT in memory, and sends it as `Authorization: Bearer <jwt>` on subsequent calls. Re-signs on HTTP 401. No cross-run token caching (runs are 24h apart; one extra sign-in per day is cheap).
+3. **Credential storage**: AWS Secrets Manager (`uknomi-cp/taxonomy-api-creds`, JSON `{"username","password"}` — a Cognito user provisioned by the API team in pool `us-east-1_c8l8JVBwU`). The `cp-taxonomy-sync` task role gets `secretsmanager:GetSecretValue` on the specific ARN.
+
+**No IAM SigV4 signing, no task role ARN allowlist.** The earlier draft of this section assumed the API team's "provide CP IAM user ARN" instruction implied API Gateway IAM auth; the actual configuration is Cognito-based, and the "IAM ARN" language was a misstatement. The real handoff to the API team is the Cognito *username* (not an AWS ARN) — see Deployment ordering.
 
 **Deployment ordering** (load-bearing for the implementation slice):
-1. Terraform creates `cp-taxonomy-sync` Fargate task def + task role.
-2. Provide role ARN to the API team for allowlist.
-3. Then deploy the sync binary.
+
+1. Terraform creates `cp-taxonomy-sync` Fargate task def + task role + Secrets Manager entry (placeholder value).
+2. Ask the API team to provision a Cognito user for CP in pool `us-east-1_c8l8JVBwU` (suggested username: `cp-taxonomy-sync`). Receive the username + password.
+3. Populate the Secrets Manager entry with the real credentials.
+4. Deploy the sync binary.
+
+Steps 1, 2, and 3 can run in parallel. No "create role → wait for allowlist → deploy" gate as the earlier draft implied.
 
 A `--dry-run` flag on the binary exercises auth + parsing without writing to Postgres — supports safer bench-side validation.
 
@@ -125,7 +139,7 @@ A `--dry-run` flag on the binary exercises auth + parsing without writing to Pos
 - (+) **Manual button is an escape hatch, not a routine workflow.** Daily cadence keeps it that way; operators use it only when they just added a store and don't want to wait until tomorrow.
 - (+) **CP terminology unchanged.** "Client" and "Site" stay; ~50-file rename avoided. Brand metadata adds operator context without a hierarchy change.
 - (-) **Up to 24h staleness** for new upstream changes (mitigated by manual button).
-- (-) **Two-layer auth coordination** required before first deploy — task role ARN allowlist (network) + service-account creds (application). Two failure modes to debug.
+- (-) **Coordination with the API team** required before first deploy — they provision a Cognito user for CP in pool `us-east-1_c8l8JVBwU` and hand back credentials. Single-step; less coordination overhead than the earlier draft assumed but still a cross-team dependency for the implementation slice's start gate.
 - (-) **No `sync_runs` history table** — recovering "which run failed last Tuesday and why" requires CloudWatch Logs query, not a `SELECT`. Acceptable for v1; can be added later if audit pressure justifies.
 - (-) **Brand is captured but not modeled.** If uKnomi later wants brand-grouped reporting or brand-scoped operators, that becomes a separate schema slice. Today's metadata-only choice is YAGNI-defensible but accumulates a small debt against future brand-aware features.
 
