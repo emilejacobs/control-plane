@@ -18,12 +18,15 @@ import (
 // known maps device IDs that exist + are visible to the caller's
 // scope (the handler treats both not-found and not-visible as 404).
 // nextID is the server-assigned id the next Insert returns.
+// listing is the pre-populated cameras per device id for List tests.
 type cameraStore struct {
 	mu        sync.Mutex
 	known     map[string]bool
 	nextID    string
 	inserts   []insertCall
 	insertErr error
+	listing   map[string][]cameras.Camera
+	listErr   error
 }
 
 type insertCall struct {
@@ -53,6 +56,13 @@ func (s *cameraStore) InsertCamera(_ context.Context, deviceID, label, rtspURL s
 		RtspURL:  rtspURL,
 		IsLPR:    isLPR,
 	}, nil
+}
+
+func (s *cameraStore) ListCameras(_ context.Context, deviceID string) ([]cameras.Camera, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.listing[deviceID], nil
 }
 
 // Tracer bullet: POST /devices/{id}/cameras with a valid body returns
@@ -99,6 +109,74 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	c := store.inserts[0]
 	if c.deviceID != "dev-abc" || c.label != "Drive-thru" || c.rtspURL != "rtsp://user:pass@10.0.0.42/stream" || !c.isLPR {
 		t.Errorf("InsertCamera args: got %+v", c)
+	}
+}
+
+// GET /devices/{id}/cameras returns the cameras for that device under
+// a `cameras` envelope (mirrors the {devices: [...]} list shape so
+// dashboard parsers stay consistent). Empty list returns an empty
+// array — not null — so the UI distinguishes "no cameras" from "no
+// data".
+func TestCameraListReturnsCameras(t *testing.T) {
+	store := &cameraStore{
+		known: map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{
+			"dev-abc": {
+				{CameraID: "cam1", Label: "Drive-thru", RtspURL: "rtsp://a", IsLPR: true},
+				{CameraID: "cam2", Label: "Entry", RtspURL: "rtsp://b", IsLPR: false},
+			},
+		},
+	}
+	h := devices.NewCameraList(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-abc/cameras", nil)
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Cameras []cameras.Camera `json:"cameras"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("response body not valid JSON: %v", err)
+	}
+	if len(got.Cameras) != 2 {
+		t.Fatalf("cameras: got %d want 2", len(got.Cameras))
+	}
+	if got.Cameras[0].CameraID != "cam1" || got.Cameras[1].CameraID != "cam2" {
+		t.Errorf("camera_ids: got %q,%q", got.Cameras[0].CameraID, got.Cameras[1].CameraID)
+	}
+	if !got.Cameras[0].IsLPR || got.Cameras[1].IsLPR {
+		t.Errorf("is_lpr flags: got %v,%v want true,false", got.Cameras[0].IsLPR, got.Cameras[1].IsLPR)
+	}
+}
+
+// Empty list returns an empty array, not null. The dashboard's
+// rendering treats `cameras: []` as "no cameras yet" and `cameras:
+// null` as "error" — so the API must not collapse one to the other.
+func TestCameraListEmptyReturnsArrayNotNull(t *testing.T) {
+	store := &cameraStore{
+		known:   map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{},
+	}
+	h := devices.NewCameraList(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-abc/cameras", nil)
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	// Check the raw body — JSON-decoding null vs [] both produce a
+	// zero-length slice in Go, so structural inspection is required.
+	got := strings.TrimSpace(rec.Body.String())
+	if got != `{"cameras":[]}` {
+		t.Errorf("body: got %q want %q", got, `{"cameras":[]}`)
 	}
 }
 

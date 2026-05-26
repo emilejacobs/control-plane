@@ -19,6 +19,7 @@ import (
 type CameraStore interface {
 	GetByID(ctx context.Context, id string) (registry.Device, error)
 	InsertCamera(ctx context.Context, deviceID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
+	ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error)
 }
 
 // CameraPostHandler serves POST /devices/{id}/cameras — the create
@@ -81,4 +82,44 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(cam)
+}
+
+// CameraListHandler serves GET /devices/{id}/cameras — returns the
+// cameras inventory for one device under a {cameras: [...]} envelope.
+type CameraListHandler struct {
+	store CameraStore
+}
+
+func NewCameraList(store CameraStore) *CameraListHandler {
+	return &CameraListHandler{store: store}
+}
+
+type cameraListResponse struct {
+	Cameras []cameras.Camera `json:"cameras"`
+}
+
+func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if _, err := h.store.GetByID(r.Context(), id); err != nil {
+		if errors.Is(err, registry.ErrDeviceNotFound) {
+			http.Error(w, "device not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	list, err := h.store.ListCameras(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Empty array, not null — dashboard distinguishes "no cameras"
+	// from "error".
+	if list == nil {
+		list = []cameras.Camera{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cameraListResponse{Cameras: list})
 }
