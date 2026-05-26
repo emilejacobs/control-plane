@@ -37,3 +37,5 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 027 | [Phase 1 auto-deploy direct to prod; staging + promote gate deferred](./adr/0027-phase-1-auto-deploy-direct-to-prod.md) | Accepted (2026-05-24) — amends ADR-020 |
 | 028 | [Unsigned `config.update` in Phase 2; signing arrives with the Phase 3 envelope](./adr/0028-unsigned-config-update-phase-2.md) | Accepted (2026-05-24) — narrows ADR-013 |
 | 029 | [Edge UI rework — CP-authoritative, rewrite onto CP stack, drop unused features](./adr/0029-edge-ui-rework-scope.md) | Accepted (2026-05-25) |
+| 030 | [Edge UI per-feature surface model](./adr/0030-edge-ui-per-feature-surface.md) | Accepted (2026-05-25) |
+| 031 | [Webhook endpoint registry — CP-wide config primitive](./adr/0031-webhook-endpoint-registry.md) | Accepted (2026-05-25) |

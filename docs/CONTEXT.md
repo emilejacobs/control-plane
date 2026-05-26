@@ -6,7 +6,14 @@ Terms used throughout the design documents.
 |---|---|
 | **CP** | Control Plane. This project — the AWS-hosted system. |
 | **Edge device** | Any uKnomi-managed hardware at a client site (Mac Mini, Raspberry Pi, Radxa Rock). |
-| **Edge UI** | The Flask app running on each Mac at `localhost:5050`. Formerly named "Talon"; renamed to "uKnomi Edge". Lives in `mac-mini-rollout/webui/`. |
+| **Edge UI** | The on-device companion to CP. Today: a Flask app at `mac-mini-rollout/webui/`. After the [ADR-029](./adr/0029-edge-ui-rework-scope.md) / [ADR-030](./adr/0030-edge-ui-per-feature-surface.md) rework: a Next.js app with exactly two pages — **Camera live preview** and **Audio test** — running on the tailnet. No auth, no CP credentials, no persistent state. Hardware-bound only. Formerly named "Talon". |
+| **Camera live preview** | The MJPEG stream from an on-device ffmpeg pipe over a camera's RTSP URL, served by Edge UI at `https://<host>.<tailnet>/preview/<camera_id>`. Used by an operator clicking "Verify angle" in CP. No auth (tailnet-as-perimeter). |
+| **Network scan** | An on-demand LAN scan run by the agent in response to a `network.scan` cmd from CP. Output is a list of candidate IPs with MAC, vendor (OUI lookup), and open camera-relevant ports. Used during install to find cameras. |
+| **Capture** | A device-produced binary artifact stored in S3 and indexed in CP. Three kinds today: **Snapshot**, **Audio recording**, **Transcript**. Upload via CP-vended pre-signed PUT URL; agent is the upload gateway for all three kinds. |
+| **Snapshot** | A capture of a camera's RTSP frame, JPEG. Produced by the agent — scheduled weekly per camera plus on-demand via `camera.snapshot` cmd. 90-day S3 retention. |
+| **Audio recording** | A capture of microphone audio, WAV. Produced by Edge UI's audio test page; agent picks it up via `fsnotify` and uploads. On-demand only. No retention policy (kept forever). |
+| **Transcript** | The text output of running Whisper against an Audio recording, JSON+TXT. Produced by Edge UI's audio test page during install for audio quality QA. No retention policy. |
+| **Webhook endpoint registry** | The CP-wide table of named webhook endpoints (`transcriber-prod`, `transcriber-dev`, etc.). Per-device PR config references entries by name; CP resolves names → URLs at `pr.config.update` push time. First instance of the [ADR-031](./adr/0031-webhook-endpoint-registry.md) fleet-wide-config pattern. |
 | **Agent** | `uknomi-agent`, the Go binary on every device that talks to the CP via MQTT. |
 | **Tailnet** | The uKnomi Tailscale network. All edge devices and the CP's Tailscale subnet router are members. |
 | **Subnet router** | A Tailscale node that advertises a route, allowing other tailnet members to reach hosts behind it. The CP runs one as a Fargate task to give the API service tailnet access without enrolling clients. |
