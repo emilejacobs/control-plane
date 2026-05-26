@@ -96,6 +96,52 @@ func TestHandlerValidationFailureForwarded(t *testing.T) {
 	}
 }
 
+// Docker-kind dispatch (issue #7): an allow-list entry with
+// Kind=docker reaches the Reader.Tail seam carrying KindDocker + the
+// container name as Target. The handler doesn't itself execute
+// `docker logs` — it just routes the Entry through. Output round-trips
+// as Response.Content unchanged. This pins the kind-aware dispatch
+// from cmd → Reader without involving the real docker executor.
+func TestHandlerDispatchesDockerKind(t *testing.T) {
+	r := &fakeReader{
+		allow: map[string]protologtail.Entry{
+			"plate-recognizer": {
+				Name:   "plate-recognizer",
+				Kind:   protologtail.KindDocker,
+				Target: "plate-recognizer-stream",
+				Label:  "Plate Recognizer (Docker)",
+			},
+		},
+		resp: protologtail.Response{Content: "pr line 1\npr line 2\n"},
+	}
+	h := logtail.New(r)
+	out, err := h.Handle(context.Background(),
+		json.RawMessage(`{"log_name":"plate-recognizer","lines":50}`))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("Tail calls: got %d, want 1", len(r.calls))
+	}
+	got := r.calls[0]
+	if got.entry.Kind != protologtail.KindDocker {
+		t.Errorf("entry.Kind: got %q, want %q", got.entry.Kind, protologtail.KindDocker)
+	}
+	if got.entry.Target != "plate-recognizer-stream" {
+		t.Errorf("entry.Target: got %q, want %q", got.entry.Target, "plate-recognizer-stream")
+	}
+	if got.lines != 50 {
+		t.Errorf("lines: got %d, want 50", got.lines)
+	}
+	resp, ok := out.(protologtail.Response)
+	if !ok {
+		t.Fatalf("output type: got %T", out)
+	}
+	if resp.Content != "pr line 1\npr line 2\n" {
+		t.Errorf("content: got %q", resp.Content)
+	}
+}
+
 // Reader errors (CodeBinaryFile, CodeReadError) propagate with their
 // original code so the cmd-result envelope carries the agent-side
 // reason intact.
