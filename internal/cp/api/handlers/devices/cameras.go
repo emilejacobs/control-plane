@@ -1,6 +1,7 @@
 package devices
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,7 +56,9 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req cameraCreateRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

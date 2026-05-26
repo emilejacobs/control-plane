@@ -102,6 +102,29 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	}
 }
 
+// Unknown fields are rejected with 400 — same protective stance as
+// ADR-028's config.update whitelist. Prevents accidental drift if a
+// future field is added on one side but not parsed correctly on the
+// other; the API surfaces the typo immediately instead of silently
+// discarding it.
+func TestCameraPostRejectsUnknownFields(t *testing.T) {
+	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
+	h := devices.NewCameraPost(store)
+
+	body := `{"label":"x","rtsp_url":"rtsp://10.0.0.42/stream","is_lpr":false,"site_id":"site-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.inserts) != 0 {
+		t.Errorf("InsertCamera must not be called on validation failure; got %d", len(store.inserts))
+	}
+}
+
 // rtsp_url must begin with rtsp:// or rtsps://. Catches the most
 // common operator mistake (pasted the http: admin-UI URL by accident);
 // permissive enough on everything after the scheme so vendor URLs with
