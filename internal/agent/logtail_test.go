@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -167,9 +168,11 @@ func TestTailFileNonexistent(t *testing.T) {
 	}
 }
 
-// PerOSAllowList returns a non-empty map on darwin (Mac fleet) and
-// is exposed so the dispatcher handler can resolve log_name → path
-// without re-implementing the allow-list.
+// PerOSAllowList returns a non-empty map on darwin (Mac fleet) and is
+// exposed so the dispatcher handler can resolve log_name → Entry
+// without re-implementing the allow-list. Entries carry the Kind
+// discriminator the agent's resolver switches on (issue #7 / ADR-030
+// § 5).
 func TestPerOSAllowListShape(t *testing.T) {
 	list := agent.PerOSAllowList()
 	if list == nil {
@@ -177,13 +180,61 @@ func TestPerOSAllowListShape(t *testing.T) {
 	}
 	// On darwin we expect at least "agent" + "agent-error" + "webui".
 	// On other OSes we still expect SOMETHING (even if just "agent").
-	if _, ok := list["agent"]; !ok {
-		t.Error(`PerOSAllowList missing "agent" — should be on every OS`)
+	entry, ok := list["agent"]
+	if !ok {
+		t.Fatal(`PerOSAllowList missing "agent" — should be on every OS`)
 	}
-	// Sanity: paths are absolute.
-	for name, path := range list {
-		if !filepath.IsAbs(path) {
-			t.Errorf("%s: path %q is not absolute", name, path)
+	if entry.Kind != logtail.KindFile {
+		t.Errorf(`"agent" entry kind: got %q, want %q`, entry.Kind, logtail.KindFile)
+	}
+	// Sanity: file targets are absolute paths.
+	for name, e := range list {
+		if e.Kind == logtail.KindFile && !filepath.IsAbs(e.Target) {
+			t.Errorf("%s: file target %q is not absolute", name, e.Target)
+		}
+		if e.Name != name {
+			t.Errorf("%s: entry.Name=%q does not match map key", name, e.Name)
+		}
+		if e.Kind != logtail.KindFile && e.Kind != logtail.KindDocker {
+			t.Errorf("%s: unknown kind %q", name, e.Kind)
+		}
+		if e.Label == "" {
+			t.Errorf("%s: empty label", name)
+		}
+	}
+}
+
+// On darwin, the allow-list adds a docker entry for the
+// plate-recognizer container (issue #7). The seven file entries from
+// slice 3 stay; the new entry uses KindDocker + container name as
+// Target. This pins the default Mac allow-list against drift.
+func TestPerOSAllowListDarwinHasPlateRecognizerDocker(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-only allow-list")
+	}
+	list := agent.PerOSAllowList()
+	pr, ok := list["plate-recognizer"]
+	if !ok {
+		t.Fatal("plate-recognizer entry missing on darwin allow-list")
+	}
+	if pr.Kind != logtail.KindDocker {
+		t.Errorf("kind: got %q, want %q", pr.Kind, logtail.KindDocker)
+	}
+	if pr.Target != "plate-recognizer-stream" {
+		t.Errorf("target: got %q, want %q", pr.Target, "plate-recognizer-stream")
+	}
+	if pr.Label != "Plate Recognizer (Docker)" {
+		t.Errorf("label: got %q, want %q", pr.Label, "Plate Recognizer (Docker)")
+	}
+	// Still the seven file entries.
+	for _, name := range []string{"agent", "agent-error", "webui", "webui-error", "setup", "install", "activation"} {
+		e, ok := list[name]
+		if !ok {
+			t.Errorf("%s: missing from darwin allow-list", name)
+			continue
+		}
+		if e.Kind != logtail.KindFile {
+			t.Errorf("%s: kind got %q, want %q", name, e.Kind, logtail.KindFile)
 		}
 	}
 }

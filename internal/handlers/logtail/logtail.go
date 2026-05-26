@@ -18,13 +18,14 @@ import (
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 )
 
-// Reader is the file-tail side of the agent the handler depends on.
-// AllowList returns the logical-name → path map; Tail reads the last
-// N lines from the path. The agent wires the real implementation
-// (PerOSAllowList + TailFile in the agent package); tests pass a stub.
+// Reader is the log-fetch side of the agent the handler depends on.
+// AllowList returns the logical-name → Entry map (issue #7); Tail
+// fetches the last N lines using the Entry's Kind to pick the
+// executor. The agent wires the real implementation (PerOSAllowList +
+// kind-aware fetch in the agent package); tests pass a stub.
 type Reader interface {
-	AllowList() map[string]string
-	Tail(path string, lines int) (protologtail.Response, error)
+	AllowList() map[string]protologtail.Entry
+	Tail(entry protologtail.Entry, lines int) (protologtail.Response, error)
 }
 
 type Handler struct {
@@ -41,13 +42,13 @@ func (h *Handler) Handle(_ context.Context, args json.RawMessage) (any, error) {
 		return nil, asCodedError(err)
 	}
 
-	path, ok := h.reader.AllowList()[req.LogName]
+	entry, ok := h.reader.AllowList()[req.LogName]
 	if !ok {
 		return nil, envelope.NewCodedError(protologtail.CodeUnknownLog,
 			"log_name "+req.LogName+" is not in this agent's allow-list")
 	}
 
-	resp, err := h.reader.Tail(path, req.Lines)
+	resp, err := h.reader.Tail(entry, req.Lines)
 	if err != nil {
 		return nil, asCodedError(err)
 	}

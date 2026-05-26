@@ -8,7 +8,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/emilejacobs/control-plane/internal/protocol/logtail"
+	logtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 )
 
 // readBlockSize is the chunk we read backwards from EOF when walking
@@ -28,37 +28,42 @@ const binaryDetectionWindow = 4 * 1024
 // the file is binary and we refuse to return it.
 const binaryThresholdPercent = 5
 
-// PerOSAllowList returns the per-OS map of logical log name → file
-// path the agent will tail on operator request. Logical names are
-// what the dashboard surfaces to the operator; paths are what the
-// agent reads. Decoupling the two lets us reorganise file locations
-// later without breaking dashboard bookmarks.
+// PerOSAllowList returns the per-OS map of logical log name → Entry
+// the agent will fetch on operator request. Logical names are what
+// the dashboard surfaces to the operator; the Entry's Kind picks the
+// executor (file tail vs docker logs) and Target is the kind-specific
+// identifier. Decoupling the logical name from the underlying source
+// lets us reorganise file locations or swap container names later
+// without breaking dashboard bookmarks.
 //
 // See .scratch/phase-2-log-tail/PRD.md § Mac allow-list for the
-// canonical list + which logs were explicitly excluded (Zabbix removed
-// per fleet_software_deprecations memory, tailscale is oslog-only,
-// docker-container logs need a different access pattern).
-func PerOSAllowList() map[string]string {
+// canonical file list + ADR-030 § 5 for the docker extension (issue
+// #7). Zabbix dropped per fleet_software_deprecations memory; tailscale
+// stays oslog-only.
+func PerOSAllowList() map[string]logtail.Entry {
 	switch runtime.GOOS {
 	case "darwin":
-		return map[string]string{
-			"agent":        "/var/log/uknomi-agent.log",
-			"agent-error":  "/var/log/uknomi-agent-error.log",
-			"webui":        "/var/log/uknomi-webui.log",
-			"webui-error":  "/var/log/uknomi-webui-error.log",
-			"setup":        "/var/log/uknomi-setup.log",
-			"install":      "/var/log/install.log",
-			"activation":   "/usr/local/etc/uknomi-setup/activation.log",
+		return map[string]logtail.Entry{
+			"agent":            {Name: "agent", Kind: logtail.KindFile, Target: "/var/log/uknomi-agent.log", Label: "uknomi-agent (stdout)"},
+			"agent-error":      {Name: "agent-error", Kind: logtail.KindFile, Target: "/var/log/uknomi-agent-error.log", Label: "uknomi-agent (stderr / slog)"},
+			"webui":            {Name: "webui", Kind: logtail.KindFile, Target: "/var/log/uknomi-webui.log", Label: "Edge UI (stdout)"},
+			"webui-error":      {Name: "webui-error", Kind: logtail.KindFile, Target: "/var/log/uknomi-webui-error.log", Label: "Edge UI (stderr)"},
+			"setup":            {Name: "setup", Kind: logtail.KindFile, Target: "/var/log/uknomi-setup.log", Label: "Setup script"},
+			"install":          {Name: "install", Kind: logtail.KindFile, Target: "/var/log/install.log", Label: "macOS installer"},
+			"activation":       {Name: "activation", Kind: logtail.KindFile, Target: "/usr/local/etc/uknomi-setup/activation.log", Label: "Edge UI activation"},
+			"plate-recognizer": {Name: "plate-recognizer", Kind: logtail.KindDocker, Target: "plate-recognizer-stream", Label: "Plate Recognizer (Docker)"},
 		}
 	case "linux":
 		// Linux fleet is deprecating (per fleet_direction memory).
-		// Minimal viable set: the agent's own logs only.
-		return map[string]string{
-			"agent":       "/var/log/uknomi-agent.log",
-			"agent-error": "/var/log/uknomi-agent-error.log",
+		// Minimal viable set: the agent's own logs only. Docker
+		// entries are deliberately Mac-only here — Linux installs
+		// don't ship Plate Recognizer today.
+		return map[string]logtail.Entry{
+			"agent":       {Name: "agent", Kind: logtail.KindFile, Target: "/var/log/uknomi-agent.log", Label: "uknomi-agent (stdout)"},
+			"agent-error": {Name: "agent-error", Kind: logtail.KindFile, Target: "/var/log/uknomi-agent-error.log", Label: "uknomi-agent (stderr / slog)"},
 		}
 	default:
-		return map[string]string{}
+		return map[string]logtail.Entry{}
 	}
 }
 
@@ -162,6 +167,45 @@ func TailFile(path string, lines int, maxContent int) (logtail.Response, error) 
 		Truncated:     truncated,
 		TruncatedFrom: truncatedFrom,
 	}, nil
+}
+
+// TailDocker fetches the last `lines` lines of the named container's
+// stdout+stderr via `docker logs --tail N <container>`. Caps content
+// at maxContent and reports truncation. Issue #7 / ADR-030 § 5.
+//
+// The actual docker invocation is behind the dockerLogsFn function
+// pointer so handler unit tests can inject a fake without shelling
+// out. Production wires execDockerLogs (defined in logtail_docker.go).
+func TailDocker(container string, lines int, maxContent int) (logtail.Response, error) {
+	out, err := dockerLogsFn(container, lines)
+	if err != nil {
+		return logtail.Response{}, &logtail.ValidationError{
+			Code:    logtail.CodeReadError,
+			Message: fmt.Sprintf("docker logs %s: %v", container, err),
+		}
+	}
+	truncated := false
+	truncatedFrom := 0
+	if len(out) > maxContent {
+		truncated = true
+		truncatedFrom = lines
+		out = out[len(out)-maxContent:]
+		if i := bytes.IndexByte(out, '\n'); i >= 0 && i+1 < len(out) {
+			out = out[i+1:]
+		}
+	}
+	return logtail.Response{
+		Content:       string(out),
+		Truncated:     truncated,
+		TruncatedFrom: truncatedFrom,
+	}, nil
+}
+
+// dockerLogsFn is the seam tests swap. Production points it at
+// execDockerLogs (defined in logtail_docker.go); tests assign a fake
+// closure in setup.
+var dockerLogsFn = func(container string, lines int) ([]byte, error) {
+	return nil, errors.New("docker executor not wired — set dockerLogsFn")
 }
 
 // keepLastNLines trims data to keep only the last n newline-delimited

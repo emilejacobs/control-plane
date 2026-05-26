@@ -351,8 +351,10 @@ func TestAgentDispatchesLogTail(t *testing.T) {
 
 	// Stub reader returns canned content for a known log_name.
 	reader := &stubLogTailReader{
-		allow: map[string]string{"agent": "/var/log/uknomi-agent.log"},
-		resp:  logtailResponse{content: "line 1\nline 2\n"},
+		allow: map[string]protologtail.Entry{
+			"agent": {Name: "agent", Kind: protologtail.KindFile, Target: "/var/log/uknomi-agent.log", Label: "uknomi-agent (stdout)"},
+		},
+		resp: logtailResponse{content: "line 1\nline 2\n"},
 	}
 
 	tr := newFakeTransport()
@@ -404,23 +406,26 @@ func TestAgentDispatchesLogTail(t *testing.T) {
 		t.Errorf("content: got %q", payload.Content)
 	}
 
-	// Verify the reader was called with the right path.
-	if len(reader.calls) != 1 || reader.calls[0].path != "/var/log/uknomi-agent.log" || reader.calls[0].lines != 100 {
+	// Verify the reader was called with the right entry.
+	if len(reader.calls) != 1 || reader.calls[0].entry.Target != "/var/log/uknomi-agent.log" || reader.calls[0].lines != 100 {
 		t.Errorf("reader calls: got %+v", reader.calls)
+	}
+	if reader.calls[0].entry.Kind != protologtail.KindFile {
+		t.Errorf("reader.calls[0].entry.Kind: got %q, want %q", reader.calls[0].entry.Kind, protologtail.KindFile)
 	}
 }
 
 // stubLogTailReader implements the logtail.Reader interface for the
 // agent dispatch test above.
 type stubLogTailReader struct {
-	allow map[string]string
+	allow map[string]protologtail.Entry
 	calls []logtailReadCall
 	resp  logtailResponse
 	err   error
 }
 
 type logtailReadCall struct {
-	path  string
+	entry protologtail.Entry
 	lines int
 }
 
@@ -428,9 +433,9 @@ type logtailResponse struct {
 	content string
 }
 
-func (s *stubLogTailReader) AllowList() map[string]string { return s.allow }
-func (s *stubLogTailReader) Tail(path string, lines int) (protologtail.Response, error) {
-	s.calls = append(s.calls, logtailReadCall{path: path, lines: lines})
+func (s *stubLogTailReader) AllowList() map[string]protologtail.Entry { return s.allow }
+func (s *stubLogTailReader) Tail(entry protologtail.Entry, lines int) (protologtail.Response, error) {
+	s.calls = append(s.calls, logtailReadCall{entry: entry, lines: lines})
 	return protologtail.Response{Content: s.resp.content}, s.err
 }
 

@@ -23,14 +23,28 @@ import (
 	"github.com/emilejacobs/control-plane/internal/telemetry"
 )
 
-// defaultLogTailReader wraps PerOSAllowList + TailFile so the agent
-// can register the log.tail handler without test-only injection. Tests
-// pass a stub via WithLogTailReader.
+// defaultLogTailReader wraps PerOSAllowList + the kind-aware fetcher
+// so the agent can register the log.tail handler without test-only
+// injection. Tests pass a stub via WithLogTailReader.
+//
+// Kind dispatch (issue #7): "file" → TailFile; "docker" → TailDocker.
+// Unknown kinds fall through with a clear CodeReadError so the
+// dashboard surfaces drift rather than silently dropping the request.
 type defaultLogTailReader struct{}
 
-func (defaultLogTailReader) AllowList() map[string]string { return PerOSAllowList() }
-func (defaultLogTailReader) Tail(path string, lines int) (protologtail.Response, error) {
-	return TailFile(path, lines, protologtail.MaxContentSize)
+func (defaultLogTailReader) AllowList() map[string]protologtail.Entry { return PerOSAllowList() }
+func (defaultLogTailReader) Tail(entry protologtail.Entry, lines int) (protologtail.Response, error) {
+	switch entry.Kind {
+	case protologtail.KindFile:
+		return TailFile(entry.Target, lines, protologtail.MaxContentSize)
+	case protologtail.KindDocker:
+		return TailDocker(entry.Target, lines, protologtail.MaxContentSize)
+	default:
+		return protologtail.Response{}, &protologtail.ValidationError{
+			Code:    protologtail.CodeReadError,
+			Message: "unknown allow-list kind " + entry.Kind + " for " + entry.Name,
+		}
+	}
 }
 
 const (

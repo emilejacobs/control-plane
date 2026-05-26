@@ -12,29 +12,31 @@ import (
 )
 
 type fakeReader struct {
-	allow map[string]string
+	allow map[string]protologtail.Entry
 	calls []readCall
 	resp  protologtail.Response
 	err   error
 }
 
 type readCall struct {
-	path  string
+	entry protologtail.Entry
 	lines int
 }
 
-func (f *fakeReader) AllowList() map[string]string { return f.allow }
-func (f *fakeReader) Tail(path string, lines int) (protologtail.Response, error) {
-	f.calls = append(f.calls, readCall{path: path, lines: lines})
+func (f *fakeReader) AllowList() map[string]protologtail.Entry { return f.allow }
+func (f *fakeReader) Tail(entry protologtail.Entry, lines int) (protologtail.Response, error) {
+	f.calls = append(f.calls, readCall{entry: entry, lines: lines})
 	return f.resp, f.err
 }
 
 // Happy path: known log_name + valid lines → Reader.Tail called with
-// the right path + lines, Response forwarded as the handler result.
+// the right Entry + lines, Response forwarded as the handler result.
 func TestHandlerHappyPath(t *testing.T) {
 	r := &fakeReader{
-		allow: map[string]string{"agent": "/var/log/uknomi-agent.log"},
-		resp:  protologtail.Response{Content: "line1\nline2\n", Truncated: false},
+		allow: map[string]protologtail.Entry{
+			"agent": {Name: "agent", Kind: protologtail.KindFile, Target: "/var/log/uknomi-agent.log", Label: "uknomi-agent (stdout)"},
+		},
+		resp: protologtail.Response{Content: "line1\nline2\n", Truncated: false},
 	}
 	h := logtail.New(r)
 	out, err := h.Handle(context.Background(), json.RawMessage(`{"log_name":"agent","lines":50}`))
@@ -44,7 +46,7 @@ func TestHandlerHappyPath(t *testing.T) {
 	if len(r.calls) != 1 {
 		t.Fatalf("Tail calls: got %d, want 1", len(r.calls))
 	}
-	if r.calls[0].path != "/var/log/uknomi-agent.log" || r.calls[0].lines != 50 {
+	if r.calls[0].entry.Target != "/var/log/uknomi-agent.log" || r.calls[0].lines != 50 {
 		t.Errorf("Tail args: got %+v", r.calls[0])
 	}
 	resp, ok := out.(protologtail.Response)
@@ -60,7 +62,9 @@ func TestHandlerHappyPath(t *testing.T) {
 // never called. This is the security boundary — the agent refuses to
 // read paths outside its allow-list even if the cmd payload validates.
 func TestHandlerUnknownLog(t *testing.T) {
-	r := &fakeReader{allow: map[string]string{"agent": "/var/log/uknomi-agent.log"}}
+	r := &fakeReader{allow: map[string]protologtail.Entry{
+		"agent": {Name: "agent", Kind: protologtail.KindFile, Target: "/var/log/uknomi-agent.log"},
+	}}
 	h := logtail.New(r)
 	_, err := h.Handle(context.Background(), json.RawMessage(`{"log_name":"evil","lines":50}`))
 	if err == nil {
@@ -78,7 +82,9 @@ func TestHandlerUnknownLog(t *testing.T) {
 // Validation errors from Parse propagate as CodedError with the
 // protocol-side code preserved.
 func TestHandlerValidationFailureForwarded(t *testing.T) {
-	r := &fakeReader{allow: map[string]string{"agent": "/var/log/uknomi-agent.log"}}
+	r := &fakeReader{allow: map[string]protologtail.Entry{
+		"agent": {Name: "agent", Kind: protologtail.KindFile, Target: "/var/log/uknomi-agent.log"},
+	}}
 	h := logtail.New(r)
 	_, err := h.Handle(context.Background(), json.RawMessage(`{"log_name":"agent","lines":1000}`))
 	if err == nil {
@@ -95,7 +101,9 @@ func TestHandlerValidationFailureForwarded(t *testing.T) {
 // reason intact.
 func TestHandlerReaderErrorPropagated(t *testing.T) {
 	r := &fakeReader{
-		allow: map[string]string{"install": "/var/log/install.log"},
+		allow: map[string]protologtail.Entry{
+			"install": {Name: "install", Kind: protologtail.KindFile, Target: "/var/log/install.log"},
+		},
 		err: &protologtail.ValidationError{
 			Code:    protologtail.CodeBinaryFile,
 			Message: "looks binary",
