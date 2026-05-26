@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"net"
 	"sort"
 	"testing"
 )
@@ -109,6 +110,39 @@ func TestNmapScannerScanReturnsRunErr(t *testing.T) {
 	_, err := sc.Scan(context.Background(), "10.0.0.0/24")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+// Regression: macOS returns iface.Addrs() *net.IPNet whose .IP is a
+// 16-byte IPv4-mapped slice. The previous heuristic used netip's
+// AddrFromSlice + Is4, which treats 16-byte input as IPv6 and rejected
+// every macOS interface — surfacing as "no suitable IPv4 interface"
+// on devices with valid 192.168.x.x en0 (bench Mac 2026-05-26).
+func TestSubnetCandidate(t *testing.T) {
+	cases := []struct {
+		name   string
+		ip     net.IP
+		want   string
+		wantOK bool
+	}{
+		{"linux 4-byte private", net.IPv4(192, 168, 54, 215).To4(), "192.168.54.0/24", true},
+		{"macOS 16-byte IPv4-mapped private", net.IPv4(192, 168, 54, 215), "192.168.54.0/24", true},
+		{"10/8 private", net.IPv4(10, 1, 2, 3).To4(), "10.1.2.0/24", true},
+		{"tailscale 100.x CGNAT", net.IPv4(100, 122, 190, 107).To4(), "", false},
+		{"link-local 169.254", net.IPv4(169, 254, 1, 2).To4(), "", false},
+		{"IPv6 native", net.ParseIP("fe80::1"), "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ipnet := &net.IPNet{IP: c.ip, Mask: net.CIDRMask(24, 32)}
+			got, ok := subnetCandidate(ipnet)
+			if ok != c.wantOK {
+				t.Errorf("ok: got %v, want %v", ok, c.wantOK)
+			}
+			if got != c.want {
+				t.Errorf("subnet: got %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

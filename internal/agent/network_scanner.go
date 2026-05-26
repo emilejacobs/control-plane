@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -188,21 +187,33 @@ func detectPrimarySubnet() (string, error) {
 			if !ok {
 				continue
 			}
-			a, ok := netip.AddrFromSlice(ipnet.IP)
-			if !ok || !a.Is4() {
-				continue
+			if subnet, ok := subnetCandidate(ipnet); ok {
+				return subnet, nil
 			}
-			a4 := a.As4()
-			if !isPrivateV4(a4) {
-				continue
-			}
-			// Force /24 — store LANs are uniformly /24, /23, or smaller.
-			// Going wider than /24 lengthens the scan past the 30s budget.
-			subnet := fmt.Sprintf("%d.%d.%d.0/24", a4[0], a4[1], a4[2])
-			return subnet, nil
 		}
 	}
 	return "", errors.New("no suitable IPv4 interface")
+}
+
+// subnetCandidate returns the /24 CIDR for an *net.IPNet whose IP is
+// a private RFC1918 IPv4 address, or "", false otherwise. macOS's
+// iface.Addrs() returns IPv4 addresses as 16-byte IPv4-mapped slices;
+// net.IP.To4 normalises both 4- and 16-byte shapes to 4 bytes, so the
+// caller doesn't have to care about the OS.
+//
+// /24 is forced because store LANs are uniformly /24, /23, or smaller
+// (going wider lengthens the scan past the 30s budget).
+func subnetCandidate(ipnet *net.IPNet) (string, bool) {
+	ip4 := ipnet.IP.To4()
+	if ip4 == nil {
+		return "", false
+	}
+	var a4 [4]byte
+	copy(a4[:], ip4)
+	if !isPrivateV4(a4) {
+		return "", false
+	}
+	return fmt.Sprintf("%d.%d.%d.0/24", a4[0], a4[1], a4[2]), true
 }
 
 func isPrivateV4(a [4]byte) bool {
