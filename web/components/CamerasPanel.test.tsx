@@ -1,5 +1,11 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup, within } from "@testing-library/react";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import {
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+  within,
+} from "@testing-library/react";
 import { CamerasPanel } from "./CamerasPanel";
 import type { Camera } from "../lib/api/devices";
 
@@ -62,6 +68,41 @@ describe("CamerasPanel — populated state", () => {
     expect(
       screen.getByText(/rtsp:\/\/user:pass@10\.0\.0\.42\/stream/),
     ).toBeInTheDocument();
+  });
+});
+
+describe("CamerasPanel — Scan network button (issue #3)", () => {
+  it("renders the 'Scan network' button when onScanNetwork is provided", () => {
+    render(
+      <CamerasPanel
+        cameras={[]}
+        lastAppliedAt={null}
+        onScanNetwork={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /scan network/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("fires onScanNetwork when the button is clicked", () => {
+    const onScanNetwork = vi.fn();
+    render(
+      <CamerasPanel
+        cameras={[]}
+        lastAppliedAt={null}
+        onScanNetwork={onScanNetwork}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /scan network/i }));
+    expect(onScanNetwork).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not render the button when onScanNetwork is undefined", () => {
+    render(<CamerasPanel cameras={[]} lastAppliedAt={null} />);
+    expect(
+      screen.queryByRole("button", { name: /scan network/i }),
+    ).not.toBeInTheDocument();
   });
 });
 

@@ -20,6 +20,11 @@ interface Props {
   onAddCamera?: () => void;
   onEditCamera?: (camera: Camera) => void;
   onDeleteCamera?: (camera: Camera) => void;
+  // onScanNetwork triggers the "Scan network" install-flow shortcut
+  // (issue #3, ADR-030 § 2). The parent owns the resulting modal +
+  // post-scan correlation_id polling; the panel only renders the
+  // button.
+  onScanNetwork?: () => void;
 }
 
 export function CamerasPanel({
@@ -28,6 +33,7 @@ export function CamerasPanel({
   onAddCamera,
   onEditCamera,
   onDeleteCamera,
+  onScanNetwork,
 }: Props) {
   const pending = lastAppliedAt === null && cameras.length > 0;
 
@@ -54,22 +60,40 @@ export function CamerasPanel({
             </>
           )}
         </div>
-        {onAddCamera && (
-          <button
-            type="button"
-            onClick={onAddCamera}
-            style={{
-              padding: "4px 10px",
-              fontSize: 12.5,
-              background: "transparent",
-              border: "1px solid var(--line, #ccc)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            + Add camera
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          {onScanNetwork && (
+            <button
+              type="button"
+              onClick={onScanNetwork}
+              style={{
+                padding: "4px 10px",
+                fontSize: 12.5,
+                background: "transparent",
+                border: "1px solid var(--line, #ccc)",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              Scan network
+            </button>
+          )}
+          {onAddCamera && (
+            <button
+              type="button"
+              onClick={onAddCamera}
+              style={{
+                padding: "4px 10px",
+                fontSize: 12.5,
+                background: "transparent",
+                border: "1px solid var(--line, #ccc)",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              + Add camera
+            </button>
+          )}
+        </div>
       </div>
       {cameras.length === 0 ? (
         <p className="muted" style={{ fontSize: 13, margin: 0 }}>
