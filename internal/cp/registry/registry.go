@@ -35,6 +35,11 @@ var ErrDeviceNotFound = errors.New("device not found")
 // correlation_id. Handlers translate it to HTTP 404.
 var ErrLogTailNotFound = errors.New("log tail not found")
 
+// ErrCameraNotFound is returned when a cameras-table operation cannot
+// locate the (device_id, camera_id) pair. Used by UpdateCamera and
+// DeleteCamera to distinguish "no such row" from a real DB error.
+var ErrCameraNotFound = errors.New("camera not found")
+
 // BootstrapVerifier validates the enrollment bootstrap key. The registry
 // depends on the interface; bootstrap.Verifier is the implementation, which
 // refreshes the key from Secrets Manager on a mismatch (ADR-017).

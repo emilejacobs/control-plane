@@ -27,10 +27,19 @@ type cameraStore struct {
 	insertErr error
 	listing   map[string][]cameras.Camera
 	listErr   error
+	updates   []updateCall
 }
 
 type insertCall struct {
 	deviceID string
+	label    string
+	rtspURL  string
+	isLPR    bool
+}
+
+type updateCall struct {
+	deviceID string
+	cameraID string
 	label    string
 	rtspURL  string
 	isLPR    bool
@@ -63,6 +72,21 @@ func (s *cameraStore) ListCameras(_ context.Context, deviceID string) ([]cameras
 		return nil, s.listErr
 	}
 	return s.listing[deviceID], nil
+}
+
+func (s *cameraStore) UpdateCamera(_ context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updates = append(s.updates, updateCall{deviceID: deviceID, cameraID: cameraID, label: label, rtspURL: rtspURL, isLPR: isLPR})
+	// Update the listing snapshot so a subsequent List in the same
+	// test reflects the change (matches production registry semantics).
+	for i, c := range s.listing[deviceID] {
+		if c.CameraID == cameraID {
+			s.listing[deviceID][i] = cameras.Camera{CameraID: cameraID, Label: label, RtspURL: rtspURL, IsLPR: isLPR}
+			return s.listing[deviceID][i], nil
+		}
+	}
+	return cameras.Camera{}, registry.ErrCameraNotFound
 }
 
 // Tracer bullet: POST /devices/{id}/cameras with a valid body returns
@@ -109,6 +133,63 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	c := store.inserts[0]
 	if c.deviceID != "dev-abc" || c.label != "Drive-thru" || c.rtspURL != "rtsp://user:pass@10.0.0.42/stream" || !c.isLPR {
 		t.Errorf("InsertCamera args: got %+v", c)
+	}
+}
+
+// PUT /devices/{id}/cameras/{camera_id} replaces the camera's
+// mutable fields (label, rtsp_url, is_lpr) and returns the updated
+// row. Same validation as POST.
+func TestCameraPutUpdatesCamera(t *testing.T) {
+	store := &cameraStore{
+		known: map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{
+			"dev-abc": {{CameraID: "cam1", Label: "Old", RtspURL: "rtsp://old", IsLPR: false}},
+		},
+	}
+	h := devices.NewCameraPut(store)
+
+	body := `{"label":"New","rtsp_url":"rtsp://new","is_lpr":true}`
+	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/cameras/cam1", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	req.SetPathValue("camera_id", "cam1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got cameras.Camera
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("response body not valid JSON: %v", err)
+	}
+	if got.CameraID != "cam1" || got.Label != "New" || got.RtspURL != "rtsp://new" || !got.IsLPR {
+		t.Errorf("updated camera: got %+v", got)
+	}
+	if len(store.updates) != 1 {
+		t.Fatalf("UpdateCamera calls: got %d want 1", len(store.updates))
+	}
+	if store.updates[0].cameraID != "cam1" {
+		t.Errorf("cameraID: got %q", store.updates[0].cameraID)
+	}
+}
+
+// PUT on a camera_id that doesn't exist returns 404.
+func TestCameraPutMissingCameraReturns404(t *testing.T) {
+	store := &cameraStore{
+		known:   map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{"dev-abc": {}},
+	}
+	h := devices.NewCameraPut(store)
+
+	body := `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`
+	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/cameras/cam-missing", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	req.SetPathValue("camera_id", "cam-missing")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: got %d want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

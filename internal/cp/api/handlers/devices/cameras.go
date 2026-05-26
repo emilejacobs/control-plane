@@ -20,6 +20,7 @@ type CameraStore interface {
 	GetByID(ctx context.Context, id string) (registry.Device, error)
 	InsertCamera(ctx context.Context, deviceID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
 	ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error)
+	UpdateCamera(ctx context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
 }
 
 // CameraPostHandler serves POST /devices/{id}/cameras — the create
@@ -122,4 +123,64 @@ func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cameraListResponse{Cameras: list})
+}
+
+// CameraPutHandler serves PUT /devices/{id}/cameras/{camera_id} —
+// replaces the camera's mutable fields. Same validation as POST.
+// Returns 404 if the (device_id, camera_id) row doesn't exist.
+type CameraPutHandler struct {
+	store CameraStore
+}
+
+func NewCameraPut(store CameraStore) *CameraPutHandler {
+	return &CameraPutHandler{store: store}
+}
+
+func (h *CameraPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cameraID := r.PathValue("camera_id")
+
+	if _, err := h.store.GetByID(r.Context(), id); err != nil {
+		if errors.Is(err, registry.ErrDeviceNotFound) {
+			http.Error(w, "device not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req cameraCreateRequest
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if label == "" {
+		http.Error(w, "label is required", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(req.RtspURL, "rtsp://") && !strings.HasPrefix(req.RtspURL, "rtsps://") {
+		http.Error(w, "rtsp_url must begin with rtsp:// or rtsps://", http.StatusBadRequest)
+		return
+	}
+
+	cam, err := h.store.UpdateCamera(r.Context(), id, cameraID, label, req.RtspURL, req.IsLPR)
+	if err != nil {
+		if errors.Is(err, registry.ErrCameraNotFound) {
+			http.Error(w, "camera not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cam)
 }
