@@ -20,6 +20,20 @@ describe("CameraDialog — add mode", () => {
     expect(screen.getByRole("heading", { name: /add camera/i })).toBeInTheDocument();
   });
 
+  it("pre-fills the RTSP URL with a canonical template when prefillIp is set (issue #3 shortcut)", () => {
+    render(
+      <CameraDialog
+        mode="add"
+        prefillIp="192.168.1.42"
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const rtspInput = screen.getByLabelText(/rtsp url/i) as HTMLInputElement;
+    expect(rtspInput.value).toContain("192.168.1.42");
+    expect(rtspInput.value.startsWith("rtsp://")).toBe(true);
+  });
+
   it("calls onSubmit with the filled values when Save is clicked", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();

@@ -19,13 +19,22 @@ export type CameraDialogMode =
 interface Props {
   mode: CameraDialogMode["mode"];
   camera?: Camera; // required for edit + delete; ignored on add
+  // prefillIp is the operator-flow shortcut from the NetworkScanModal:
+  // when add mode opens via "Add as camera", the candidate's IP
+  // pre-fills the RTSP URL field (issue #3, ADR-030 § 2). The operator
+  // only needs to fill in credentials + stream path.
+  prefillIp?: string;
   onSubmit: (input: CameraInput) => Promise<void>;
   onClose: () => void;
 }
 
-export function CameraDialog({ mode, camera, onSubmit, onClose }: Props) {
+export function CameraDialog({ mode, camera, prefillIp, onSubmit, onClose }: Props) {
   const [label, setLabel] = useState(camera?.label ?? "");
-  const [rtspUrl, setRtspUrl] = useState(camera?.rtspUrl ?? "");
+  // On add-from-scan, seed the RTSP URL with the candidate IP in the
+  // canonical RTSP form. Operator edits credentials + stream path.
+  const initialRtspUrl =
+    camera?.rtspUrl ?? (prefillIp ? `rtsp://USER:PASS@${prefillIp}:554/stream` : "");
+  const [rtspUrl, setRtspUrl] = useState(initialRtspUrl);
   const [isLpr, setIsLpr] = useState(camera?.isLpr ?? false);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

@@ -10,7 +10,7 @@ import {
   enrollTotp,
   type LoginInput,
 } from "./auth";
-import { getDevices, getDevice, getCameras } from "./devices";
+import { getDevices, getDevice, getCameras, getNetworkScan } from "./devices";
 
 interface Credentials {
   email: string;
@@ -83,6 +83,25 @@ export function useCameras(id: string) {
     queryKey: ["device", id, "cameras"],
     queryFn: () => getCameras(id),
     refetchInterval: devicePollInterval,
+  });
+}
+
+// useNetworkScan polls one specific scan request (Phase 2 Edge UI
+// rework, issue #3). 2s cadence while pending — fast enough that the
+// modal feels live, slow enough that the typical ~10s scan doesn't
+// drown the API in polls. Refetch stops once status flips to done or
+// error (the polled side is immutable after that).
+const networkScanPollInterval = 2_000;
+export function useNetworkScan(deviceId: string, correlationId: string | null) {
+  return useQuery({
+    queryKey: ["device", deviceId, "network-scan", correlationId],
+    queryFn: () => getNetworkScan(deviceId, correlationId as string),
+    enabled: correlationId !== null,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data?.status === "done" || data?.status === "error") return false;
+      return networkScanPollInterval;
+    },
   });
 }
 

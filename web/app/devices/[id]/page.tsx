@@ -4,14 +4,21 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
-import { useDevice, useNow, useCameras } from "../../../lib/api/hooks";
-import { postCamera, putCamera, deleteCamera, type Camera } from "../../../lib/api/devices";
+import { useDevice, useNow, useCameras, useNetworkScan } from "../../../lib/api/hooks";
+import {
+  postCamera,
+  putCamera,
+  deleteCamera,
+  postNetworkScan,
+  type Camera,
+} from "../../../lib/api/devices";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
 import { CameraDialog } from "../../../components/CameraDialog";
+import { NetworkScanModal } from "../../../components/NetworkScanModal";
 import { EditServicesModal } from "../../../components/EditServicesModal";
 import { LogsPanel } from "../../../components/LogsPanel";
 import { Topbar } from "../../../components/ui/Topbar";
@@ -43,12 +50,21 @@ export default function DevicePage() {
   const [editingServices, setEditingServices] = useState(false);
   // Dialog state for the cameras CRUD UI. null = closed.
   // mode === "add" → empty form; "edit"/"delete" carry the target row.
+  // The optional `prefillIp` on "add" is set by the NetworkScanModal's
+  // "Add as camera" button so the operator's flow flows: scan → click →
+  // dialog opens with the candidate IP already in the RTSP URL field.
   const [cameraDialog, setCameraDialog] = useState<
-    | { mode: "add" }
+    | { mode: "add"; prefillIp?: string }
     | { mode: "edit"; camera: Camera }
     | { mode: "delete"; camera: Camera }
     | null
   >(null);
+  // Network scan correlation_id we're currently polling, or null if no
+  // scan is in flight. The modal opens when this is non-null.
+  const [scanCorrelationId, setScanCorrelationId] = useState<string | null>(
+    null,
+  );
+  const networkScan = useNetworkScan(id, scanCorrelationId);
 
   async function handleCameraSubmit(input: {
     label: string;
@@ -64,6 +80,11 @@ export default function DevicePage() {
     }
     setCameraDialog(null);
     void queryClient.invalidateQueries({ queryKey: ["device", id, "cameras"] });
+  }
+
+  async function handleScanNetwork() {
+    const { correlationId } = await postNetworkScan(id, {});
+    setScanCorrelationId(correlationId);
   }
 
   // Cert "pill" tone derived from days remaining — mirrors the band logic
@@ -272,14 +293,26 @@ export default function DevicePage() {
                 onAddCamera={() => setCameraDialog({ mode: "add" })}
                 onEditCamera={(c) => setCameraDialog({ mode: "edit", camera: c })}
                 onDeleteCamera={(c) => setCameraDialog({ mode: "delete", camera: c })}
+                onScanNetwork={handleScanNetwork}
               />
             </Card>
             {cameraDialog && (
               <CameraDialog
                 mode={cameraDialog.mode}
                 camera={"camera" in cameraDialog ? cameraDialog.camera : undefined}
+                prefillIp={"prefillIp" in cameraDialog ? cameraDialog.prefillIp : undefined}
                 onSubmit={handleCameraSubmit}
                 onClose={() => setCameraDialog(null)}
+              />
+            )}
+            {scanCorrelationId && networkScan.data && (
+              <NetworkScanModal
+                scan={networkScan.data}
+                onClose={() => setScanCorrelationId(null)}
+                onAddCamera={(ip) => {
+                  setScanCorrelationId(null);
+                  setCameraDialog({ mode: "add", prefillIp: ip });
+                }}
               />
             )}
 
