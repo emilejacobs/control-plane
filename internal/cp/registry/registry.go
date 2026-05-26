@@ -107,6 +107,9 @@ type Device struct {
 	// model; nil for a device with no site assigned.
 	SiteName   *string
 	ClientName *string
+	// AssetNumber is the fleet-tracking identifier set during install
+	// (migration 014). Nil until install-module 11 starts shipping it.
+	AssetNumber *string
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -122,7 +125,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       devices.os_version, devices.agent_version, devices.iot_thing_arn,
 		       devices.last_seen, devices.is_online, devices.presence_changed_at,
 		       devices.mtls_cert_expires_at, devices.enrolled_at,
-		       s.name AS site_name, c.name AS client_name
+		       s.name AS site_name, c.name AS client_name,
+		       devices.asset_number
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -135,6 +139,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,
 		&d.MtlsCertExpiresAt, &d.EnrolledAt,
 		&d.SiteName, &d.ClientName,
+		&d.AssetNumber,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -158,7 +163,8 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       devices.os_version, devices.agent_version, devices.iot_thing_arn,
 		       devices.last_seen, devices.is_online, devices.presence_changed_at,
 		       devices.mtls_cert_expires_at, devices.enrolled_at,
-		       s.name AS site_name, c.name AS client_name
+		       s.name AS site_name, c.name AS client_name,
+		       devices.asset_number
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -179,6 +185,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,
 			&d.MtlsCertExpiresAt, &d.EnrolledAt,
 			&d.SiteName, &d.ClientName,
+			&d.AssetNumber,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
