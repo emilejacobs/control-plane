@@ -20,6 +20,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
+	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
@@ -41,6 +42,10 @@ var ErrLogTailNotFound = errors.New("log tail not found")
 // locate the (device_id, camera_id) pair. Used by UpdateCamera and
 // DeleteCamera to distinguish "no such row" from a real DB error.
 var ErrCameraNotFound = errors.New("camera not found")
+
+// ErrNetworkScanNotFound is returned by GetNetworkScan when no row
+// matches the correlation_id. Handlers translate it to HTTP 404.
+var ErrNetworkScanNotFound = errors.New("network scan not found")
 
 // ErrCameraLPRConflict is returned by InsertCamera / UpdateCamera when
 // the operation would create a second is_lpr=true row for the same
@@ -849,4 +854,165 @@ func (r *Registry) RecordCamerasApplied(ctx context.Context, deviceID, correlati
 		return ErrDeviceNotFound
 	}
 	return nil
+}
+
+// === Phase 2 Edge UI rework: network scan (issue #3) ===
+
+// NetworkScanRequest is the create-time shape of a per-request row.
+// CIDR is the operator-provided override; empty means auto-detect (the
+// agent picks the device's primary subnet).
+type NetworkScanRequest struct {
+	CorrelationID string
+	DeviceID      string
+	CIDR          string // empty = auto-detect
+	RequestedAt   time.Time
+}
+
+// NetworkScanCompletion is the agent's success-path payload as the
+// cmd-result handler hands it to the registry.
+type NetworkScanCompletion struct {
+	CorrelationID string
+	Hosts         []networkscan.Host
+	ReturnedAt    time.Time
+}
+
+// NetworkScanFailure is the agent's error-path payload. ErrorCode is a
+// stable string (e.g. "network_scan.scan_failed") the dashboard can
+// surface; ErrorMessage is the human-readable elaboration.
+type NetworkScanFailure struct {
+	CorrelationID string
+	ErrorCode     string
+	ErrorMessage  string
+	ReturnedAt    time.Time
+}
+
+// NetworkScan is the row shape returned by GetNetworkScan. CIDR is *string
+// rather than string so the dashboard can distinguish "auto-detect was
+// requested" (nil) from "operator typed in 10.0.0.0/24" (non-nil).
+// Result is *networkscan.Response so a pending row is nil-result; a
+// completed row carries the agent's hosts list.
+type NetworkScan struct {
+	CorrelationID string
+	DeviceID      string
+	CIDR          *string
+	Status        string // pending | done | error
+	Result        *networkscan.Response
+	ErrorCode     *string
+	ErrorMessage  *string
+	RequestedAt   time.Time
+	ReturnedAt    *time.Time
+}
+
+// CreateNetworkScanRequest persists a fresh "pending" row keyed by
+// correlation_id. The CP API publishes the network.scan cmd immediately
+// after; the agent's ACK lands as a Complete or Fail call from the
+// cmd-result handler.
+func (r *Registry) CreateNetworkScanRequest(ctx context.Context, req NetworkScanRequest) error {
+	var cidr *string
+	if req.CIDR != "" {
+		v := req.CIDR
+		cidr = &v
+	}
+	if _, err := r.pool.Exec(ctx, `
+		INSERT INTO device_network_scans (
+			correlation_id, device_id, cidr_requested, status, requested_at
+		) VALUES ($1, $2, $3, 'pending', $4)
+	`, req.CorrelationID, req.DeviceID, cidr, req.RequestedAt); err != nil {
+		return fmt.Errorf("insert device_network_scans: %w", err)
+	}
+	return nil
+}
+
+// GetNetworkScan returns one row by correlation_id, or ErrNetworkScanNotFound.
+func (r *Registry) GetNetworkScan(ctx context.Context, correlationID string) (NetworkScan, error) {
+	var (
+		n         NetworkScan
+		resultRaw []byte
+	)
+	err := r.pool.QueryRow(ctx, `
+		SELECT correlation_id, device_id, cidr_requested,
+		       status, result, error_code, error_message,
+		       requested_at, returned_at
+		FROM device_network_scans
+		WHERE correlation_id = $1
+	`, correlationID).Scan(
+		&n.CorrelationID, &n.DeviceID, &n.CIDR,
+		&n.Status, &resultRaw, &n.ErrorCode, &n.ErrorMessage,
+		&n.RequestedAt, &n.ReturnedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return NetworkScan{}, ErrNetworkScanNotFound
+		}
+		return NetworkScan{}, fmt.Errorf("get network scan: %w", err)
+	}
+	if len(resultRaw) > 0 {
+		var resp networkscan.Response
+		if err := json.Unmarshal(resultRaw, &resp); err != nil {
+			return NetworkScan{}, fmt.Errorf("decode network scan result: %w", err)
+		}
+		n.Result = &resp
+	}
+	return n, nil
+}
+
+// CompleteNetworkScan transitions a pending row to "done" with the
+// agent's returned hosts list. Re-delivery of the same agent ACK is
+// idempotent via UPDATE semantics.
+func (r *Registry) CompleteNetworkScan(ctx context.Context, c NetworkScanCompletion) error {
+	hosts := c.Hosts
+	if hosts == nil {
+		hosts = []networkscan.Host{}
+	}
+	resultBytes, err := json.Marshal(networkscan.Response{Hosts: hosts})
+	if err != nil {
+		return fmt.Errorf("encode network scan result: %w", err)
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE device_network_scans
+		SET status      = 'done',
+		    result      = $2,
+		    returned_at = $3
+		WHERE correlation_id = $1
+	`, c.CorrelationID, resultBytes, c.ReturnedAt)
+	if err != nil {
+		return fmt.Errorf("complete network scan: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNetworkScanNotFound
+	}
+	return nil
+}
+
+// FailNetworkScan transitions a pending row to "error" with the agent's
+// returned error code + message. Result stays NULL.
+func (r *Registry) FailNetworkScan(ctx context.Context, f NetworkScanFailure) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE device_network_scans
+		SET status        = 'error',
+		    error_code    = $2,
+		    error_message = $3,
+		    returned_at   = $4
+		WHERE correlation_id = $1
+	`, f.CorrelationID, f.ErrorCode, f.ErrorMessage, f.ReturnedAt)
+	if err != nil {
+		return fmt.Errorf("fail network scan: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNetworkScanNotFound
+	}
+	return nil
+}
+
+// DeleteStaleNetworkScans removes rows older than the threshold. Called
+// by the cp-ingest sweeper goroutine on a ~24h cycle (same pattern as
+// DeleteStaleLogTails).
+func (r *Registry) DeleteStaleNetworkScans(ctx context.Context, olderThan time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM device_network_scans WHERE requested_at < $1
+	`, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale network scans: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
