@@ -181,5 +181,29 @@ func TestStatus_GUIFallback_Stopped(t *testing.T) {
 	}
 }
 
+// guiFallback_BothMissing: service is absent from BOTH the system
+// and GUI domains. Must surface as ErrNotFound so the collector's
+// silent-absent path engages (no warn-log spam for a never-loaded
+// allow-list entry).
+func TestStatus_GUIFallback_BothMissing(t *testing.T) {
+	r := &fakeRunner{results: map[string]runResult{
+		"launchctl list com.example.gone":              {exitCode: 1, stderr: "Could not find service\n"},
+		"launchctl print gui/501/com.example.gone":     {exitCode: 1, stderr: "Could not find service\n"},
+	}}
+	b := &launchctlBackend{
+		run:        r.run,
+		consoleUID: func() (uint32, error) { return 501, nil },
+		logger:     discardLogger(),
+	}
+
+	_, err := b.Status(context.Background(), "com.example.gone")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("expected 2 launchctl calls (system + GUI), got %d: %v", len(r.calls), r.calls)
+	}
+}
+
 // silence unused-import nag when this file is the only one with bytes
 var _ = bytes.NewBuffer
