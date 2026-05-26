@@ -751,3 +751,45 @@ func isLPRConflict(err error) bool {
 	}
 	return pgErr.Code == "23505" && pgErr.ConstraintName == "device_cameras_lpr_unique"
 }
+
+// UpdateCamera replaces label, rtsp_url, and is_lpr for the
+// (deviceID, cameraID) row and returns the resulting state. Returns
+// ErrCameraNotFound if no row matches and ErrCameraLPRConflict if
+// flipping is_lpr=true would create a second LPR row for the
+// device. updated_at is stamped server-side.
+func (r *Registry) UpdateCamera(ctx context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error) {
+	var c cameras.Camera
+	err := r.pool.QueryRow(ctx, `
+		UPDATE device_cameras
+		SET label = $3, rtsp_url = $4, is_lpr = $5, updated_at = now()
+		WHERE device_id = $1 AND camera_id = $2
+		RETURNING camera_id, label, rtsp_url, is_lpr
+	`, deviceID, cameraID, label, rtspURL, isLPR).Scan(&c.CameraID, &c.Label, &c.RtspURL, &c.IsLPR)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cameras.Camera{}, ErrCameraNotFound
+		}
+		if isLPRConflict(err) {
+			return cameras.Camera{}, ErrCameraLPRConflict
+		}
+		return cameras.Camera{}, fmt.Errorf("update camera: %w", err)
+	}
+	return c, nil
+}
+
+// DeleteCamera removes the (deviceID, cameraID) row. Returns
+// ErrCameraNotFound when no row matched, so callers can map to 404
+// without ambiguity.
+func (r *Registry) DeleteCamera(ctx context.Context, deviceID, cameraID string) error {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM device_cameras
+		WHERE device_id = $1 AND camera_id = $2
+	`, deviceID, cameraID)
+	if err != nil {
+		return fmt.Errorf("delete camera: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrCameraNotFound
+	}
+	return nil
+}
