@@ -158,6 +158,22 @@ sudo systemctl daemon-reload
 
 ---
 
+## Docker socket access (for `log.tail` docker-kind entries)
+
+The agent's Mac default log allow-list includes a docker entry (`plate-recognizer`, target container `plate-recognizer-stream` — issue #7 / ADR-030 § 5). When an operator picks "Plate Recognizer (Docker)" in the dashboard, the agent shells out to `docker logs --tail N plate-recognizer-stream` to fulfill the `log.tail` cmd. The container itself is provisioned by [`mac-mini-rollout/modules/52-plate-recognizer.sh`](../../../mac-mini-rollout/modules/52-plate-recognizer.sh).
+
+**macOS:** The agent runs as root via LaunchDaemon. Docker Desktop's per-user socket at `~/$USER/.docker/run/docker.sock` is symlinked to `/var/run/docker.sock` and accessible to root. No extra configuration needed — Phase 0 / Phase 1 installs work out of the box. If `docker logs <container>` works in an SSH session as root, the agent can fetch logs too.
+
+**Linux (deprecating fleet):** Docker is not installed on the Pi/Radxa fleet today; the Linux allow-list returns only file entries (the agent's own logs) and the docker `plate-recognizer` entry does not appear. If a future Linux device runs Docker, the agent needs read access to `/var/run/docker.sock`:
+
+- Run the agent as `root` (current default; no change) **or**
+- Add the agent's service user to the `docker` group, **or**
+- Loosen the socket permissions (`chmod 660 /var/run/docker.sock` with `chgrp docker`).
+
+If the socket is unreachable, `log.tail` on a docker entry returns `log_tail.read_error` with the docker CLI's stderr in the message ("Cannot connect to the Docker daemon at unix:///var/run/docker.sock"). File-kind entries are unaffected.
+
+The agent intentionally relies on the host's `docker` binary — it does not talk to the daemon's HTTP API directly. This keeps the executor identical to what an operator would type at a terminal.
+
 ## What is _not_ in this runbook
 
 - Reboot persistence (`agent comes back after device reboot`) is verified as part of [Issue 07](../../.scratch/phase-0-agent-spike/issues/07-field-deployment-mac.md) and [Issue 08](../../.scratch/phase-0-agent-spike/issues/08-field-deployment-linux.md). The bar for Issue 06 is "works on a dev box and the install docs are correct."
