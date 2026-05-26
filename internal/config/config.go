@@ -28,6 +28,14 @@ type Config struct {
 	// Empty / absent means use the agent's default (5m). Ignored when
 	// ServiceAllowList is empty.
 	ServiceStatusInterval string `json:"service_status_interval,omitempty"`
+
+	// CamerasPath is the on-disk location for the cameras.json file
+	// the agent's cameras.update handler writes (and the device-local
+	// Edge UI reads). Empty / absent disables the cameras.update
+	// handler — agent.New self-skips the handler registration when the
+	// field is unset, so devices not yet provisioned by the new install
+	// module retain the pre-Phase-2-Edge-UI shape.
+	CamerasPath string `json:"cameras_path,omitempty"`
 }
 
 func Load(path string) (*Config, error) {

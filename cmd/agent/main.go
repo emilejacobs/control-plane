@@ -91,6 +91,7 @@ func main() {
 		ServiceAllowList:      cfg.ServiceAllowList,
 		ServiceStatusInterval: serviceStatusInterval,
 		ConfigPath:            *configPath,
+		CamerasPath:           cfg.CamerasPath,
 	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend(logger)))
 	if err != nil {
 		logger.Error("agent", "error", err)
