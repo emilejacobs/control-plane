@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
+	protonetworkscan "github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
 
@@ -437,6 +440,89 @@ func (s *stubLogTailReader) AllowList() map[string]protologtail.Entry { return s
 func (s *stubLogTailReader) Tail(entry protologtail.Entry, lines int) (protologtail.Response, error) {
 	s.calls = append(s.calls, logtailReadCall{entry: entry, lines: lines})
 	return protologtail.Response{Content: s.resp.content}, s.err
+}
+
+// Phase 2 Edge UI rework (issue #3): network.scan cmd round-trips
+// through the dispatcher into the wired Scanner; the agent emits a
+// cmd-result envelope with Type=="network.scan" so cp-ingest can route
+// the ACK and stamp the per-request row.
+func TestAgentDispatchesNetworkScan(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+
+	sc := &stubScanner{
+		hosts: []networkscan.RawHost{
+			{IP: "192.168.1.42", MAC: "44:19:B6:AA:BB:CC", OpenPorts: []int{80, 554, 22}},
+		},
+	}
+
+	tr := newFakeTransport()
+	a, err := agent.New(agent.Config{
+		CertPath: cert,
+		DeviceID: "dev-ns",
+		Version:  "099dd7f",
+	}, tr, agent.WithNetworkScanner(sc))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	cmd := envelope.Command{
+		Type:          "network.scan",
+		CorrelationID: "corr-ns-1",
+		CommandID:     "cmd-ns-1",
+		Args:          json.RawMessage(`{"cidr":"192.168.1.0/24"}`),
+		IssuedAt:      time.Now(),
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	tr.deliverTo("devices/dev-ns/cmd", cmdBytes)
+
+	results := tr.publishedOn("devices/dev-ns/cmd-result")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 cmd-result, got %d", len(results))
+	}
+	var result envelope.Result
+	if err := json.Unmarshal(results[0], &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got: %+v err=%+v", result, result.Error)
+	}
+	if result.Type != "network.scan" {
+		t.Errorf("Type: got %q, want network.scan", result.Type)
+	}
+	var payload protonetworkscan.Response
+	_ = json.Unmarshal(result.Result, &payload)
+	if len(payload.Hosts) != 1 {
+		t.Fatalf("hosts: got %d, want 1", len(payload.Hosts))
+	}
+	h := payload.Hosts[0]
+	if h.IP != "192.168.1.42" || h.Vendor != "Hikvision" {
+		t.Errorf("host: %+v", h)
+	}
+	// open_ports is filtered (22 dropped) and sorted.
+	if len(h.OpenPorts) != 2 || h.OpenPorts[0] != 80 || h.OpenPorts[1] != 554 {
+		t.Errorf("open_ports: got %v, want [80 554]", h.OpenPorts)
+	}
+	if sc.calls != 1 {
+		t.Errorf("scanner.Scan calls: got %d, want 1", sc.calls)
+	}
+}
+
+// stubScanner is the agent-level fake for the network.scan dispatch
+// test. Returns canned hosts; counts calls so the test can pin
+// dispatcher behaviour.
+type stubScanner struct {
+	hosts []networkscan.RawHost
+	err   error
+	calls int
+}
+
+func (s *stubScanner) Scan(_ context.Context, _ string) ([]networkscan.RawHost, error) {
+	s.calls++
+	return s.hosts, s.err
 }
 
 func TestAgentDispatchesServiceRestart(t *testing.T) {

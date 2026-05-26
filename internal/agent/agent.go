@@ -16,6 +16,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
+	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
@@ -94,6 +95,7 @@ type Agent struct {
 	logger         *slog.Logger
 	serviceBackend service.Backend
 	logTailReader  logtail.Reader
+	networkScanner networkscan.Scanner
 	startTime      time.Time
 	telemetry      *telemetry.Publisher
 	// serviceStatus + serviceStatusCollector are set whenever a service
@@ -126,6 +128,14 @@ func WithServiceBackend(b service.Backend) Option {
 // assert against in-memory paths.
 func WithLogTailReader(r logtail.Reader) Option {
 	return func(a *Agent) { a.logTailReader = r }
+}
+
+// WithNetworkScanner overrides the default LAN-scan implementation.
+// Production wires newNmapScanner (which shells out to nmap); tests
+// pass a fake so they can assert against canned hosts without root /
+// nmap on PATH.
+func WithNetworkScanner(s networkscan.Scanner) Option {
+	return func(a *Agent) { a.networkScanner = s }
 }
 
 func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
@@ -167,6 +177,15 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	if cfg.CamerasPath != "" {
 		a.dispatcher.Register("cameras.update", cameras.New(NewCamerasApplier(cfg.CamerasPath)))
 	}
+
+	// Phase 2 Edge UI rework (issue #3): network.scan handler.
+	// Always registered in production (the agent ships with the nmap
+	// scanner by default). Tests that don't exercise the surface omit
+	// it by leaving the default in place and not sending the cmd.
+	if a.networkScanner == nil {
+		a.networkScanner = newNmapScanner()
+	}
+	a.dispatcher.Register("network.scan", networkscan.New(a.networkScanner))
 
 	interval := cfg.TelemetryInterval
 	if interval <= 0 {
