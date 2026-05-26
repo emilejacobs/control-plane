@@ -3,6 +3,7 @@ package devices_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,6 +153,50 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	c := store.inserts[0]
 	if c.deviceID != "dev-abc" || c.label != "Drive-thru" || c.rtspURL != "rtsp://user:pass@10.0.0.42/stream" || !c.isLPR {
 		t.Errorf("InsertCamera args: got %+v", c)
+	}
+}
+
+// All four handlers must return 404 when the store's GetByID
+// reports ErrDeviceNotFound — which covers both "device doesn't
+// exist" and "device exists but is filtered out of the operator's
+// scope" (the registry conflates the two on purpose, fail-closed).
+// Regression-pin against accidental removal of the early GetByID
+// check that gates every handler.
+func TestCameraHandlersReturn404WhenDeviceMissing(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  string
+		path    string
+		body    string
+		newH    func(devices.CameraStore) http.Handler
+		setCam  bool
+	}{
+		{"POST", http.MethodPost, "/devices/dev-x/cameras", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPost(s) }, false},
+		{"GET", http.MethodGet, "/devices/dev-x/cameras", "", func(s devices.CameraStore) http.Handler { return devices.NewCameraList(s) }, false},
+		{"PUT", http.MethodPut, "/devices/dev-x/cameras/cam1", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPut(s) }, true},
+		{"DELETE", http.MethodDelete, "/devices/dev-x/cameras/cam1", "", func(s devices.CameraStore) http.Handler { return devices.NewCameraDelete(s) }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &cameraStore{} // empty known map ⇒ GetByID always ErrDeviceNotFound
+			h := tc.newH(store)
+
+			var body io.Reader
+			if tc.body != "" {
+				body = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			req.SetPathValue("id", "dev-x")
+			if tc.setCam {
+				req.SetPathValue("camera_id", "cam1")
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status: got %d want 404; body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
