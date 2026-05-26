@@ -6,7 +6,10 @@
 package cameras
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -71,6 +74,67 @@ func ValidateCamera(label, rtspURL string) error {
 			Code:    CodeBadRtspURL,
 			Message: "rtsp_url must begin with rtsp:// or rtsps://",
 		}
+	}
+	return nil
+}
+
+// UpdateAllRequest is the cameras.update cmd payload from CP →
+// agent. Strict field whitelist — the agent rejects unknown
+// top-level fields per ADR-028's protective stance.
+type UpdateAllRequest struct {
+	Cameras []Camera `json:"cameras"`
+}
+
+// ParseUpdateAll runs RejectUnknownFields, unmarshals, and validates
+// every camera in the list. Returns the list ready for the agent's
+// Applier to consume.
+func ParseUpdateAll(raw json.RawMessage) ([]Camera, error) {
+	if err := RejectUnknownFields(raw); err != nil {
+		return nil, err
+	}
+	var req UpdateAllRequest
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, &ValidationError{Code: CodeBadPayload, Message: err.Error()}
+		}
+	}
+	for i, c := range req.Cameras {
+		if err := ValidateCamera(c.Label, c.RtspURL); err != nil {
+			if v, ok := AsValidation(err); ok {
+				return nil, &ValidationError{
+					Code:    v.Code,
+					Message: fmt.Sprintf("cameras[%d]: %s", i, v.Message),
+				}
+			}
+			return nil, err
+		}
+		if strings.TrimSpace(c.CameraID) == "" {
+			return nil, &ValidationError{
+				Code:    CodeBadPayload,
+				Message: fmt.Sprintf("cameras[%d]: camera_id is required", i),
+			}
+		}
+	}
+	// Coerce nil-vs-empty: a payload of {"cameras": null} or absent
+	// becomes an empty slice so the Applier sees a consistent shape.
+	if req.Cameras == nil {
+		req.Cameras = []Camera{}
+	}
+	return req.Cameras, nil
+}
+
+// RejectUnknownFields enforces the strict whitelist on the
+// cameras.update payload (only the `cameras` field is allowed at
+// the top level).
+func RejectUnknownFields(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var probe UpdateAllRequest
+	if err := dec.Decode(&probe); err != nil {
+		return &ValidationError{Code: CodeUnknownField, Message: err.Error()}
 	}
 	return nil
 }
