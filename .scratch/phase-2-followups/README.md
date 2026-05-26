@@ -14,6 +14,7 @@ When closing an item, add a one-line "done YYYY-MM-DD (commit `xxx`)" stamp to t
 | 02 | [CloudWatch alarm for `cmd-result` DLQ](./issues/02-cmd-result-dlq-alarm.md) ✅ done 2026-05-25 (commit `e1dbf63`; service-status-dlq alarm added in same pass) | AFK  | 30 min   | slice 2 |
 | 03 | [Path-filter for `internal/dispatcher/**`](./issues/03-dispatcher-path-filter.md) | AFK  | 5 min    | slice 2 |
 | 04 | [Repo-root cleanup: `cp-ingest` binary + `slice2.tfplan`](./issues/04-repo-root-cleanup.md) ✅ done 2026-05-25 (commit `9ee25f7`; gitignore extended to prevent recurrence) | AFK | 5 min | slice 2 |
+| 05 | [LaunchAgent dual-context Status fallback](./issues/05-launchagent-dual-context.md) | AFK | 4–6 hr | slice 1 (surfaced live during slice 3 bench-Mac use) |
 
 ## Future Phase 2 slices (each gets its own PRD when picked up)
 
