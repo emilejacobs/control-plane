@@ -59,8 +59,13 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	label := strings.TrimSpace(req.Label)
+	if label == "" {
+		http.Error(w, "label is required", http.StatusBadRequest)
+		return
+	}
 
-	cam, err := h.store.InsertCamera(r.Context(), id, strings.TrimSpace(req.Label), req.RtspURL, req.IsLPR)
+	cam, err := h.store.InsertCamera(r.Context(), id, label, req.RtspURL, req.IsLPR)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

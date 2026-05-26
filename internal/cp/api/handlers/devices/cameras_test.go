@@ -101,3 +101,24 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 		t.Errorf("InsertCamera args: got %+v", c)
 	}
 }
+
+// Empty / whitespace-only labels are rejected with 400; InsertCamera
+// is never called. A camera with no label is unidentifiable to the
+// operator — same hygiene as not allowing empty hostnames.
+func TestCameraPostRejectsEmptyLabel(t *testing.T) {
+	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
+	h := devices.NewCameraPost(store)
+
+	body := `{"label":"   ","rtsp_url":"rtsp://10.0.0.42/stream","is_lpr":false}`
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.inserts) != 0 {
+		t.Errorf("InsertCamera must not be called on validation failure; got %d", len(store.inserts))
+	}
+}
