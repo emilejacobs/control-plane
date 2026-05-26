@@ -17,15 +17,19 @@ import (
 )
 
 type recordingApplier struct {
-	mu                 sync.Mutex
-	calls              []applyArgs
-	logTailCompletes   []registry.LogTailCompletion
-	logTailFailures    []registry.LogTailFailure
-	camerasCalls       []applyArgs
-	err                error
-	logTailCompleteErr error
-	logTailFailErr     error
-	camerasErr         error
+	mu                    sync.Mutex
+	calls                 []applyArgs
+	logTailCompletes      []registry.LogTailCompletion
+	logTailFailures       []registry.LogTailFailure
+	camerasCalls          []applyArgs
+	networkScanCompletes  []registry.NetworkScanCompletion
+	networkScanFailures   []registry.NetworkScanFailure
+	err                   error
+	logTailCompleteErr    error
+	logTailFailErr        error
+	camerasErr            error
+	networkScanCompleteErr error
+	networkScanFailErr    error
 }
 type applyArgs struct {
 	deviceID, correlationID string
@@ -58,6 +62,20 @@ func (r *recordingApplier) RecordCamerasApplied(_ context.Context, deviceID, cor
 	r.camerasCalls = append(r.camerasCalls, applyArgs{deviceID: deviceID, correlationID: correlationID, at: at})
 	r.mu.Unlock()
 	return r.camerasErr
+}
+
+func (r *recordingApplier) CompleteNetworkScan(_ context.Context, c registry.NetworkScanCompletion) error {
+	r.mu.Lock()
+	r.networkScanCompletes = append(r.networkScanCompletes, c)
+	r.mu.Unlock()
+	return r.networkScanCompleteErr
+}
+
+func (r *recordingApplier) FailNetworkScan(_ context.Context, f registry.NetworkScanFailure) error {
+	r.mu.Lock()
+	r.networkScanFailures = append(r.networkScanFailures, f)
+	r.mu.Unlock()
+	return r.networkScanFailErr
 }
 
 // Happy path: a successful config.update ACK lands → ingester calls
@@ -321,6 +339,115 @@ func TestCmdResultCamerasUpdateSuccess(t *testing.T) {
 	c := applier.camerasCalls[0]
 	if c.deviceID != "dev-cam" || c.correlationID != "corr-cam-1" || !c.at.Equal(now) {
 		t.Errorf("RecordCamerasApplied args: got %+v", c)
+	}
+}
+
+// Happy path: a successful network.scan ACK lands → ingester calls
+// CompleteNetworkScan with the hosts list parsed out of the
+// envelope's Result payload and the cp-side wall-clock ingest time.
+func TestCmdResultNetworkScanSuccess(t *testing.T) {
+	applier := &recordingApplier{}
+	now := time.Date(2026, 5, 26, 15, 0, 0, 0, time.UTC)
+	ing := ingest.NewCmdResultIngester(applier, func() time.Time { return now })
+
+	resultPayload := json.RawMessage(`{
+		"hosts": [
+			{"ip":"192.168.1.10","mac":"44:19:b6:aa:bb:cc","vendor":"Hikvision","open_ports":[80,554]},
+			{"ip":"192.168.1.42","mac":"3c:ef:8c:11:22:33","vendor":"Dahua","open_ports":[443]}
+		]
+	}`)
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-ns-1",
+			CommandID:     "cmd-ns-1",
+			Type:          "network.scan",
+			Success:       true,
+			Result:        resultPayload,
+		},
+		DeviceID: "dev-ns",
+	}
+	if err := ing.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(applier.networkScanCompletes) != 1 {
+		t.Fatalf("CompleteNetworkScan calls: got %d, want 1", len(applier.networkScanCompletes))
+	}
+	c := applier.networkScanCompletes[0]
+	if c.CorrelationID != "corr-ns-1" {
+		t.Errorf("CorrelationID: got %q", c.CorrelationID)
+	}
+	if !c.ReturnedAt.Equal(now) {
+		t.Errorf("ReturnedAt: got %v, want %v", c.ReturnedAt, now)
+	}
+	if len(c.Hosts) != 2 || c.Hosts[0].Vendor != "Hikvision" || c.Hosts[1].Vendor != "Dahua" {
+		t.Errorf("hosts: got %+v", c.Hosts)
+	}
+}
+
+// Failure ACK: ingester routes to FailNetworkScan with the agent's
+// error code/message. The pending row transitions to status=error in
+// the registry; no completion write happens.
+func TestCmdResultNetworkScanFailure(t *testing.T) {
+	applier := &recordingApplier{}
+	now := time.Date(2026, 5, 26, 15, 5, 0, 0, time.UTC)
+	ing := ingest.NewCmdResultIngester(applier, func() time.Time { return now })
+
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-ns-fail",
+			CommandID:     "cmd-ns-fail",
+			Type:          "network.scan",
+			Success:       false,
+			Error: &envelope.ResultError{
+				Code:    "network_scan.scan_failed",
+				Message: "arp-scan: command not found",
+			},
+		},
+		DeviceID: "dev-ns",
+	}
+	if err := ing.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("Handle on failure ACK: got %v, want nil (handled)", err)
+	}
+	if len(applier.networkScanFailures) != 1 {
+		t.Fatalf("FailNetworkScan calls: got %d, want 1", len(applier.networkScanFailures))
+	}
+	f := applier.networkScanFailures[0]
+	if f.CorrelationID != "corr-ns-fail" {
+		t.Errorf("CorrelationID: got %q", f.CorrelationID)
+	}
+	if f.ErrorCode != "network_scan.scan_failed" {
+		t.Errorf("ErrorCode: got %q", f.ErrorCode)
+	}
+	if !f.ReturnedAt.Equal(now) {
+		t.Errorf("ReturnedAt: got %v, want %v", f.ReturnedAt, now)
+	}
+	if len(applier.networkScanCompletes) != 0 {
+		t.Error("CompleteNetworkScan should not be called on failure ACK")
+	}
+}
+
+// ErrNetworkScanNotFound returned by CompleteNetworkScan / FailNetworkScan
+// is poison — the request row went away (sweeper ran early). No point
+// retrying.
+func TestCmdResultNetworkScanCompleteRowGone(t *testing.T) {
+	applier := &recordingApplier{networkScanCompleteErr: registry.ErrNetworkScanNotFound}
+	ing := ingest.NewCmdResultIngester(applier, time.Now)
+
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-ns-gone",
+			Type:          "network.scan",
+			Success:       true,
+			Result:        json.RawMessage(`{"hosts":[]}`),
+		},
+		DeviceID: "dev-ns",
+	}
+	err := ing.Handle(context.Background(), msg)
+	if err == nil {
+		t.Fatal("expected poison error")
+	}
+	if !errors.Is(err, sqsconsumer.ErrPoison) {
+		t.Errorf("expected wrapped ErrPoison, got %v", err)
 	}
 }
 

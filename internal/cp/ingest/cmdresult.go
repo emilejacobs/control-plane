@@ -11,6 +11,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 )
 
 // CmdResult is the cp-ingest wrapper around envelope.Result. The
@@ -29,8 +30,8 @@ func (r CmdResult) Correlation() string { return r.CorrelationID }
 
 // CmdResultWriter is the registry slice the cmd-result handler needs.
 // Covers slice 2 (config.update), slice 3 (log.tail), and Edge UI
-// rework (cameras.update) ACK flows. *registry.Registry satisfies
-// every method.
+// rework (cameras.update, network.scan) ACK flows. *registry.Registry
+// satisfies every method.
 type CmdResultWriter interface {
 	// Slice 2: config.update ACK stamps last_applied_* on the device row.
 	RecordServiceConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
@@ -41,6 +42,12 @@ type CmdResultWriter interface {
 	// Edge UI rework (issue #2): cameras.update ACK stamps the
 	// cameras_last_applied_* mirror columns on the device row.
 	RecordCamerasApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
+	// Edge UI rework (issue #3): network.scan success — updates the
+	// pending device_network_scans row with the agent's hosts list.
+	CompleteNetworkScan(ctx context.Context, c registry.NetworkScanCompletion) error
+	// Edge UI rework (issue #3): network.scan failure — updates the
+	// pending row with the agent's error code/message.
+	FailNetworkScan(ctx context.Context, f registry.NetworkScanFailure) error
 }
 
 // CmdResultIngester is the sqsconsumer.Handler[CmdResult]. Routes
@@ -85,6 +92,8 @@ func (i *CmdResultIngester) Handle(ctx context.Context, r CmdResult) error {
 		return i.handleLogTail(ctx, r, log)
 	case "cameras.update":
 		return i.handleCamerasUpdate(ctx, r, log)
+	case "network.scan":
+		return i.handleNetworkScan(ctx, r, log)
 	default:
 		// Other cmd types are valid envelopes but not in scope here;
 		// Phase 3 will add per-type handlers. Silently ignored so the
@@ -232,6 +241,68 @@ func (i *CmdResultIngester) handleCamerasUpdate(ctx context.Context, r CmdResult
 	log.Info("cameras.update applied",
 		"device_id", r.DeviceID,
 		"correlation_id", r.CorrelationID,
+	)
+	return nil
+}
+
+// handleNetworkScan routes a network.scan ACK to CompleteNetworkScan
+// (success) or FailNetworkScan (error). Both produce DB writes; either
+// way the dashboard's poller sees the row transition out of "pending"
+// on its next fetch. ErrNetworkScanNotFound is poison — the request
+// row went away (sweeper ran early, or the ACK is from a row the agent
+// cached past retention). Either way, no point retrying.
+func (i *CmdResultIngester) handleNetworkScan(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	returnedAt := i.now()
+
+	if !r.Success {
+		code, message := "", ""
+		if r.Error != nil {
+			code = r.Error.Code
+			message = r.Error.Message
+		}
+		log.Warn("network.scan ACK failure",
+			"device_id", r.DeviceID,
+			"correlation_id", r.CorrelationID,
+			"error_code", code,
+			"error_message", message,
+		)
+		err := i.writer.FailNetworkScan(ctx, registry.NetworkScanFailure{
+			CorrelationID: r.CorrelationID,
+			ErrorCode:     code,
+			ErrorMessage:  message,
+			ReturnedAt:    returnedAt,
+		})
+		if err != nil {
+			if errors.Is(err, registry.ErrNetworkScanNotFound) {
+				return sqsconsumer.Poison(err)
+			}
+			return err
+		}
+		return nil
+	}
+
+	// Success: unmarshal the networkscan.Response from the embedded
+	// envelope's Result and hand the hosts list straight to the
+	// registry. The protocol shape is the wire shape; the ingest layer
+	// is a thin router.
+	var resp networkscan.Response
+	if err := json.Unmarshal(r.Result.Result, &resp); err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	if err := i.writer.CompleteNetworkScan(ctx, registry.NetworkScanCompletion{
+		CorrelationID: r.CorrelationID,
+		Hosts:         resp.Hosts,
+		ReturnedAt:    returnedAt,
+	}); err != nil {
+		if errors.Is(err, registry.ErrNetworkScanNotFound) {
+			return sqsconsumer.Poison(err)
+		}
+		return err
+	}
+	log.Info("network.scan applied",
+		"device_id", r.DeviceID,
+		"correlation_id", r.CorrelationID,
+		"host_count", len(resp.Hosts),
 	)
 	return nil
 }
