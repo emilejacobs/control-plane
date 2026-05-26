@@ -392,6 +392,116 @@ export async function getLogTail(
   };
 }
 
+// === Network scan (Phase 2 Edge UI rework, issue #3) ===
+
+// NetworkScanHost is one candidate the agent's LAN scan returned. The
+// dashboard's "Add as camera" button populates the Add Camera dialog
+// with the host's IP pre-filled.
+export interface NetworkScanHost {
+  ip: string;
+  mac: string;
+  vendor: string;
+  openPorts: number[];
+}
+
+// NetworkScan is the row state the dashboard polls for. Status walks
+// pending → done | error as the agent's cmd-result lands; hosts is
+// populated on the done path, errorCode + errorMessage on the error path.
+export interface NetworkScan {
+  correlationId: string;
+  cidr: string | null;
+  status: "pending" | "done" | "error";
+  hosts: NetworkScanHost[] | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  requestedAt: string;
+  returnedAt: string | null;
+}
+
+interface NetworkScanWire {
+  correlation_id: string;
+  cidr: string | null;
+  status: string;
+  result: { hosts: { ip: string; mac: string; vendor: string; open_ports: number[] }[] } | null;
+  error_code: string | null;
+  error_message: string | null;
+  requested_at: string;
+  returned_at: string | null;
+}
+
+export interface NetworkScanRequest {
+  // cidr is optional — pass undefined / empty for auto-detect mode.
+  cidr?: string;
+}
+
+// postNetworkScan initiates an operator-triggered LAN scan. Returns the
+// server-minted correlation_id; the dashboard polls getNetworkScan until
+// status flips out of "pending".
+export async function postNetworkScan(
+  deviceId: string,
+  request: NetworkScanRequest = {},
+): Promise<{ correlationId: string }> {
+  const body: Record<string, unknown> = {};
+  if (request.cidr) {
+    body.cidr = request.cidr;
+  }
+  const res = await apiRequest(`/devices/${deviceId}/network-scan`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 400) {
+    const detail = (await res.json().catch(() => ({}))) as {
+      code?: string;
+      message?: string;
+    };
+    const code = detail.code ? ` (${detail.code})` : "";
+    throw new ApiError(400, `${detail.message ?? "invalid network scan request"}${code}`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to start network scan");
+  }
+  const payload = (await res.json()) as { correlation_id: string };
+  return { correlationId: payload.correlation_id };
+}
+
+// getNetworkScan fetches the current row state for a pending or
+// completed scan. Dashboard polls this every ~2s until status ≠
+// "pending".
+export async function getNetworkScan(
+  deviceId: string,
+  correlationId: string,
+): Promise<NetworkScan> {
+  const res = await apiRequest(
+    `/devices/${deviceId}/network-scan/${correlationId}`,
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to fetch network scan");
+  }
+  const d = (await res.json()) as NetworkScanWire;
+  return {
+    correlationId: d.correlation_id,
+    cidr: d.cidr,
+    status: d.status as NetworkScan["status"],
+    hosts:
+      d.result == null
+        ? null
+        : d.result.hosts.map((h) => ({
+            ip: h.ip,
+            mac: h.mac,
+            vendor: h.vendor,
+            openPorts: h.open_ports,
+          })),
+    errorCode: d.error_code,
+    errorMessage: d.error_message,
+    requestedAt: d.requested_at,
+    returnedAt: d.returned_at,
+  };
+}
+
 export async function putServiceConfig(
   id: string,
   update: ServiceConfigUpdate,
