@@ -14,10 +14,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
+	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
@@ -39,6 +41,12 @@ var ErrLogTailNotFound = errors.New("log tail not found")
 // locate the (device_id, camera_id) pair. Used by UpdateCamera and
 // DeleteCamera to distinguish "no such row" from a real DB error.
 var ErrCameraNotFound = errors.New("camera not found")
+
+// ErrCameraLPRConflict is returned by InsertCamera / UpdateCamera when
+// the operation would create a second is_lpr=true row for the same
+// device. The DB's partial unique index enforces single-LPR-per-device
+// per ADR-030 § 1; the API translates this into HTTP 409.
+var ErrCameraLPRConflict = errors.New("camera LPR conflict")
 
 // BootstrapVerifier validates the enrollment bootstrap key. The registry
 // depends on the interface; bootstrap.Verifier is the implementation, which
@@ -663,4 +671,83 @@ func (r *Registry) Enroll(ctx context.Context, in EnrollInput) (EnrollOutput, er
 		IoTThingARN:       cert.ThingARN,
 		MtlsCertExpiresAt: cert.ExpiresAt,
 	}, nil
+}
+
+// InsertCamera adds a new camera row under deviceID with a server-
+// assigned camera_id of the form camN, where N is the lowest unused
+// integer at insert time. Returns ErrCameraLPRConflict if isLPR=true
+// would create a second LPR row for the device (the partial unique
+// index device_cameras_lpr_unique enforces single-LPR-per-device per
+// ADR-030 § 1).
+func (r *Registry) InsertCamera(ctx context.Context, deviceID, label, rtspURL string, isLPR bool) (cameras.Camera, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return cameras.Camera{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var maxN int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(SUBSTRING(camera_id FROM 4)::int), 0)
+		FROM device_cameras
+		WHERE device_id = $1 AND camera_id ~ '^cam[0-9]+$'
+	`, deviceID).Scan(&maxN); err != nil {
+		return cameras.Camera{}, fmt.Errorf("next camera id: %w", err)
+	}
+	cameraID := fmt.Sprintf("cam%d", maxN+1)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO device_cameras (device_id, camera_id, label, rtsp_url, is_lpr)
+		VALUES ($1, $2, $3, $4, $5)
+	`, deviceID, cameraID, label, rtspURL, isLPR); err != nil {
+		if isLPRConflict(err) {
+			return cameras.Camera{}, ErrCameraLPRConflict
+		}
+		return cameras.Camera{}, fmt.Errorf("insert camera: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return cameras.Camera{}, fmt.Errorf("commit: %w", err)
+	}
+	return cameras.Camera{CameraID: cameraID, Label: label, RtspURL: rtspURL, IsLPR: isLPR}, nil
+}
+
+// ListCameras returns the cameras for deviceID in stable insertion
+// order (sorted by created_at, tiebroken on camera_id). Empty slice
+// for a device with no cameras (not nil — the API hop preserves the
+// distinction, but the registry's caller layer also tolerates nil).
+func (r *Registry) ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT camera_id, label, rtsp_url, is_lpr
+		FROM device_cameras
+		WHERE device_id = $1
+		ORDER BY created_at, camera_id
+	`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("list cameras: %w", err)
+	}
+	defer rows.Close()
+
+	var list []cameras.Camera
+	for rows.Next() {
+		var c cameras.Camera
+		if err := rows.Scan(&c.CameraID, &c.Label, &c.RtspURL, &c.IsLPR); err != nil {
+			return nil, fmt.Errorf("scan camera: %w", err)
+		}
+		list = append(list, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate cameras: %w", err)
+	}
+	return list, nil
+}
+
+// isLPRConflict reports whether err is a Postgres unique-violation on
+// the device_cameras_lpr_unique partial index (i.e., the device
+// already has another camera with is_lpr=true).
+func isLPRConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23505" && pgErr.ConstraintName == "device_cameras_lpr_unique"
 }
