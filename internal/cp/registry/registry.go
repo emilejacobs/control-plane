@@ -128,6 +128,23 @@ type Device struct {
 	// AssetNumber is the fleet-tracking identifier set during install
 	// (migration 014). Nil until install-module 11 starts shipping it.
 	AssetNumber *string
+	// LanIP is the device's primary RFC1918 IPv4 address (migration
+	// 018, issue #14). Populated on each heartbeat via
+	// UpdateHeartbeatNetwork; nil until the first post-rollout
+	// heartbeat lands. Used by the dashboard's "Copy LAN URL"
+	// fallback for the Verify-angle deep-link.
+	LanIP *string
+	// TailscaleIP is the device's CGNAT (100.64.0.0/10) IPv4
+	// (migration 018, issue #14). Nil for devices that aren't on a
+	// tailnet or whose agent predates the rollout.
+	TailscaleIP *string
+	// TailscaleName is the device's MagicDNS name from
+	// `tailscale status --json` Self.DNSName, trailing dot stripped
+	// (migration 018, issue #14). The dashboard's edgePreviewURL
+	// prefers this over Hostname so the Verify-angle button resolves
+	// even when device.hostname diverged from the tailnet name (the
+	// bench-Mac drift case 2026-05-26).
+	TailscaleName *string
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -144,7 +161,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       devices.last_seen, devices.is_online, devices.presence_changed_at,
 		       devices.mtls_cert_expires_at, devices.enrolled_at,
 		       s.name AS site_name, c.name AS client_name,
-		       devices.asset_number
+		       devices.asset_number,
+		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -158,6 +176,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.MtlsCertExpiresAt, &d.EnrolledAt,
 		&d.SiteName, &d.ClientName,
 		&d.AssetNumber,
+		&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -182,7 +201,8 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       devices.last_seen, devices.is_online, devices.presence_changed_at,
 		       devices.mtls_cert_expires_at, devices.enrolled_at,
 		       s.name AS site_name, c.name AS client_name,
-		       devices.asset_number
+		       devices.asset_number,
+		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -204,6 +224,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.MtlsCertExpiresAt, &d.EnrolledAt,
 			&d.SiteName, &d.ClientName,
 			&d.AssetNumber,
+			&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -235,6 +256,47 @@ func (r *Registry) UpdateLastSeen(ctx context.Context, deviceID string, at time.
 	`, deviceID, at)
 	if err != nil {
 		return fmt.Errorf("update last_seen: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// UpdateHeartbeatNetwork records the three network fields the
+// agent publishes on each heartbeat (issue #14): lan_ip,
+// tailscale_ip, tailscale_name. Each argument is *string with
+// conditional-update semantics — a nil pointer means "the agent
+// didn't publish this field on this heartbeat; don't touch the
+// stored value." A non-nil pointer overwrites (last-wins).
+//
+// This separation matters because an agent that temporarily loses
+// tailnet visibility omits tailscale_* from its envelope; we don't
+// want a brief outage to NULL out the dashboard's stored name and
+// break the Verify-angle URL. Per-heartbeat last-wins on the
+// fields that are present.
+//
+// An id matching no row — including a non-UUID — returns
+// ErrDeviceNotFound so the ingest handler can DLQ rather than loop.
+func (r *Registry) UpdateHeartbeatNetwork(ctx context.Context, deviceID string, lanIP, tailscaleIP, tailscaleName *string) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	// COALESCE(new, stored) is the conditional-update idiom: when
+	// the parameter is NULL (the *string was nil), the column keeps
+	// its prior value. When the parameter is a non-NULL text, it
+	// wins. updated_at advances unconditionally on a real
+	// network-info heartbeat (the row was visited).
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET lan_ip         = COALESCE($2, lan_ip),
+		    tailscale_ip   = COALESCE($3, tailscale_ip),
+		    tailscale_name = COALESCE($4, tailscale_name),
+		    updated_at     = now()
+		WHERE id = $1
+	`, deviceID, lanIP, tailscaleIP, tailscaleName)
+	if err != nil {
+		return fmt.Errorf("update heartbeat network: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrDeviceNotFound
