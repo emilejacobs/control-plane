@@ -1,0 +1,232 @@
+package edgeui
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
+)
+
+// fakeRunner is the RTSPRunner test seam. It returns a FrameStream
+// that yields its pre-canned frames in order, then blocks on context
+// cancellation (mirroring a real long-lived ffmpeg process).
+type fakeRunner struct {
+	frames     [][]byte
+	errOnStart error
+	frameGap   time.Duration
+	cancelled  chan struct{}
+
+	// observability: tests assert on URL passed in.
+	mu         sync.Mutex
+	lastURL    string
+	startCount int
+}
+
+func newFakeRunner(frames [][]byte) *fakeRunner {
+	return &fakeRunner{frames: frames, cancelled: make(chan struct{}, 1)}
+}
+
+func (f *fakeRunner) Start(ctx context.Context, rtspURL string) (FrameStream, error) {
+	f.mu.Lock()
+	f.lastURL = rtspURL
+	f.startCount++
+	f.mu.Unlock()
+	if f.errOnStart != nil {
+		return nil, f.errOnStart
+	}
+	return &fakeStream{ctx: ctx, frames: f.frames, gap: f.frameGap, cancelled: f.cancelled}, nil
+}
+
+type fakeStream struct {
+	ctx       context.Context
+	frames    [][]byte
+	idx       int
+	gap       time.Duration
+	cancelled chan struct{}
+}
+
+func (s *fakeStream) NextFrame() ([]byte, error) {
+	if s.idx > 0 && s.gap > 0 {
+		select {
+		case <-s.ctx.Done():
+			select {
+			case s.cancelled <- struct{}{}:
+			default:
+			}
+			return nil, s.ctx.Err()
+		case <-time.After(s.gap):
+		}
+	}
+	if s.idx >= len(s.frames) {
+		// Block until context cancellation (real ffmpeg stays alive).
+		<-s.ctx.Done()
+		select {
+		case s.cancelled <- struct{}{}:
+		default:
+		}
+		return nil, s.ctx.Err()
+	}
+	frame := s.frames[s.idx]
+	s.idx++
+	return frame, nil
+}
+
+func (s *fakeStream) Close() error { return nil }
+
+// jpegFrame returns a minimal JPEG with SOI/EOI markers and a payload
+// so the multipart parser sees distinct bodies. The MJPEG-over-HTTP
+// boundary separates whole JPEGs; the handler does not need to
+// re-parse JPEG markers itself.
+func jpegFrame(payload byte, size int) []byte {
+	out := make([]byte, 0, size+4)
+	out = append(out, 0xFF, 0xD8) // SOI
+	for i := 0; i < size; i++ {
+		out = append(out, payload)
+	}
+	out = append(out, 0xFF, 0xD9) // EOI
+	return out
+}
+
+func staticCameras(t *testing.T, list []cameras.Camera) CamerasReader {
+	t.Helper()
+	return CamerasReaderFunc(func() (map[string]cameras.Camera, error) {
+		out := map[string]cameras.Camera{}
+		for _, c := range list {
+			out[c.CameraID] = c
+		}
+		return out, nil
+	})
+}
+
+func TestPreviewHandler_HappyPath_WritesMultipart(t *testing.T) {
+	frames := [][]byte{
+		jpegFrame(0xAA, 64),
+		jpegFrame(0xBB, 64),
+		jpegFrame(0xCC, 64),
+	}
+	runner := newFakeRunner(frames)
+	h := NewPreviewHandler(staticCameras(t, []cameras.Camera{
+		{CameraID: "cam1", Label: "Drive-thru", RtspURL: "rtsp://host/stream"},
+	}), runner)
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// Cancel the request after a short window so the runner goroutine
+	// stops emitting (in production the operator closes the tab).
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/preview/cam1/stream", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	mediaType, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("parse content-type: %v", err)
+	}
+	if mediaType != "multipart/x-mixed-replace" {
+		t.Errorf("media type: %s", mediaType)
+	}
+	if params["boundary"] != "ffmpeg" {
+		t.Errorf("boundary: %s", params["boundary"])
+	}
+
+	mr := multipart.NewReader(resp.Body, "ffmpeg")
+	got := 0
+	for got < 3 {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Context cancellation surfaces here as a read error after
+			// we've consumed frames — that's expected.
+			break
+		}
+		body, _ := io.ReadAll(part)
+		if !bytes.HasPrefix(body, []byte{0xFF, 0xD8}) {
+			t.Errorf("part %d not a JPEG (got %x)", got, body[:2])
+		}
+		got++
+	}
+	if got != 3 {
+		t.Errorf("expected 3 parts, got %d", got)
+	}
+
+	if runner.lastURL != "rtsp://host/stream" {
+		t.Errorf("runner saw URL %q", runner.lastURL)
+	}
+}
+
+func TestPreviewHandler_RunnerErrorOnStart_503(t *testing.T) {
+	runner := newFakeRunner(nil)
+	runner.errOnStart = errors.New("ffmpeg: no such device")
+	h := NewPreviewHandler(staticCameras(t, []cameras.Camera{
+		{CameraID: "cam1", RtspURL: "rtsp://host/stream"},
+	}), runner)
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/preview/cam1/stream")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	// Response is not multipart on the error path.
+	ct := resp.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/") {
+		t.Errorf("error response must not be multipart, got %q", ct)
+	}
+}
+
+func TestPreviewHandler_ClientCancel_PropagatesToRunner(t *testing.T) {
+	// Long frame gap so the request is in mid-stream when the client
+	// disconnects — that's the case we want exercised.
+	runner := newFakeRunner([][]byte{jpegFrame(0x11, 32), jpegFrame(0x22, 32)})
+	runner.frameGap = 50 * time.Millisecond
+
+	h := NewPreviewHandler(staticCameras(t, []cameras.Camera{
+		{CameraID: "cam1", RtspURL: "rtsp://x/y"},
+	}), runner)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/preview/cam1/stream", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	// Read just enough to confirm streaming started, then cancel.
+	br := bufio.NewReader(resp.Body)
+	_, _ = br.ReadBytes('\n') // boundary line
+	cancel()
+	resp.Body.Close()
+
+	select {
+	case <-runner.cancelled:
+		// expected
+	case <-time.After(2 * time.Second):
+		t.Fatalf("runner was not cancelled after client disconnect")
+	}
+}
