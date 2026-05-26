@@ -150,14 +150,18 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
 		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
-		// All four routes are site-scoped via the same middleware
-		// chain. The agent-push side (cmd publish after CRUD) is
-		// wired separately when CmdPublisher is present — see the
-		// nested block below.
+		// Read route (GET) requires only auth + TOTP + site scope.
+		// Mutating routes additionally need CmdPublisher to push the
+		// cameras.update cmd down to the agent after each change.
 		b.Get("/devices/{id}/cameras", requireAuth(requireEnrolled(requireScope(devices.NewCameraList(d.Registry)))))
-		b.Post("/devices/{id}/cameras", requireAuth(requireEnrolled(requireScope(devices.NewCameraPost(d.Registry)))))
-		b.Put("/devices/{id}/cameras/{camera_id}", requireAuth(requireEnrolled(requireScope(devices.NewCameraPut(d.Registry)))))
-		b.Delete("/devices/{id}/cameras/{camera_id}", requireAuth(requireEnrolled(requireScope(devices.NewCameraDelete(d.Registry)))))
+		if d.CmdPublisher != nil {
+			b.Post("/devices/{id}/cameras",
+				requireAuth(requireEnrolled(requireScope(devices.NewCameraPost(d.Registry, d.CmdPublisher)))))
+			b.Put("/devices/{id}/cameras/{camera_id}",
+				requireAuth(requireEnrolled(requireScope(devices.NewCameraPut(d.Registry, d.CmdPublisher)))))
+			b.Delete("/devices/{id}/cameras/{camera_id}",
+				requireAuth(requireEnrolled(requireScope(devices.NewCameraDelete(d.Registry, d.CmdPublisher)))))
+		}
 		// Phase 2 slice 2: PUT /devices/{id}/service-config. Requires
 		// auth + TOTP + site scope (same gates as the read surface).
 		// Skipped silently when CmdPublisher is nil — keeps tests that

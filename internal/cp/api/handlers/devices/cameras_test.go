@@ -3,6 +3,7 @@ package devices_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,16 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
 )
+
+// nopPublisher discards every Publish call — used for tests that
+// don't exercise the downward channel. cameraCmdPublisher (declared
+// further down) captures calls when assertions are needed.
+type nopPublisher struct{}
+
+func (nopPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
 
 // cameraStore stubs the persistence side of the cameras handlers.
 // known maps device IDs that exist + are visible to the caller's
@@ -118,7 +127,7 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 		known:  map[string]bool{"dev-abc": true},
 		nextID: "cam1",
 	}
-	h := devices.NewCameraPost(store)
+	h := devices.NewCameraPost(store, nopPublisher{})
 
 	body := `{"label":"Drive-thru","rtsp_url":"rtsp://user:pass@10.0.0.42/stream","is_lpr":true}`
 	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
@@ -156,6 +165,104 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	}
 }
 
+// cameraCmdPublisher captures every Publish call so the test can
+// inspect the cameras.update envelope and the post-CRUD list it
+// carried.
+type cameraCmdPublisher struct {
+	mu     sync.Mutex
+	calls  []cameraPubCall
+	pubErr error
+}
+
+type cameraPubCall struct {
+	topic   string
+	payload []byte
+}
+
+func (p *cameraCmdPublisher) Publish(_ context.Context, topic string, payload []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, cameraPubCall{topic: topic, payload: append([]byte(nil), payload...)})
+	return p.pubErr
+}
+
+// After a successful POST, a cameras.update cmd is published on
+// devices/{id}/cmd carrying the full post-insert list. The agent's
+// local cameras.json mirrors CP atomically (per ADR-030 § 1, payload
+// is desired state, not deltas).
+func TestCameraPostPublishesCamerasUpdate(t *testing.T) {
+	store := &cameraStore{
+		known:   map[string]bool{"dev-abc": true},
+		nextID:  "cam1",
+		listing: map[string][]cameras.Camera{"dev-abc": {}},
+	}
+	pub := &cameraCmdPublisher{}
+	h := devices.NewCameraPost(store, pub)
+
+	body := `{"label":"Drive-thru","rtsp_url":"rtsp://x","is_lpr":true}`
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+
+	// Pre-populate listing so post-insert ListCameras returns the new row.
+	store.listing["dev-abc"] = []cameras.Camera{{CameraID: "cam1", Label: "Drive-thru", RtspURL: "rtsp://x", IsLPR: true}}
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("Publish calls: got %d want 1", len(pub.calls))
+	}
+	if pub.calls[0].topic != "devices/dev-abc/cmd" {
+		t.Errorf("topic: got %q want devices/dev-abc/cmd", pub.calls[0].topic)
+	}
+	var cmd envelope.Command
+	if err := json.Unmarshal(pub.calls[0].payload, &cmd); err != nil {
+		t.Fatalf("payload not a valid Command: %v", err)
+	}
+	if cmd.Type != "cameras.update" {
+		t.Errorf("cmd type: got %q want cameras.update", cmd.Type)
+	}
+	if cmd.CommandID == "" {
+		t.Error("CommandID is empty; expected a fresh value")
+	}
+	var inner cameras.UpdateAllRequest
+	if err := json.Unmarshal(cmd.Args, &inner); err != nil {
+		t.Fatalf("args not valid UpdateAllRequest: %v", err)
+	}
+	if len(inner.Cameras) != 1 || inner.Cameras[0].CameraID != "cam1" {
+		t.Errorf("payload cameras: got %+v want [{cam1...}]", inner.Cameras)
+	}
+}
+
+// If Publish fails after a successful insert, the API returns 502.
+// The store mutation still succeeded; the operator can retry, which
+// will see the row already present and emit a fresh cmd.
+func TestCameraPostPublishFailureReturns502(t *testing.T) {
+	store := &cameraStore{
+		known:   map[string]bool{"dev-abc": true},
+		nextID:  "cam1",
+		listing: map[string][]cameras.Camera{"dev-abc": {{CameraID: "cam1", Label: "x", RtspURL: "rtsp://x"}}},
+	}
+	pub := &cameraCmdPublisher{pubErr: errors.New("iot publish exploded")}
+	h := devices.NewCameraPost(store, pub)
+
+	body := `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.inserts) != 1 {
+		t.Errorf("InsertCamera should still have been called (publish failure is downstream): got %d", len(store.inserts))
+	}
+}
+
 // POST returns 409 Conflict when the store reports
 // ErrCameraLPRConflict — the DB's partial unique index rejected a
 // second is_lpr=true camera on the same device. Operator must
@@ -166,7 +273,7 @@ func TestCameraPostLPRConflictReturns409(t *testing.T) {
 		nextID:    "cam2",
 		insertErr: registry.ErrCameraLPRConflict,
 	}
-	h := devices.NewCameraPost(store)
+	h := devices.NewCameraPost(store, nopPublisher{})
 
 	body := `{"label":"second-LPR","rtsp_url":"rtsp://x","is_lpr":true}`
 	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
@@ -190,7 +297,7 @@ func TestCameraPutLPRConflictReturns409(t *testing.T) {
 	// The fake's UpdateCamera doesn't model the partial unique index;
 	// inject the error via a wrapper.
 	wrapped := &lprConflictPutStore{cameraStore: store}
-	h := devices.NewCameraPut(wrapped)
+	h := devices.NewCameraPut(wrapped, nopPublisher{})
 
 	body := `{"label":"x","rtsp_url":"rtsp://x","is_lpr":true}`
 	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/cameras/cam2", strings.NewReader(body))
@@ -229,10 +336,10 @@ func TestCameraHandlersReturn404WhenDeviceMissing(t *testing.T) {
 		newH    func(devices.CameraStore) http.Handler
 		setCam  bool
 	}{
-		{"POST", http.MethodPost, "/devices/dev-x/cameras", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPost(s) }, false},
+		{"POST", http.MethodPost, "/devices/dev-x/cameras", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPost(s, nopPublisher{}) }, false},
 		{"GET", http.MethodGet, "/devices/dev-x/cameras", "", func(s devices.CameraStore) http.Handler { return devices.NewCameraList(s) }, false},
-		{"PUT", http.MethodPut, "/devices/dev-x/cameras/cam1", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPut(s) }, true},
-		{"DELETE", http.MethodDelete, "/devices/dev-x/cameras/cam1", "", func(s devices.CameraStore) http.Handler { return devices.NewCameraDelete(s) }, true},
+		{"PUT", http.MethodPut, "/devices/dev-x/cameras/cam1", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPut(s, nopPublisher{}) }, true},
+		{"DELETE", http.MethodDelete, "/devices/dev-x/cameras/cam1", "", func(s devices.CameraStore) http.Handler { return devices.NewCameraDelete(s, nopPublisher{}) }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,7 +374,7 @@ func TestCameraDeleteRemovesCamera(t *testing.T) {
 			"dev-abc": {{CameraID: "cam1", Label: "x", RtspURL: "rtsp://x", IsLPR: false}},
 		},
 	}
-	h := devices.NewCameraDelete(store)
+	h := devices.NewCameraDelete(store, nopPublisher{})
 
 	req := httptest.NewRequest(http.MethodDelete, "/devices/dev-abc/cameras/cam1", nil)
 	req.SetPathValue("id", "dev-abc")
@@ -288,7 +395,7 @@ func TestCameraDeleteMissingReturns404(t *testing.T) {
 		known:   map[string]bool{"dev-abc": true},
 		listing: map[string][]cameras.Camera{"dev-abc": {}},
 	}
-	h := devices.NewCameraDelete(store)
+	h := devices.NewCameraDelete(store, nopPublisher{})
 
 	req := httptest.NewRequest(http.MethodDelete, "/devices/dev-abc/cameras/cam-missing", nil)
 	req.SetPathValue("id", "dev-abc")
@@ -311,7 +418,7 @@ func TestCameraPutUpdatesCamera(t *testing.T) {
 			"dev-abc": {{CameraID: "cam1", Label: "Old", RtspURL: "rtsp://old", IsLPR: false}},
 		},
 	}
-	h := devices.NewCameraPut(store)
+	h := devices.NewCameraPut(store, nopPublisher{})
 
 	body := `{"label":"New","rtsp_url":"rtsp://new","is_lpr":true}`
 	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/cameras/cam1", strings.NewReader(body))
@@ -344,7 +451,7 @@ func TestCameraPutMissingCameraReturns404(t *testing.T) {
 		known:   map[string]bool{"dev-abc": true},
 		listing: map[string][]cameras.Camera{"dev-abc": {}},
 	}
-	h := devices.NewCameraPut(store)
+	h := devices.NewCameraPut(store, nopPublisher{})
 
 	body := `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`
 	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/cameras/cam-missing", strings.NewReader(body))
@@ -433,7 +540,7 @@ func TestCameraListEmptyReturnsArrayNotNull(t *testing.T) {
 // discarding it.
 func TestCameraPostRejectsUnknownFields(t *testing.T) {
 	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
-	h := devices.NewCameraPost(store)
+	h := devices.NewCameraPost(store, nopPublisher{})
 
 	body := `{"label":"x","rtsp_url":"rtsp://10.0.0.42/stream","is_lpr":false,"site_id":"site-1"}`
 	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
@@ -455,7 +562,7 @@ func TestCameraPostRejectsUnknownFields(t *testing.T) {
 // credentials + special chars (@, :, &) are not rejected.
 func TestCameraPostRejectsBadRtspScheme(t *testing.T) {
 	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
-	h := devices.NewCameraPost(store)
+	h := devices.NewCameraPost(store, nopPublisher{})
 
 	cases := []string{
 		`{"label":"x","rtsp_url":"http://10.0.0.42/stream","is_lpr":false}`,
@@ -480,7 +587,7 @@ func TestCameraPostRejectsBadRtspScheme(t *testing.T) {
 // rtsps:// is the secure-RTSP scheme and must also be accepted.
 func TestCameraPostAcceptsRtspsScheme(t *testing.T) {
 	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
-	h := devices.NewCameraPost(store)
+	h := devices.NewCameraPost(store, nopPublisher{})
 
 	body := `{"label":"x","rtsp_url":"rtsps://user:p@host:8322/stream","is_lpr":false}`
 	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
@@ -498,7 +605,7 @@ func TestCameraPostAcceptsRtspsScheme(t *testing.T) {
 // operator — same hygiene as not allowing empty hostnames.
 func TestCameraPostRejectsEmptyLabel(t *testing.T) {
 	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
-	h := devices.NewCameraPost(store)
+	h := devices.NewCameraPost(store, nopPublisher{})
 
 	body := `{"label":"   ","rtsp_url":"rtsp://10.0.0.42/stream","is_lpr":false}`
 	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))

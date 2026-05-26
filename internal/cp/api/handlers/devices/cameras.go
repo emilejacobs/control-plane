@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
 )
 
@@ -24,15 +26,54 @@ type CameraStore interface {
 	DeleteCamera(ctx context.Context, deviceID, cameraID string) error
 }
 
-// CameraPostHandler serves POST /devices/{id}/cameras — the create
-// endpoint for a new camera under a device. Camera IDs are server-
-// assigned (cam1, cam2, ... per device) by the store.
-type CameraPostHandler struct {
-	store CameraStore
+// publishCamerasUpdate fetches the post-mutation list from the store
+// and publishes a cameras.update command on devices/{id}/cmd. The
+// payload always carries the full current list so the agent sees
+// desired state, not deltas — same pattern as slice 2's
+// config.update. Correlation_id is propagated from the request
+// context if middleware set one; otherwise a fresh value is minted.
+func publishCamerasUpdate(ctx context.Context, store CameraStore, publisher CmdPublisher, deviceID string, newCmdID func() string) error {
+	list, err := store.ListCameras(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if list == nil {
+		list = []cameras.Camera{}
+	}
+	args, err := json.Marshal(cameras.UpdateAllRequest{Cameras: list})
+	if err != nil {
+		return err
+	}
+	correlationID := cplog.CorrelationIDFromContext(ctx)
+	if correlationID == "" {
+		correlationID = newCmdID()
+	}
+	cmd := envelope.Command{
+		Type:          "cameras.update",
+		CorrelationID: correlationID,
+		CommandID:     newCmdID(),
+		Args:          args,
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	return publisher.Publish(ctx, "devices/"+deviceID+"/cmd", payload)
 }
 
-func NewCameraPost(store CameraStore) *CameraPostHandler {
-	return &CameraPostHandler{store: store}
+// CameraPostHandler serves POST /devices/{id}/cameras — the create
+// endpoint for a new camera under a device. Camera IDs are server-
+// assigned (cam1, cam2, ... per device) by the store. On success
+// publishes a cameras.update cmd carrying the full post-insert list
+// so the agent's local cameras.json mirrors CP atomically.
+type CameraPostHandler struct {
+	store     CameraStore
+	publisher CmdPublisher
+	newCmdID  func() string
+}
+
+func NewCameraPost(store CameraStore, publisher CmdPublisher) *CameraPostHandler {
+	return &CameraPostHandler{store: store, publisher: publisher, newCmdID: newRandomID}
 }
 
 type cameraCreateRequest struct {
@@ -78,6 +119,16 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Publish cameras.update with the post-insert list. Persistence
+	// already succeeded; on a publish failure we surface 502 so the
+	// operator can retry (the registry insert is idempotent on the
+	// same camera_id only by virtue of the unique constraint — but
+	// the dashboard pattern is "save, then poll for applied".
+	if err := publishCamerasUpdate(r.Context(), h.store, h.publisher, id, h.newCmdID); err != nil {
+		http.Error(w, "publish cameras.update: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
@@ -128,13 +179,17 @@ func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // CameraPutHandler serves PUT /devices/{id}/cameras/{camera_id} —
 // replaces the camera's mutable fields. Same validation as POST.
-// Returns 404 if the (device_id, camera_id) row doesn't exist.
+// Returns 404 if the (device_id, camera_id) row doesn't exist. On
+// success publishes a cameras.update cmd carrying the full
+// post-update list.
 type CameraPutHandler struct {
-	store CameraStore
+	store     CameraStore
+	publisher CmdPublisher
+	newCmdID  func() string
 }
 
-func NewCameraPut(store CameraStore) *CameraPutHandler {
-	return &CameraPutHandler{store: store}
+func NewCameraPut(store CameraStore, publisher CmdPublisher) *CameraPutHandler {
+	return &CameraPutHandler{store: store, publisher: publisher, newCmdID: newRandomID}
 }
 
 func (h *CameraPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -182,18 +237,27 @@ func (h *CameraPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := publishCamerasUpdate(r.Context(), h.store, h.publisher, id, h.newCmdID); err != nil {
+		http.Error(w, "publish cameras.update: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cam)
 }
 
 // CameraDeleteHandler serves DELETE /devices/{id}/cameras/{camera_id}.
 // Returns 204 No Content on success, 404 if the row doesn't exist.
+// On success publishes a cameras.update cmd carrying the full
+// post-delete list.
 type CameraDeleteHandler struct {
-	store CameraStore
+	store     CameraStore
+	publisher CmdPublisher
+	newCmdID  func() string
 }
 
-func NewCameraDelete(store CameraStore) *CameraDeleteHandler {
-	return &CameraDeleteHandler{store: store}
+func NewCameraDelete(store CameraStore, publisher CmdPublisher) *CameraDeleteHandler {
+	return &CameraDeleteHandler{store: store, publisher: publisher, newCmdID: newRandomID}
 }
 
 func (h *CameraDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -215,6 +279,11 @@ func (h *CameraDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := publishCamerasUpdate(r.Context(), h.store, h.publisher, id, h.newCmdID); err != nil {
+		http.Error(w, "publish cameras.update: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
