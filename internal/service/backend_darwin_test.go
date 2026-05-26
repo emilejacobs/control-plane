@@ -123,5 +123,37 @@ func TestStatus_SystemContext_TransientError(t *testing.T) {
 	}
 }
 
+// guiFallback_Running: system context says "not loaded" but the
+// service is registered as a LaunchAgent under gui/<uid>/. The
+// fallback should query the GUI domain via `launchctl print` and
+// surface state = running as StateRunning.
+func TestStatus_GUIFallback_Running(t *testing.T) {
+	r := &fakeRunner{results: map[string]runResult{
+		"launchctl list com.example.useragent": {exitCode: 1, stderr: "Could not find service\n"},
+		"launchctl print gui/501/com.example.useragent": {
+			stdout: "gui/501/com.example.useragent = {\n\tactive count = 1\n\tpath = /Users/x/Library/LaunchAgents/com.example.useragent.plist\n\tstate = running\n\tpid = 9876\n\tprogram = /usr/local/bin/x\n}\n",
+		},
+	}}
+	b := &launchctlBackend{
+		run:        r.run,
+		consoleUID: func() (uint32, error) { return 501, nil },
+		logger:     discardLogger(),
+	}
+
+	state, err := b.Status(context.Background(), "com.example.useragent")
+	if err != nil {
+		t.Fatalf("Status returned unexpected error: %v", err)
+	}
+	if state != StateRunning {
+		t.Fatalf("Status = %q, want %q", state, StateRunning)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("expected 2 launchctl calls (system + GUI fallback), got %d: %v", len(r.calls), r.calls)
+	}
+	if r.calls[1] != "launchctl print gui/501/com.example.useragent" {
+		t.Fatalf("second call was %q, expected GUI fallback", r.calls[1])
+	}
+}
+
 // silence unused-import nag when this file is the only one with bytes
 var _ = bytes.NewBuffer

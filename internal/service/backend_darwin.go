@@ -86,7 +86,7 @@ func (b *launchctlBackend) Status(ctx context.Context, name string) (State, erro
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return "", ErrNotFound
+			return b.statusGUI(ctx, name)
 		}
 		return "", fmt.Errorf("launchctl list %s: %w (stderr: %s)", name, err, string(stderr))
 	}
@@ -101,6 +101,46 @@ func (b *launchctlBackend) Status(ctx context.Context, name string) (State, erro
 		return StateRunning, nil
 	}
 	return StateStopped, nil
+}
+
+// statusGUI tries `launchctl print gui/<uid>/<name>` to find services
+// registered in the logged-in user's domain (LaunchAgents). The agent
+// runs as root via LaunchDaemon and the system-context `launchctl
+// list` cannot see GUI-domain jobs — without this fallback, every
+// LaunchAgent permanently reports as Unknown to the collector.
+func (b *launchctlBackend) statusGUI(ctx context.Context, name string) (State, error) {
+	uid, err := b.consoleUID()
+	if err != nil {
+		return "", ErrNotFound
+	}
+	target := fmt.Sprintf("gui/%d/%s", uid, name)
+	stdout, _, err := b.run(ctx, "launchctl", "print", target)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("launchctl print %s: %w", target, err)
+	}
+
+	state := StateStopped
+	for _, line := range strings.Split(string(stdout), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "state ") && !strings.HasPrefix(trimmed, "state=") {
+			continue
+		}
+		// "state = running" / "state = not running" / "state = waiting"
+		if strings.Contains(trimmed, "running") && !strings.Contains(trimmed, "not running") {
+			state = StateRunning
+		}
+		break
+	}
+	b.logger.Debug("service found via GUI-context fallback",
+		"service", name,
+		"gui_uid", uid,
+		"state", string(state),
+	)
+	return state, nil
 }
 
 // Restart shells out to `launchctl kickstart -k system/<name>`. The -k flag asks
