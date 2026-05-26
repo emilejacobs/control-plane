@@ -793,3 +793,60 @@ func (r *Registry) DeleteCamera(ctx context.Context, deviceID, cameraID string) 
 	}
 	return nil
 }
+
+// CamerasStatus mirrors the slice-2 ServiceConfig "applied" tracking
+// for the cameras.update flow: the dashboard reads LastAppliedAt +
+// LastAppliedCorrelationID to render a "pending vs applied" badge on
+// the Cameras panel. Both nil until the first ACK lands; after that
+// CP stamps them on every successful cmd-result.
+type CamerasStatus struct {
+	LastAppliedAt            *time.Time
+	LastAppliedCorrelationID *string
+}
+
+// GetCamerasStatus returns the (timestamp, correlation_id) pair of the
+// most recent cameras.update ACK CP recorded for this device. Both
+// fields are nil until the agent has ACKed at least once. Returns
+// ErrDeviceNotFound if the deviceID doesn't resolve to a row.
+func (r *Registry) GetCamerasStatus(ctx context.Context, deviceID string) (CamerasStatus, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return CamerasStatus{}, ErrDeviceNotFound
+	}
+	var s CamerasStatus
+	err := r.pool.QueryRow(ctx, `
+		SELECT cameras_last_applied_at, cameras_last_applied_corr_id
+		FROM devices WHERE id = $1
+	`, deviceID).Scan(&s.LastAppliedAt, &s.LastAppliedCorrelationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CamerasStatus{}, ErrDeviceNotFound
+		}
+		return CamerasStatus{}, fmt.Errorf("get cameras status: %w", err)
+	}
+	return s, nil
+}
+
+// RecordCamerasApplied stamps the (timestamp, correlation_id) of a
+// cameras.update ACK on the device row. Mirrors RecordServiceConfigApplied
+// from slice 2: latest-wins; a non-UUID or unknown deviceID returns
+// ErrDeviceNotFound so the cmd-result handler can DLQ a late ACK
+// from a decommissioned device.
+func (r *Registry) RecordCamerasApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET cameras_last_applied_at      = $2,
+		    cameras_last_applied_corr_id = $3,
+		    updated_at                   = now()
+		WHERE id = $1
+	`, deviceID, at, correlationID)
+	if err != nil {
+		return fmt.Errorf("record cameras applied: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}

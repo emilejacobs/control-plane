@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -24,6 +25,7 @@ type CameraStore interface {
 	ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error)
 	UpdateCamera(ctx context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
 	DeleteCamera(ctx context.Context, deviceID, cameraID string) error
+	GetCamerasStatus(ctx context.Context, deviceID string) (registry.CamerasStatus, error)
 }
 
 // publishCamerasUpdate fetches the post-mutation list from the store
@@ -149,6 +151,12 @@ func NewCameraList(store CameraStore) *CameraListHandler {
 
 type cameraListResponse struct {
 	Cameras []cameras.Camera `json:"cameras"`
+	// LastAppliedAt is the timestamp of the most recent cameras.update
+	// ACK from the device. Null until the agent has ACKed at least
+	// once. Dashboard derives a "pending vs applied" badge from this
+	// + the most recent device_cameras.updated_at.
+	LastAppliedAt            *string `json:"last_applied_at"`
+	LastAppliedCorrelationID *string `json:"last_applied_correlation_id"`
 }
 
 func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -173,8 +181,22 @@ func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []cameras.Camera{}
 	}
+	status, err := h.store.GetCamerasStatus(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var appliedAt *string
+	if status.LastAppliedAt != nil {
+		s := status.LastAppliedAt.UTC().Format(time.RFC3339)
+		appliedAt = &s
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(cameraListResponse{Cameras: list})
+	_ = json.NewEncoder(w).Encode(cameraListResponse{
+		Cameras:                  list,
+		LastAppliedAt:            appliedAt,
+		LastAppliedCorrelationID: status.LastAppliedCorrelationID,
+	})
 }
 
 // CameraPutHandler serves PUT /devices/{id}/cameras/{camera_id} —

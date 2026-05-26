@@ -17,13 +17,15 @@ import (
 )
 
 type recordingApplier struct {
-	mu                sync.Mutex
-	calls             []applyArgs
-	logTailCompletes  []registry.LogTailCompletion
-	logTailFailures   []registry.LogTailFailure
-	err               error
+	mu                 sync.Mutex
+	calls              []applyArgs
+	logTailCompletes   []registry.LogTailCompletion
+	logTailFailures    []registry.LogTailFailure
+	camerasCalls       []applyArgs
+	err                error
 	logTailCompleteErr error
-	logTailFailErr    error
+	logTailFailErr     error
+	camerasErr         error
 }
 type applyArgs struct {
 	deviceID, correlationID string
@@ -49,6 +51,13 @@ func (r *recordingApplier) FailLogTail(_ context.Context, f registry.LogTailFail
 	r.logTailFailures = append(r.logTailFailures, f)
 	r.mu.Unlock()
 	return r.logTailFailErr
+}
+
+func (r *recordingApplier) RecordCamerasApplied(_ context.Context, deviceID, correlationID string, at time.Time) error {
+	r.mu.Lock()
+	r.camerasCalls = append(r.camerasCalls, applyArgs{deviceID: deviceID, correlationID: correlationID, at: at})
+	r.mu.Unlock()
+	return r.camerasErr
 }
 
 // Happy path: a successful config.update ACK lands → ingester calls
@@ -282,5 +291,63 @@ func TestCmdResultJSONUnmarshal(t *testing.T) {
 	}
 	if cr.CorrelationID != "corr-1" || cr.Type != "config.update" || !cr.Success {
 		t.Errorf("envelope fields wrong: %+v", cr)
+	}
+}
+
+// Happy path: a successful cameras.update ACK lands → ingester
+// calls RecordCamerasApplied with the cp-side wall-clock ingest
+// time + device_id + correlation_id. Mirrors the config.update
+// pattern from slice 2 (Edge UI rework, issue #2).
+func TestCmdResultCamerasUpdateSuccess(t *testing.T) {
+	applier := &recordingApplier{}
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	ing := ingest.NewCmdResultIngester(applier, func() time.Time { return now })
+
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-cam-1",
+			CommandID:     "cmd-cam-1",
+			Type:          "cameras.update",
+			Success:       true,
+		},
+		DeviceID: "dev-cam",
+	}
+	if err := ing.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(applier.camerasCalls) != 1 {
+		t.Fatalf("RecordCamerasApplied calls: got %d want 1", len(applier.camerasCalls))
+	}
+	c := applier.camerasCalls[0]
+	if c.deviceID != "dev-cam" || c.correlationID != "corr-cam-1" || !c.at.Equal(now) {
+		t.Errorf("RecordCamerasApplied args: got %+v", c)
+	}
+}
+
+// Failure ACK: ingester logs but does NOT write — the override on
+// CP stays as-is; the dashboard surfaces missing applied_at as
+// "pending". Same posture as config.update.
+func TestCmdResultCamerasUpdateFailure(t *testing.T) {
+	applier := &recordingApplier{}
+	ing := ingest.NewCmdResultIngester(applier, time.Now)
+
+	msg := ingest.CmdResult{
+		Result: envelope.Result{
+			CorrelationID: "corr-cam-fail",
+			CommandID:     "cmd-cam-fail",
+			Type:          "cameras.update",
+			Success:       false,
+			Error: &envelope.ResultError{
+				Code:    "cameras.apply_failed",
+				Message: "disk full",
+			},
+		},
+		DeviceID: "dev-cam",
+	}
+	if err := ing.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("Handle on failure ACK: got error %v, want nil (handled)", err)
+	}
+	if len(applier.camerasCalls) != 0 {
+		t.Errorf("RecordCamerasApplied should not be called on failure ACK; got %d", len(applier.camerasCalls))
 	}
 }

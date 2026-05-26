@@ -28,8 +28,9 @@ type CmdResult struct {
 func (r CmdResult) Correlation() string { return r.CorrelationID }
 
 // CmdResultWriter is the registry slice the cmd-result handler needs.
-// Covers slice 2 (config.update) and slice 3 (log.tail) ACK flows.
-// *registry.Registry satisfies all four methods.
+// Covers slice 2 (config.update), slice 3 (log.tail), and Edge UI
+// rework (cameras.update) ACK flows. *registry.Registry satisfies
+// every method.
 type CmdResultWriter interface {
 	// Slice 2: config.update ACK stamps last_applied_* on the device row.
 	RecordServiceConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
@@ -37,6 +38,9 @@ type CmdResultWriter interface {
 	CompleteLogTail(ctx context.Context, c registry.LogTailCompletion) error
 	// Slice 3: log.tail failure — updates the pending row with error code + message.
 	FailLogTail(ctx context.Context, f registry.LogTailFailure) error
+	// Edge UI rework (issue #2): cameras.update ACK stamps the
+	// cameras_last_applied_* mirror columns on the device row.
+	RecordCamerasApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
 }
 
 // CmdResultIngester is the sqsconsumer.Handler[CmdResult]. Routes
@@ -79,6 +83,8 @@ func (i *CmdResultIngester) Handle(ctx context.Context, r CmdResult) error {
 		return i.handleConfigUpdate(ctx, r, log)
 	case "log.tail":
 		return i.handleLogTail(ctx, r, log)
+	case "cameras.update":
+		return i.handleCamerasUpdate(ctx, r, log)
 	default:
 		// Other cmd types are valid envelopes but not in scope here;
 		// Phase 3 will add per-type handlers. Silently ignored so the
@@ -190,6 +196,40 @@ func (i *CmdResultIngester) handleConfigUpdate(ctx context.Context, r CmdResult,
 		return err
 	}
 	log.Info("config.update applied",
+		"device_id", r.DeviceID,
+		"correlation_id", r.CorrelationID,
+	)
+	return nil
+}
+
+// handleCamerasUpdate stamps the cameras_last_applied_* mirror
+// columns when the agent ACKs a cameras.update cmd. Failure ACKs
+// log + return nil (same posture as config.update — the override
+// stays as the operator set it; the dashboard surfaces the absence
+// of a fresh apply timestamp as "pending").
+func (i *CmdResultIngester) handleCamerasUpdate(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	if !r.Success {
+		code, message := "", ""
+		if r.Error != nil {
+			code = r.Error.Code
+			message = r.Error.Message
+		}
+		log.Warn("cameras.update ACK failure",
+			"device_id", r.DeviceID,
+			"correlation_id", r.CorrelationID,
+			"error_code", code,
+			"error_message", message,
+		)
+		return nil
+	}
+
+	if err := i.writer.RecordCamerasApplied(ctx, r.DeviceID, r.CorrelationID, i.now()); err != nil {
+		if errors.Is(err, registry.ErrDeviceNotFound) {
+			return sqsconsumer.Poison(err)
+		}
+		return err
+	}
+	log.Info("cameras.update applied",
 		"device_id", r.DeviceID,
 		"correlation_id", r.CorrelationID,
 	)

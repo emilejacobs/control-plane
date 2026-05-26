@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -37,8 +38,9 @@ type cameraStore struct {
 	insertErr error
 	listing   map[string][]cameras.Camera
 	listErr   error
-	updates   []updateCall
-	deletes   []deleteCall
+	updates       []updateCall
+	deletes       []deleteCall
+	camerasStatus registry.CamerasStatus
 }
 
 type insertCall struct {
@@ -103,6 +105,10 @@ func (s *cameraStore) UpdateCamera(_ context.Context, deviceID, cameraID, label,
 		}
 	}
 	return cameras.Camera{}, registry.ErrCameraNotFound
+}
+
+func (s *cameraStore) GetCamerasStatus(_ context.Context, deviceID string) (registry.CamerasStatus, error) {
+	return s.camerasStatus, nil
 }
 
 func (s *cameraStore) DeleteCamera(_ context.Context, deviceID, cameraID string) error {
@@ -527,9 +533,49 @@ func TestCameraListEmptyReturnsArrayNotNull(t *testing.T) {
 	}
 	// Check the raw body — JSON-decoding null vs [] both produce a
 	// zero-length slice in Go, so structural inspection is required.
+	// The body MUST contain "cameras":[] explicitly (not null).
 	got := strings.TrimSpace(rec.Body.String())
-	if got != `{"cameras":[]}` {
-		t.Errorf("body: got %q want %q", got, `{"cameras":[]}`)
+	if !strings.Contains(got, `"cameras":[]`) {
+		t.Errorf("body should contain `\"cameras\":[]` (explicit empty array), got %q", got)
+	}
+}
+
+// GET surfaces the cameras_last_applied_at + corr_id mirror columns
+// so the dashboard can render a "pending vs applied" badge. Null
+// before the agent has ACKed; populated afterward.
+func TestCameraListSurfacesLastAppliedAt(t *testing.T) {
+	at := time.Date(2026, 5, 26, 12, 30, 0, 0, time.UTC)
+	corr := "corr-applied-xyz"
+	store := &cameraStore{
+		known:   map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{"dev-abc": {}},
+		camerasStatus: registry.CamerasStatus{
+			LastAppliedAt:            &at,
+			LastAppliedCorrelationID: &corr,
+		},
+	}
+	h := devices.NewCameraList(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-abc/cameras", nil)
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d", rec.Code)
+	}
+	var got struct {
+		LastAppliedAt            *string `json:"last_applied_at"`
+		LastAppliedCorrelationID *string `json:"last_applied_correlation_id"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.LastAppliedAt == nil || *got.LastAppliedAt != "2026-05-26T12:30:00Z" {
+		t.Errorf("last_applied_at: got %v want RFC3339 of %v", got.LastAppliedAt, at)
+	}
+	if got.LastAppliedCorrelationID == nil || *got.LastAppliedCorrelationID != corr {
+		t.Errorf("last_applied_correlation_id: got %v", got.LastAppliedCorrelationID)
 	}
 }
 
