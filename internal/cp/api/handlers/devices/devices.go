@@ -55,6 +55,15 @@ type response struct {
 	// Null until install-module 11 populates it; rendered as
 	// "Unassigned" on the per-device Deployment card.
 	AssetNumber *string `json:"asset_number"`
+	// LanIP, TailscaleIP, TailscaleName are the three network
+	// fields the agent publishes on every heartbeat (issue #14;
+	// migration 018). Null until the first heartbeat-post-rollout
+	// lands. The dashboard's edgePreviewURL prefers TailscaleName
+	// over Hostname (the bench-Mac drift case), and CamerasPanel
+	// renders a "Copy LAN URL" affordance when LanIP is non-null.
+	LanIP         *string `json:"lan_ip"`
+	TailscaleIP   *string `json:"tailscale_ip"`
+	TailscaleName *string `json:"tailscale_name"`
 	// Services is the per-service state snapshot from the agent's last
 	// service-status report (Phase 2). Empty array (not null) for a
 	// device that has never reported — the dashboard distinguishes
@@ -232,6 +241,9 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		SiteName:              dev.SiteName,
 		ClientName:            dev.ClientName,
 		AssetNumber:           dev.AssetNumber,
+		LanIP:                 dev.LanIP,
+		TailscaleIP:           dev.TailscaleIP,
+		TailscaleName:         dev.TailscaleName,
 		Services:              services,
 		ServiceConfig:         serviceConfig,
 	})

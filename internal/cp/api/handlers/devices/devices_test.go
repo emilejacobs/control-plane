@@ -278,6 +278,58 @@ func TestGetDeviceServiceConfigNoOverride(t *testing.T) {
 	}
 }
 
+// Issue #14: the per-device GET response includes lan_ip,
+// tailscale_ip, and tailscale_name (snake_case in the wire shape,
+// matching the existing convention; mapped to camelCase in the
+// web layer's Device type at cycle 7). Empty string in the
+// response means the registry has NULL for the column — the
+// dashboard treats both interchangeably.
+func TestGetDeviceSurfacesLanIPAndTailscaleFields(t *testing.T) {
+	lanIP := "192.168.54.215"
+	tailscaleIP := "100.122.190.107"
+	tailscaleName := "07-eegees-store54-macmini.tailnet.ts.net"
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:            "dev-1",
+		EnrolledAt:    time.Now(),
+		LanIP:         &lanIP,
+		TailscaleIP:   &tailscaleIP,
+		TailscaleName: &tailscaleName,
+	}})
+
+	out := getDevice(t, h)
+	if got := out["lan_ip"]; got != lanIP {
+		t.Errorf("lan_ip: got %v want %q", got, lanIP)
+	}
+	if got := out["tailscale_ip"]; got != tailscaleIP {
+		t.Errorf("tailscale_ip: got %v want %q", got, tailscaleIP)
+	}
+	if got := out["tailscale_name"]; got != tailscaleName {
+		t.Errorf("tailscale_name: got %v want %q", got, tailscaleName)
+	}
+}
+
+// A device that's never published a heartbeat (or whose agent
+// predates the rollout) has NULL for all three. The handler must
+// render those as JSON null (key present) rather than dropping
+// the keys — the dashboard distinguishes "no data yet" from "key
+// missing entirely (regressed API)".
+func TestGetDeviceLanIPAndTailscaleFieldsNullWhenUnpopulated(t *testing.T) {
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:         "dev-1",
+		EnrolledAt: time.Now(),
+	}})
+	out := getDevice(t, h)
+	if got, present := out["lan_ip"]; !present || got != nil {
+		t.Errorf("lan_ip: got %v present=%v want null+present", got, present)
+	}
+	if got, present := out["tailscale_ip"]; !present || got != nil {
+		t.Errorf("tailscale_ip: got %v present=%v want null+present", got, present)
+	}
+	if got, present := out["tailscale_name"]; !present || got != nil {
+		t.Errorf("tailscale_name: got %v present=%v want null+present", got, present)
+	}
+}
+
 func TestGetDeviceServiceConfigWithOverride(t *testing.T) {
 	list := []string{"com.uknomi.webui", "anydesk"}
 	interval := "2m"
