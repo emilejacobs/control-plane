@@ -155,5 +155,31 @@ func TestStatus_GUIFallback_Running(t *testing.T) {
 	}
 }
 
+// guiFallback_Stopped: the LaunchAgent is registered but not
+// currently running. launchctl print emits `state = not running`
+// which must collapse to StateStopped (the wire-level "waiting"
+// distinction is deferred per the followup-05 doc).
+func TestStatus_GUIFallback_Stopped(t *testing.T) {
+	r := &fakeRunner{results: map[string]runResult{
+		"launchctl list com.example.useragent": {exitCode: 1, stderr: "Could not find service\n"},
+		"launchctl print gui/501/com.example.useragent": {
+			stdout: "gui/501/com.example.useragent = {\n\tactive count = 0\n\tpath = /Users/x/Library/LaunchAgents/com.example.useragent.plist\n\tstate = not running\n\tprogram = /usr/local/bin/x\n}\n",
+		},
+	}}
+	b := &launchctlBackend{
+		run:        r.run,
+		consoleUID: func() (uint32, error) { return 501, nil },
+		logger:     discardLogger(),
+	}
+
+	state, err := b.Status(context.Background(), "com.example.useragent")
+	if err != nil {
+		t.Fatalf("Status returned unexpected error: %v", err)
+	}
+	if state != StateStopped {
+		t.Fatalf("Status = %q, want %q", state, StateStopped)
+	}
+}
+
 // silence unused-import nag when this file is the only one with bytes
 var _ = bytes.NewBuffer
