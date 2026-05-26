@@ -31,9 +31,19 @@ interface Props {
   // previewURL hook lets the panel render the target URL as the
   // button's title attribute, so the operator sees the destination on
   // hover and can copy-paste if the tab fails to open over the
-  // tailnet (LAN-IP fallback hint deferred per ADR-032).
+  // tailnet.
   onVerifyAngle?: (camera: Camera) => void;
   previewURL?: (camera: Camera) => string;
+  // lanURL renders the LAN-IP fallback affordance (issue #14, the
+  // ADR-030 § 1 fallback hint deferred per ADR-032). When provided,
+  // each camera row gets a secondary "Copy LAN URL" button whose
+  // click handler writes the URL to the clipboard (the panel does
+  // not own the clipboard call directly; it just renders the
+  // button + title and the parent supplies the URL builder).
+  // Undefined means "no LAN IP known" — the affordance is hidden
+  // entirely. Devices that pre-date the issue-#14 rollout never
+  // pass a lanURL.
+  lanURL?: (camera: Camera) => string;
 }
 
 export function CamerasPanel({
@@ -45,6 +55,7 @@ export function CamerasPanel({
   onScanNetwork,
   onVerifyAngle,
   previewURL,
+  lanURL,
 }: Props) {
   const pending = lastAppliedAt === null && cameras.length > 0;
 
@@ -121,7 +132,7 @@ export function CamerasPanel({
               <th style={{ padding: "6px 8px" }}>Label</th>
               <th style={{ padding: "6px 8px", width: 60 }}>LPR</th>
               <th style={{ padding: "6px 8px" }}>RTSP URL</th>
-              {(onEditCamera || onDeleteCamera || onVerifyAngle) && (
+              {(onEditCamera || onDeleteCamera || onVerifyAngle || lanURL) && (
                 <th style={{ padding: "6px 8px", width: 200 }}></th>
               )}
             </tr>
@@ -147,7 +158,7 @@ export function CamerasPanel({
                 >
                   {c.rtspUrl}
                 </td>
-                {(onEditCamera || onDeleteCamera || onVerifyAngle) && (
+                {(onEditCamera || onDeleteCamera || onVerifyAngle || lanURL) && (
                   <td style={{ padding: "6px 8px", textAlign: "right" }}>
                     {onEditCamera && (
                       <button
@@ -182,6 +193,38 @@ export function CamerasPanel({
                         }}
                       >
                         Verify angle
+                      </button>
+                    )}
+                    {lanURL && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // The clipboard call is best-effort —
+                          // jsdom in tests + restrictive browser
+                          // permissions in prod both throw here;
+                          // swallow so the button click still
+                          // round-trips for the operator's "I saw
+                          // it click" feedback expectation.
+                          const url = lanURL(c);
+                          if (
+                            typeof navigator !== "undefined" &&
+                            navigator.clipboard
+                          ) {
+                            navigator.clipboard.writeText(url).catch(() => {});
+                          }
+                        }}
+                        title={lanURL(c)}
+                        style={{
+                          fontSize: 12,
+                          padding: "2px 8px",
+                          background: "transparent",
+                          border: "1px solid var(--line, #ccc)",
+                          borderRadius: 4,
+                          marginRight: 4,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Copy LAN URL
                       </button>
                     )}
                     {onDeleteCamera && (

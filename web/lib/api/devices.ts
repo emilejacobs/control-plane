@@ -78,6 +78,20 @@ export interface Device {
   // install-module 11 starts shipping it; rendered "Unassigned" on
   // the per-device Deployment card.
   assetNumber: string | null;
+  // Issue #14 / migration 018: the three network fields the agent
+  // publishes on every heartbeat. All null until the first
+  // post-rollout heartbeat lands (and tailscaleName / tailscaleIp
+  // stay null forever on non-tailnet devices).
+  //
+  // edgePreviewURL prefers tailscaleName over hostname so the
+  // Verify-angle deep-link still resolves when device.hostname
+  // diverged from the tailnet's MagicDNS view (the bench-Mac
+  // drift case 2026-05-26). CamerasPanel exposes a secondary
+  // "Copy LAN URL" affordance when lanIp is set — the LAN-IP
+  // fallback hint deferred from issue #4 per ADR-032.
+  lanIp: string | null;
+  tailscaleIp: string | null;
+  tailscaleName: string | null;
   // Phase 2: per-service state from the agent's last service-status
   // report. Empty array for a device that has never reported (the
   // dashboard distinguishes "no report yet" from a missing field).
@@ -173,19 +187,45 @@ export async function deleteCamera(deviceId: string, cameraId: string): Promise<
 
 // edgePreviewURL builds the deep-link an operator clicks "Verify
 // angle" to open in a new tab (issue #4, ADR-030 § 1, ADR-032). v1
-// targets the device's tailnet hostname at port 5051 over plain HTTP
-// — tailnet membership is the perimeter. The Edge UI binary's Next.js
-// SPA at /preview/<camera_id> renders an <img> pointing at its own
+// targets the device at port 5051 over plain HTTP — tailnet
+// membership is the perimeter. The Edge UI binary's Next.js SPA at
+// /preview/<camera_id> renders an <img> pointing at its own
 // /preview/<id>/stream MJPEG endpoint.
 //
-// The LAN-IP fallback hint described in ADR-030 § 1 is deferred per
-// ADR-032 — devices have no lan_ip column today, and surfacing one
-// requires new telemetry plumbing.
+// Host preference (issue #14): tailscaleName when present, else
+// hostname. The bench-Mac drift case (2026-05-26) showed that
+// `os.Hostname()`-derived hostname can diverge from the
+// Tailscale-resolvable name; tailscaleName from the heartbeat is
+// authoritative for MagicDNS resolution.
+//
+// edgeLanURL is the secondary affordance — the LAN-IP fallback
+// hint described in ADR-030 § 1, deferred per ADR-032 until
+// telemetry shipped lan_ip (issue #14). When lanIp is null, the
+// LAN URL cannot be built; CamerasPanel hides the affordance.
 export function edgePreviewURL(
-  device: Pick<Device, "hostname">,
+  device: Pick<Device, "hostname"> & { tailscaleName?: string | null },
   cameraId: string,
 ): string {
-  return `http://${device.hostname}:5051/preview/${cameraId}`;
+  const host =
+    device.tailscaleName && device.tailscaleName.length > 0
+      ? device.tailscaleName
+      : device.hostname;
+  return `http://${host}:5051/preview/${cameraId}`;
+}
+
+// edgeLanURL returns the LAN-IP fallback URL when device.lanIp is
+// non-empty, or null when the field hasn't landed yet (older
+// agents / pre-rollout). Callers MUST handle the null case — the
+// caller is responsible for hiding the affordance entirely rather
+// than rendering a broken link.
+export function edgeLanURL(
+  device: { lanIp: string | null },
+  cameraId: string,
+): string | null {
+  if (!device.lanIp) {
+    return null;
+  }
+  return `http://${device.lanIp}:5051/preview/${cameraId}`;
 }
 
 export async function getCameras(deviceId: string): Promise<CamerasResponse> {
@@ -243,6 +283,9 @@ interface DeviceWire {
   site_name: string | null;
   client_name: string | null;
   asset_number: string | null;
+  lan_ip: string | null;
+  tailscale_ip: string | null;
+  tailscale_name: string | null;
   services: DeviceServiceWire[];
   service_config: ServiceConfigWire;
 }
@@ -287,6 +330,9 @@ export async function getDevice(id: string): Promise<Device> {
     siteName: d.site_name,
     clientName: d.client_name,
     assetNumber: d.asset_number ?? null,
+    lanIp: d.lan_ip ?? null,
+    tailscaleIp: d.tailscale_ip ?? null,
+    tailscaleName: d.tailscale_name ?? null,
     services: (d.services ?? []).map((s) => ({
       name: s.name,
       state: s.state as DeviceService["state"],

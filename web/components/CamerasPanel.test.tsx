@@ -166,6 +166,80 @@ describe("CamerasPanel — Verify angle button (issue #4)", () => {
   });
 });
 
+// Issue #14: when device.lan_ip is set, the panel exposes a
+// secondary "Copy LAN URL" affordance per camera so the operator
+// can fall back to the device's LAN IP when the tailnet is
+// unreachable. The affordance is hidden when lan_ip is null —
+// pre-rollout devices keep the current single-button shape.
+describe("CamerasPanel — Copy LAN URL affordance (issue #14)", () => {
+  it("renders a 'Copy LAN URL' button per camera when lanURL is provided", () => {
+    const lanURL = (c: Camera) => `http://192.168.54.215:5051/preview/${c.cameraId}`;
+    render(
+      <CamerasPanel
+        cameras={[
+          cam({ cameraId: "cam1", label: "Drive-thru" }),
+          cam({ cameraId: "cam2", label: "Entry" }),
+        ]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={vi.fn()}
+        lanURL={lanURL}
+      />,
+    );
+    const buttons = screen.getAllByRole("button", { name: /copy lan url/i });
+    expect(buttons).toHaveLength(2);
+  });
+
+  it("does NOT render the affordance when lanURL is undefined", () => {
+    render(
+      <CamerasPanel
+        cameras={[cam()]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /copy lan url/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the LAN URL as the button's title attribute so the operator can hover-inspect it", () => {
+    const lanURL = (c: Camera) =>
+      `http://192.168.54.215:5051/preview/${c.cameraId}`;
+    render(
+      <CamerasPanel
+        cameras={[cam({ cameraId: "cam1" })]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={vi.fn()}
+        lanURL={lanURL}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /copy lan url/i });
+    expect(btn.getAttribute("title")).toBe(
+      "http://192.168.54.215:5051/preview/cam1",
+    );
+  });
+
+  it("still renders Verify angle alongside the Copy LAN URL button", () => {
+    const lanURL = (c: Camera) =>
+      `http://192.168.54.215:5051/preview/${c.cameraId}`;
+    render(
+      <CamerasPanel
+        cameras={[cam({ cameraId: "cam1", label: "Drive-thru" })]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        onVerifyAngle={vi.fn()}
+        previewURL={(c) => `http://device.ts.net:5051/preview/${c.cameraId}`}
+        lanURL={lanURL}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /verify angle/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /copy lan url/i }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("CamerasPanel — pending badge", () => {
   it("shows a 'pending' badge when lastAppliedAt is null", () => {
     render(

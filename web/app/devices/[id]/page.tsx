@@ -11,6 +11,7 @@ import {
   deleteCamera,
   postNetworkScan,
   edgePreviewURL,
+  edgeLanURL,
   type Camera,
 } from "../../../lib/api/devices";
 import { UNASSIGNED } from "../../../lib/fleet";
@@ -299,6 +300,15 @@ export default function DevicePage() {
                   window.open(edgePreviewURL(d, c.cameraId), "_blank", "noopener")
                 }
                 previewURL={(c) => edgePreviewURL(d, c.cameraId)}
+                // Issue #14: render the LAN-URL affordance only
+                // when the device's lan_ip telemetry has landed.
+                // Pre-rollout devices (lanIp = null) keep the
+                // single-button shape.
+                lanURL={
+                  d.lanIp
+                    ? (c) => edgeLanURL(d, c.cameraId) as string
+                    : undefined
+                }
               />
             </Card>
             {cameraDialog && (
