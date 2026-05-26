@@ -338,3 +338,78 @@ func TestPreviewHandler_ClientCancel_PropagatesToRunner(t *testing.T) {
 		t.Fatalf("runner was not cancelled after client disconnect")
 	}
 }
+
+// FFmpegRunner's argv is the contract with the on-device ffmpeg
+// binary. Pinning it here catches the kind of regression that bit us
+// on bench Mac 2026-05-26 with ffmpeg 8.0.1 ("Unrecognized option
+// 'stimeout'"). -stimeout was deprecated in ffmpeg 6 and removed in
+// 7+; -rw_timeout is the replacement that survives the bump.
+func TestFFmpegArgs_UsesRWTimeoutNotStimeout(t *testing.T) {
+	args := ffmpegArgs("rtsp://test.example/cam")
+
+	// Negative: -stimeout must not be present (it was removed in
+	// ffmpeg 7).
+	for _, a := range args {
+		if a == "-stimeout" {
+			t.Errorf("argv still contains -stimeout (removed in ffmpeg 7); full argv: %v", args)
+		}
+	}
+
+	// Positive: -rw_timeout 5000000 (5s, microseconds) must be paired
+	// and adjacent — survives any future option-name churn only if we
+	// catch it.
+	pinned := []string{
+		"-rtsp_transport", "tcp",
+		"-rw_timeout", "5000000",
+		"-i", "rtsp://test.example/cam",
+		"-f", "mjpeg",
+		"-q:v", "5",
+		"-r", "10",
+		"-an",
+		"pipe:1",
+	}
+	if !equalStrings(args, pinned) {
+		t.Errorf("ffmpegArgs mismatch:\n got: %v\nwant: %v", args, pinned)
+	}
+}
+
+// tailBuf keeps the last N bytes; everything older is dropped.
+// Critical for surfacing ffmpeg's stderr on failure without leaking
+// memory under a long-running misbehaving subprocess.
+func TestTailBuf_KeepsLastNBytes(t *testing.T) {
+	cases := []struct {
+		name  string
+		max   int
+		writes []string
+		want  string
+	}{
+		{"under max", 100, []string{"hello world"}, "hello world"},
+		{"exact max", 5, []string{"abcde"}, "abcde"},
+		{"overflow drops front", 5, []string{"hello"}, "hello"},
+		{"second write overflows", 5, []string{"abc", "defghi"}, "efghi"},
+		{"strips trailing whitespace via String", 100, []string{"oops\n"}, "oops"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tb := &tailBuf{max: c.max}
+			for _, w := range c.writes {
+				tb.Write([]byte(w))
+			}
+			if got := tb.String(); got != c.want {
+				t.Errorf("String: got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

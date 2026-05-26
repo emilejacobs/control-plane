@@ -188,34 +188,50 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 
 // FFmpegRunner is the production RTSPRunner. Shells out to:
 //
-//	ffmpeg -rtsp_transport tcp -stimeout 5000000 -i <url> \
+//	ffmpeg -rtsp_transport tcp -rw_timeout 5000000 -i <url> \
 //	       -f mjpeg -q:v 5 -r 10 -an pipe:1
 //
-// -stimeout 5000000 caps the initial RTSP handshake at 5 seconds so
-// the preview handler can fail over to 503 on an unreachable camera
-// instead of hanging the request. exec.CommandContext kills ffmpeg
-// when the request context is cancelled (client disconnect, server
-// shutdown).
+// -rw_timeout 5000000 caps the initial RTSP handshake at 5 seconds
+// so the preview handler can fail over to 503 on an unreachable
+// camera instead of hanging the request. (Older ffmpeg used
+// -stimeout; the option was deprecated in ffmpeg 6 and removed in
+// ffmpeg 7+ — bench Mac runs 8.0.1 and rejected -stimeout with
+// "Option not found". 2026-05-26 smoke caught this.)
+// exec.CommandContext kills ffmpeg when the request context is
+// cancelled (client disconnect, server shutdown).
 //
 // The agent.AugmentSubprocessPath helper from cmd/uknomi-edge-ui/main
 // ensures /opt/homebrew/bin (Apple Silicon) is on PATH so ffmpeg
 // resolves under launchd's minimal default PATH.
 type FFmpegRunner struct{}
 
-// Start invokes ffmpeg and returns a FrameStream that splits ffmpeg's
-// continuous JPEG-after-JPEG output on SOI markers. Cancelling ctx
-// kills the subprocess via exec.CommandContext.
-func (FFmpegRunner) Start(ctx context.Context, rtspURL string) (FrameStream, error) {
-	cmd := exec.CommandContext(ctx, "ffmpeg",
+// ffmpegArgs is the pure argv builder, extracted so a test pins the
+// flag set against future ffmpeg releases (e.g. the -stimeout
+// removal in ffmpeg 7).
+func ffmpegArgs(rtspURL string) []string {
+	return []string{
 		"-rtsp_transport", "tcp",
-		"-stimeout", "5000000",
+		"-rw_timeout", "5000000",
 		"-i", rtspURL,
 		"-f", "mjpeg",
 		"-q:v", "5",
 		"-r", "10",
 		"-an",
 		"pipe:1",
-	)
+	}
+}
+
+// Start invokes ffmpeg and returns a FrameStream that splits ffmpeg's
+// continuous JPEG-after-JPEG output on SOI markers. Cancelling ctx
+// kills the subprocess via exec.CommandContext. Stderr is tailed
+// into a bounded buffer; on first-frame failure the FrameStream's
+// NextFrame returns an error containing the tail so the 503 surfaced
+// to the operator includes ffmpeg's actual complaint instead of just
+// "EOF".
+func (FFmpegRunner) Start(ctx context.Context, rtspURL string) (FrameStream, error) {
+	cmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs(rtspURL)...)
+	stderrTail := &tailBuf{max: 4096}
+	cmd.Stderr = stderrTail
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -223,16 +239,36 @@ func (FFmpegRunner) Start(ctx context.Context, rtspURL string) (FrameStream, err
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &ffmpegFrames{stdout: stdout, cmd: cmd}, nil
+	return &ffmpegFrames{stdout: stdout, cmd: cmd, stderrTail: stderrTail}, nil
 }
+
+// tailBuf keeps the last `max` bytes written to it; older bytes are
+// discarded. Safe for the single-goroutine writer that exec.Cmd uses
+// for cmd.Stderr — no mutex needed because we only read after the
+// subprocess has exited.
+type tailBuf struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuf) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuf) String() string { return strings.TrimSpace(string(t.buf)) }
 
 // ffmpegFrames splits ffmpeg's MJPEG-on-pipe output into discrete
 // frames by scanning for the JPEG SOI marker (0xFFD8). A frame ends
 // just before the next SOI (or at EOF).
 type ffmpegFrames struct {
-	stdout io.ReadCloser
-	cmd    *exec.Cmd
-	buf    []byte
+	stdout     io.ReadCloser
+	cmd        *exec.Cmd
+	buf        []byte
+	stderrTail *tailBuf
 }
 
 // NextFrame reads until two SOI markers have been seen (or EOF after
@@ -266,6 +302,16 @@ func (f *ffmpegFrames) NextFrame() ([]byte, error) {
 				copy(out, f.buf)
 				f.buf = nil
 				return out, nil
+			}
+			// No frame produced. If ffmpeg wrote to stderr before
+			// exiting, surface the tail so the 503 response body
+			// reads "EOF; ffmpeg: <actual complaint>" instead of
+			// just "EOF". Tested against the historical bench-mac
+			// "Unrecognized option 'stimeout'" regression.
+			if f.stderrTail != nil {
+				if tail := f.stderrTail.String(); tail != "" {
+					return nil, fmt.Errorf("%w; ffmpeg: %s", err, tail)
+				}
 			}
 			return nil, err
 		}
