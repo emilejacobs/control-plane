@@ -188,15 +188,17 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 
 // FFmpegRunner is the production RTSPRunner. Shells out to:
 //
-//	ffmpeg -rtsp_transport tcp -rw_timeout 5000000 -i <url> \
+//	ffmpeg -rtsp_transport tcp -timeout 5000000 -i <url> \
 //	       -f mjpeg -q:v 5 -r 10 -an pipe:1
 //
-// -rw_timeout 5000000 caps the initial RTSP handshake at 5 seconds
-// so the preview handler can fail over to 503 on an unreachable
-// camera instead of hanging the request. (Older ffmpeg used
-// -stimeout; the option was deprecated in ffmpeg 6 and removed in
-// ffmpeg 7+ — bench Mac runs 8.0.1 and rejected -stimeout with
-// "Option not found". 2026-05-26 smoke caught this.)
+// -timeout 5000000 caps the initial RTSP handshake at 5 seconds so
+// the preview handler can fail over to 503 on an unreachable camera
+// instead of hanging the request. Option-name history: old ffmpeg
+// used -stimeout (deprecated in 6, removed in 7); briefly -rw_timeout
+// was the documented replacement but it's not actually exposed by
+// the ffmpeg 8 RTSP demuxer; -timeout (microseconds) is what works.
+// Bench Mac runs 8.0.1; 2026-05-26 smoke pinned this via two
+// "Option not found" rounds.
 // exec.CommandContext kills ffmpeg when the request context is
 // cancelled (client disconnect, server shutdown).
 //
@@ -211,7 +213,7 @@ type FFmpegRunner struct{}
 func ffmpegArgs(rtspURL string) []string {
 	return []string{
 		"-rtsp_transport", "tcp",
-		"-rw_timeout", "5000000",
+		"-timeout", "5000000",
 		"-i", rtspURL,
 		"-f", "mjpeg",
 		"-q:v", "5",
@@ -269,6 +271,7 @@ type ffmpegFrames struct {
 	cmd        *exec.Cmd
 	buf        []byte
 	stderrTail *tailBuf
+	waited     bool
 }
 
 // NextFrame reads until two SOI markers have been seen (or EOF after
@@ -278,7 +281,7 @@ func (f *ffmpegFrames) NextFrame() ([]byte, error) {
 	// Ensure buffer starts at an SOI.
 	for len(f.buf) < 2 || !(f.buf[0] == 0xFF && f.buf[1] == 0xD8) {
 		if err := f.fill(); err != nil {
-			return nil, err
+			return nil, f.wrapEOF(err)
 		}
 		// Drop bytes before the first SOI.
 		if idx := findSOI(f.buf, 0); idx > 0 {
@@ -303,19 +306,31 @@ func (f *ffmpegFrames) NextFrame() ([]byte, error) {
 				f.buf = nil
 				return out, nil
 			}
-			// No frame produced. If ffmpeg wrote to stderr before
-			// exiting, surface the tail so the 503 response body
-			// reads "EOF; ffmpeg: <actual complaint>" instead of
-			// just "EOF". Tested against the historical bench-mac
-			// "Unrecognized option 'stimeout'" regression.
-			if f.stderrTail != nil {
-				if tail := f.stderrTail.String(); tail != "" {
-					return nil, fmt.Errorf("%w; ffmpeg: %s", err, tail)
-				}
-			}
-			return nil, err
+			// No frame produced. Wrap with stderr tail if any.
+			return nil, f.wrapEOF(err)
 		}
 	}
+}
+
+// wrapEOF reaps the subprocess (so exec.Cmd's stderr-copy goroutine
+// flushes into stderrTail) then appends the stderr tail to the error
+// if ffmpeg said anything. Without the Wait, the read races the
+// copy goroutine and stderrTail comes back empty — the original
+// 2026-05-26 "just EOF, no ffmpeg complaint" bug surfaced this on
+// both the "ffmpeg never produced a byte" path and the "ffmpeg
+// produced a partial frame then exited" path; this helper closes
+// both. Idempotent via f.waited.
+func (f *ffmpegFrames) wrapEOF(err error) error {
+	if !f.waited {
+		_ = f.cmd.Wait()
+		f.waited = true
+	}
+	if f.stderrTail != nil {
+		if tail := f.stderrTail.String(); tail != "" {
+			return fmt.Errorf("%w; ffmpeg: %s", err, tail)
+		}
+	}
+	return err
 }
 
 func (f *ffmpegFrames) fill() error {
@@ -341,6 +356,9 @@ func findSOI(b []byte, from int) int {
 
 func (f *ffmpegFrames) Close() error {
 	_ = f.stdout.Close()
-	_ = f.cmd.Wait()
+	if !f.waited {
+		_ = f.cmd.Wait()
+		f.waited = true
+	}
 	return nil
 }

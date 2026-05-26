@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -340,27 +341,29 @@ func TestPreviewHandler_ClientCancel_PropagatesToRunner(t *testing.T) {
 }
 
 // FFmpegRunner's argv is the contract with the on-device ffmpeg
-// binary. Pinning it here catches the kind of regression that bit us
-// on bench Mac 2026-05-26 with ffmpeg 8.0.1 ("Unrecognized option
-// 'stimeout'"). -stimeout was deprecated in ffmpeg 6 and removed in
-// 7+; -rw_timeout is the replacement that survives the bump.
-func TestFFmpegArgs_UsesRWTimeoutNotStimeout(t *testing.T) {
+// binary. Pinning it here catches option-rename churn — bench Mac
+// 2026-05-26 hit "Unrecognized option 'stimeout'" (removed in
+// ffmpeg 7) AND "Option rw_timeout not found" (briefly documented
+// replacement that isn't actually exposed on the RTSP demuxer in
+// ffmpeg 8). The surviving option is -timeout (microseconds).
+func TestFFmpegArgs_UsesTimeoutNotStimeoutOrRwTimeout(t *testing.T) {
 	args := ffmpegArgs("rtsp://test.example/cam")
 
-	// Negative: -stimeout must not be present (it was removed in
-	// ffmpeg 7).
-	for _, a := range args {
-		if a == "-stimeout" {
-			t.Errorf("argv still contains -stimeout (removed in ffmpeg 7); full argv: %v", args)
+	// Negative: removed / non-working option names must not appear.
+	for _, banned := range []string{"-stimeout", "-rw_timeout"} {
+		for _, a := range args {
+			if a == banned {
+				t.Errorf("argv still contains %s (rejected by ffmpeg 8); full argv: %v",
+					banned, args)
+			}
 		}
 	}
 
-	// Positive: -rw_timeout 5000000 (5s, microseconds) must be paired
-	// and adjacent — survives any future option-name churn only if we
-	// catch it.
+	// Positive: -timeout 5000000 (5s, microseconds) must be paired
+	// and adjacent — full argv pinned so reorder also fails.
 	pinned := []string{
 		"-rtsp_transport", "tcp",
-		"-rw_timeout", "5000000",
+		"-timeout", "5000000",
 		"-i", "rtsp://test.example/cam",
 		"-f", "mjpeg",
 		"-q:v", "5",
@@ -370,6 +373,41 @@ func TestFFmpegArgs_UsesRWTimeoutNotStimeout(t *testing.T) {
 	}
 	if !equalStrings(args, pinned) {
 		t.Errorf("ffmpegArgs mismatch:\n got: %v\nwant: %v", args, pinned)
+	}
+}
+
+// Regression: stderr-flush race. The original wiring read stderrTail
+// before cmd.Wait() returned; exec.Cmd's stderr-copy goroutine hadn't
+// flushed, so the 503 body said only "EOF" instead of "EOF; ffmpeg:
+// <complaint>". Bench-Mac 2026-05-26 cost an extra cycle because the
+// first 503 was opaque.
+//
+// We simulate the production race with a real /bin/sh subprocess that
+// writes to stderr and exits without writing to stdout — the shape
+// FFmpegRunner produces when ffmpeg argparses out.
+func TestFFmpegFrames_StderrTailSurfacesAfterEOF(t *testing.T) {
+	tail := &tailBuf{max: 4096}
+	cmd := exec.Command("/bin/sh", "-c", "printf 'OOPS bad option\\n' >&2; exit 2")
+	cmd.Stderr = tail
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	frames := &ffmpegFrames{stdout: stdout, cmd: cmd, stderrTail: tail}
+	_, err = frames.NextFrame()
+	if err == nil {
+		t.Fatalf("NextFrame: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "OOPS bad option") {
+		t.Errorf("NextFrame error missing stderr tail: %v", err)
+	}
+	// Close must not panic / double-wait now that NextFrame already
+	// reaped the process.
+	if err := frames.Close(); err != nil {
+		t.Errorf("Close after NextFrame: %v", err)
 	}
 }
 
