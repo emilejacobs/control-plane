@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -202,6 +203,35 @@ func TestStatus_GUIFallback_BothMissing(t *testing.T) {
 	}
 	if len(r.calls) != 2 {
 		t.Fatalf("expected 2 launchctl calls (system + GUI), got %d: %v", len(r.calls), r.calls)
+	}
+}
+
+// guiFallback_ConsoleUIDError: /dev/console stat fails (e.g. no
+// graphical login session active). The fallback must skip cleanly,
+// surface ErrNotFound, and not panic. Also asserts no GUI launchctl
+// call was made (because we couldn't resolve a uid to address).
+func TestStatus_GUIFallback_ConsoleUIDError(t *testing.T) {
+	r := &fakeRunner{results: map[string]runResult{
+		"launchctl list com.example.useragent": {exitCode: 1, stderr: "Could not find service\n"},
+	}}
+	var buf bytes.Buffer
+	b := &launchctlBackend{
+		run:        r.run,
+		consoleUID: func() (uint32, error) { return 0, errors.New("stat /dev/console: no such file") },
+		logger:     slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+
+	_, err := b.Status(context.Background(), "com.example.useragent")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	for _, c := range r.calls {
+		if strings.HasPrefix(c, "launchctl print") {
+			t.Fatalf("GUI launchctl call should be skipped when consoleUID fails, but got: %q", c)
+		}
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected a debug log line when consoleUID fails, got none")
 	}
 }
 

@@ -111,6 +111,10 @@ func (b *launchctlBackend) Status(ctx context.Context, name string) (State, erro
 func (b *launchctlBackend) statusGUI(ctx context.Context, name string) (State, error) {
 	uid, err := b.consoleUID()
 	if err != nil {
+		b.logger.Debug("GUI-context fallback skipped: cannot resolve console uid",
+			"service", name,
+			"error", err.Error(),
+		)
 		return "", ErrNotFound
 	}
 	target := fmt.Sprintf("gui/%d/%s", uid, name)
