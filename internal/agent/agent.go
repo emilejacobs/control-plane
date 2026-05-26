@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
+	"github.com/emilejacobs/control-plane/internal/handlers/cameras"
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
@@ -55,6 +56,14 @@ type Config struct {
 	// is registered, allowing CP to push allow-list + cadence overrides
 	// down via the cmd channel. Empty disables the downward channel.
 	ConfigPath string
+
+	// CamerasPath is the absolute path to the agent-managed cameras
+	// JSON file (the downstream copy of CP's cameras inventory pushed
+	// via the cameras.update cmd, per ADR-030 § 1). When non-empty,
+	// the agent registers the cameras.update handler; empty disables
+	// it. Suggested default in the install module:
+	// /var/uknomi/agent-state/cameras.json.
+	CamerasPath string
 }
 
 type Transport interface {
@@ -136,6 +145,14 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		a.logTailReader = defaultLogTailReader{}
 	}
 	a.dispatcher.Register("log.tail", logtail.New(a.logTailReader))
+
+	// Phase 2 Edge UI rework (issue #2): cameras.update handler.
+	// Registered when a cameras file path is configured. Empty path
+	// disables the downward channel — tests that don't exercise
+	// cameras leave it empty.
+	if cfg.CamerasPath != "" {
+		a.dispatcher.Register("cameras.update", cameras.New(NewCamerasApplier(cfg.CamerasPath)))
+	}
 
 	interval := cfg.TelemetryInterval
 	if interval <= 0 {
