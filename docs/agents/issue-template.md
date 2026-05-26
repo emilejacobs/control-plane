@@ -1,18 +1,18 @@
 # Issue Template
 
-The shape every implementation issue under `.scratch/<feature>/issues/` follows. File-naming, the `Status:` line, and the ephemeral posture are covered in [`issue-tracker.md`](./issue-tracker.md); this file is the skeleton and the rationale for the standing documentation criterion.
+The shape every implementation issue follows when filed on GitHub Issues. Tracker conventions are in [`issue-tracker.md`](./issue-tracker.md); this file is the body skeleton and the rationale for the standing documentation criterion.
 
 ## Format
 
-```markdown
-# Issue NN — Title
+The GitHub issue **title** is short, imperative, descriptive (no `Issue NN —` prefix; GitHub assigns the number). The **body** is markdown, in this shape:
 
-Status: <triage role — see triage-labels.md>
+```markdown
 Type: <AFK | HITL>
 
 ## Parent
 
-- PRD: [`PRD.md`](../PRD.md) § <relevant sections>
+- PRD: [`.scratch/<feature>/PRD.md`](../../.scratch/<feature>/PRD.md) § <sections>
+  (or the driving ADR: [`docs/adr/NNNN-...md`](../adr/NNNN-...md))
 - ADRs: <the ADRs this work must honour>
 
 ## What to build
@@ -32,10 +32,12 @@ explicit note of what is deliberately deferred to a later issue.
 
 ## Blocked by
 
-- <issues or external work that must land first, or "None">
+- #<issue-number>, or "None — can start immediately"
 ```
 
-`## Comments` is not part of the initial issue — it is appended at the bottom on completion (see [`issue-tracker.md`](./issue-tracker.md)). The completion comment is where the documentation criterion is discharged: either "docs updated: …" or an explicit "no documentation impact".
+The triage label (one of `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix` — see [`triage-labels.md`](./triage-labels.md)) is applied as a GitHub label at create time, not as a body line.
+
+Comments on the GitHub issue capture conversation as work progresses. The completion comment — posted just before `gh issue close` — is where the documentation criterion is discharged: either "docs updated: …" or an explicit "no documentation impact".
 
 ## The documentation criterion
 

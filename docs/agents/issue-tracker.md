@@ -1,30 +1,39 @@
-# Issue tracker: Local Markdown
+# Issue tracker: GitHub Issues
 
-Issues and PRDs for this repo live as markdown files in `.scratch/`. There is no remote issue tracker (no GitHub remote yet — to be added later).
+Implementation work for this repo is tracked on **GitHub Issues** at https://github.com/emilejacobs/control-plane/issues. Skills that say "publish to the issue tracker" or "fetch the relevant ticket" mean GitHub.
 
-## Posture: ephemeral
+## What lives where
 
-Issues here are **short-lived working notes** — open design questions, "circle back to this," PRD drafts. They are not durable records.
+| Artifact | Where | Why |
+|---|---|---|
+| **PRDs / design docs** | `.scratch/<feature-slug>/PRD.md` (in-tree) | Often longer than fits a GitHub issue body; benefits from being diff'd in PRs alongside code; lives near the ADRs it references. |
+| **Implementation issues** | GitHub Issues | Standard tracker; integrates with PRs; agent-discoverable via `gh`. |
+| **Architectural decisions** | `docs/adr/` | Durable, indexed at `docs/decisions.md`. **ADRs are never issues** — they survive feature lifecycles. |
+| **Working notes / open questions** | `.scratch/<feature-slug>/` | Ephemeral. Anything that turns out to be durable gets promoted to an ADR. |
 
-- Durable design decisions belong in an **ADR**, not an issue. If a decision is worth surviving the eventual move to GitHub, write it up under `docs/adr/` instead.
-- When a remote tracker is added, do **not** auto-migrate. Anything in `.scratch/` that still matters gets re-filed manually; anything stale gets discarded.
+`.scratch/` has historical content from before GitHub Issues was wired up (closed Phase-0/1 work, several Phase-2 slices). Leave that as-is for reference — no migration. New work uses the split above.
 
-## Conventions
+## Conventions for GitHub issues
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The PRD is `.scratch/<feature-slug>/PRD.md`
-- Implementation issues are `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- **Title**: short, imperative, descriptive (e.g. "Cameras inventory in CP + agent sync"). No issue-number prefix in the title — GitHub assigns the number.
+- **Body**: follows [`issue-template.md`](./issue-template.md) — parent reference, scope, acceptance criteria with the standing documentation criterion, blockers.
+- **Triage**: applied as a GitHub label. The five-role vocabulary is in [`triage-labels.md`](./triage-labels.md). A newly-filed issue gets exactly one triage label.
+- **Blocked-by**: written in the body's "Blocked by" section as `#<issue-number>` references. GitHub renders them as cross-links automatically.
+- **Done**: close the issue. A completion comment on the closed issue captures any "documentation criterion discharged: …" notes (per the issue template).
 
-## Issue structure
+## Multi-slice feature work
 
-New implementation issues follow the skeleton in [`issue-template.md`](./issue-template.md). Every issue carries a standing **documentation** acceptance criterion, so `docs/` (architecture, glossary, ADRs) does not drift behind the code as issues land — see the template for the rationale.
+When a feature breaks into multiple implementation slices (typically via the `/to-issues` skill):
+
+1. The PRD or driving ADR lives in-tree (`.scratch/<feature>/PRD.md` or `docs/adr/NNNN-...md`).
+2. Each slice = one GitHub issue. The body's "Parent" section links to the in-tree PRD/ADR via a markdown link to its path (GitHub renders these as clickable links to the file at the issue's commit).
+3. Slice issues reference each other via `#NN` blockers.
+4. An optional **epic** issue can be filed to group the slices; not required.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+Run `gh issue create --title "<title>" --body "<body>" --label "<triage-label>"`. The body should match [`issue-template.md`](./issue-template.md). Capture the returned URL for any callers that need it.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+Run `gh issue view <number>` (or take a URL/number from the user). Issue bodies + comments give the full state.

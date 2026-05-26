@@ -30,11 +30,11 @@ Centralized AWS-hosted control plane for managing ~63 edge devices (25 Macs + 36
 
 ### Issue tracker
 
-Local markdown under `.scratch/<feature>/`; ephemeral (no remote tracker yet — GitHub may be added later). Promote durable decisions to ADRs rather than tracking them as issues. See `docs/agents/issue-tracker.md`.
+GitHub Issues at https://github.com/emilejacobs/control-plane/issues. PRDs / design docs stay in-tree under `.scratch/<feature>/PRD.md`; implementation slices are GitHub issues that reference the PRD or driving ADR. Promote durable decisions to ADRs rather than tracking them as issues. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) plus a local `done` extension for completed issues we want to keep on disk. See `docs/agents/triage-labels.md`.
+Default five-role vocabulary on GitHub: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. "Done" is closing the issue. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
