@@ -28,6 +28,7 @@ type cameraStore struct {
 	listing   map[string][]cameras.Camera
 	listErr   error
 	updates   []updateCall
+	deletes   []deleteCall
 }
 
 type insertCall struct {
@@ -43,6 +44,11 @@ type updateCall struct {
 	label    string
 	rtspURL  string
 	isLPR    bool
+}
+
+type deleteCall struct {
+	deviceID string
+	cameraID string
 }
 
 func (s *cameraStore) GetByID(_ context.Context, id string) (registry.Device, error) {
@@ -89,6 +95,19 @@ func (s *cameraStore) UpdateCamera(_ context.Context, deviceID, cameraID, label,
 	return cameras.Camera{}, registry.ErrCameraNotFound
 }
 
+func (s *cameraStore) DeleteCamera(_ context.Context, deviceID, cameraID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deletes = append(s.deletes, deleteCall{deviceID: deviceID, cameraID: cameraID})
+	for i, c := range s.listing[deviceID] {
+		if c.CameraID == cameraID {
+			s.listing[deviceID] = append(s.listing[deviceID][:i], s.listing[deviceID][i+1:]...)
+			return nil
+		}
+	}
+	return registry.ErrCameraNotFound
+}
+
 // Tracer bullet: POST /devices/{id}/cameras with a valid body returns
 // 201 and the newly-created camera in JSON, including the server-
 // assigned camera_id. This exercises the routing → body parse → store
@@ -133,6 +152,49 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	c := store.inserts[0]
 	if c.deviceID != "dev-abc" || c.label != "Drive-thru" || c.rtspURL != "rtsp://user:pass@10.0.0.42/stream" || !c.isLPR {
 		t.Errorf("InsertCamera args: got %+v", c)
+	}
+}
+
+// DELETE /devices/{id}/cameras/{camera_id} removes the camera and
+// returns 204 No Content. Returns 404 if the row doesn't exist.
+func TestCameraDeleteRemovesCamera(t *testing.T) {
+	store := &cameraStore{
+		known: map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{
+			"dev-abc": {{CameraID: "cam1", Label: "x", RtspURL: "rtsp://x", IsLPR: false}},
+		},
+	}
+	h := devices.NewCameraDelete(store)
+
+	req := httptest.NewRequest(http.MethodDelete, "/devices/dev-abc/cameras/cam1", nil)
+	req.SetPathValue("id", "dev-abc")
+	req.SetPathValue("camera_id", "cam1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.deletes) != 1 || store.deletes[0].cameraID != "cam1" {
+		t.Errorf("DeleteCamera calls: got %+v", store.deletes)
+	}
+}
+
+func TestCameraDeleteMissingReturns404(t *testing.T) {
+	store := &cameraStore{
+		known:   map[string]bool{"dev-abc": true},
+		listing: map[string][]cameras.Camera{"dev-abc": {}},
+	}
+	h := devices.NewCameraDelete(store)
+
+	req := httptest.NewRequest(http.MethodDelete, "/devices/dev-abc/cameras/cam-missing", nil)
+	req.SetPathValue("id", "dev-abc")
+	req.SetPathValue("camera_id", "cam-missing")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: got %d want 404", rec.Code)
 	}
 }
 

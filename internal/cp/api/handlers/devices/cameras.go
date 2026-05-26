@@ -21,6 +21,7 @@ type CameraStore interface {
 	InsertCamera(ctx context.Context, deviceID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
 	ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error)
 	UpdateCamera(ctx context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
+	DeleteCamera(ctx context.Context, deviceID, cameraID string) error
 }
 
 // CameraPostHandler serves POST /devices/{id}/cameras — the create
@@ -183,4 +184,39 @@ func (h *CameraPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cam)
+}
+
+// CameraDeleteHandler serves DELETE /devices/{id}/cameras/{camera_id}.
+// Returns 204 No Content on success, 404 if the row doesn't exist.
+type CameraDeleteHandler struct {
+	store CameraStore
+}
+
+func NewCameraDelete(store CameraStore) *CameraDeleteHandler {
+	return &CameraDeleteHandler{store: store}
+}
+
+func (h *CameraDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cameraID := r.PathValue("camera_id")
+
+	if _, err := h.store.GetByID(r.Context(), id); err != nil {
+		if errors.Is(err, registry.ErrDeviceNotFound) {
+			http.Error(w, "device not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.store.DeleteCamera(r.Context(), id, cameraID); err != nil {
+		if errors.Is(err, registry.ErrCameraNotFound) {
+			http.Error(w, "camera not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
