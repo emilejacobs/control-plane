@@ -12,6 +12,8 @@
 package networkscan
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"strings"
@@ -44,6 +46,34 @@ func AsValidation(err error) (*ValidationError, bool) {
 		return v, true
 	}
 	return nil, false
+}
+
+// Request is the on-wire shape both the API body and the cmd's Args
+// field carry. CIDR is optional — when empty the agent auto-detects the
+// device's primary subnet and scans that.
+type Request struct {
+	CIDR string `json:"cidr,omitempty"`
+}
+
+// ParseRequest enforces the field whitelist (rejects unknown fields)
+// and the CIDR validation (when non-empty). Empty / absent input is a
+// valid request: the agent auto-detects.
+func ParseRequest(raw json.RawMessage) (Request, error) {
+	if len(raw) == 0 {
+		return Request{}, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var req Request
+	if err := dec.Decode(&req); err != nil {
+		return Request{}, &ValidationError{Code: CodeUnknownField, Message: err.Error()}
+	}
+	if req.CIDR != "" {
+		if err := ValidateCIDR(req.CIDR); err != nil {
+			return Request{}, err
+		}
+	}
+	return req, nil
 }
 
 // ValidateCIDR enforces that the input is a parseable IPv4 CIDR. IPv6
