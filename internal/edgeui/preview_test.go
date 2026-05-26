@@ -199,6 +199,114 @@ func TestPreviewHandler_RunnerErrorOnStart_503(t *testing.T) {
 	}
 }
 
+func TestPreviewHandler_PassesCorrectRtspURLForCameraID(t *testing.T) {
+	runner := newFakeRunner([][]byte{jpegFrame(0x42, 32)})
+	h := NewPreviewHandler(staticCameras(t, []cameras.Camera{
+		{CameraID: "cam1", RtspURL: "rtsp://drive-thru/stream"},
+		{CameraID: "cam2", RtspURL: "rtsp://entry/stream"},
+	}), runner)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/preview/cam2/stream", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	if runner.lastURL != "rtsp://entry/stream" {
+		t.Fatalf("expected runner to receive cam2's URL, got %q", runner.lastURL)
+	}
+}
+
+func TestPreviewHandler_UnknownCameraID_404JSON(t *testing.T) {
+	runner := newFakeRunner(nil)
+	h := NewPreviewHandler(staticCameras(t, []cameras.Camera{
+		{CameraID: "cam1", RtspURL: "rtsp://host/stream"},
+	}), runner)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/preview/cam99/stream")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"code":"camera_not_found"`) {
+		t.Fatalf("body did not include code=camera_not_found: %s", body)
+	}
+	if runner.startCount != 0 {
+		t.Fatalf("runner should not have been started for unknown camera_id (calls: %d)", runner.startCount)
+	}
+}
+
+func TestPreviewHandler_MissingCamerasFile_404(t *testing.T) {
+	// CamerasReader that errors (mimics a malformed cameras.json or
+	// a permissions issue) — the operator-facing failure is the same:
+	// no URL to stream, surface 404.
+	cr := CamerasReaderFunc(func() (map[string]cameras.Camera, error) {
+		return nil, errors.New("read error")
+	})
+	runner := newFakeRunner(nil)
+	h := NewPreviewHandler(cr, runner)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/preview/cam1/stream")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+}
+
+func TestPreviewHandler_EmptyCamerasFile_404(t *testing.T) {
+	// Pre-install device — cameras.json doesn't exist yet so the
+	// reader returns an empty map. Any /preview/<camera_id>/stream
+	// must 404.
+	h := NewPreviewHandler(staticCameras(t, nil), newFakeRunner(nil))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/preview/cam1/stream")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+}
+
+// /preview/cam1 (no /stream suffix) is a SPA route — the API
+// handler must not match it. The static handler (cycle 7) owns it.
+func TestPreviewHandler_BareCameraURL_404(t *testing.T) {
+	h := NewPreviewHandler(staticCameras(t, []cameras.Camera{
+		{CameraID: "cam1", RtspURL: "rtsp://x/y"},
+	}), newFakeRunner(nil))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/preview/cam1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for bare /preview/cam1 (SPA route), got %d", resp.StatusCode)
+	}
+}
+
 func TestPreviewHandler_ClientCancel_PropagatesToRunner(t *testing.T) {
 	// Long frame gap so the request is in mid-stream when the client
 	// disconnects — that's the case we want exercised.
