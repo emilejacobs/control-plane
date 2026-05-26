@@ -255,6 +255,13 @@ func (a *Agent) defaultCollectors() []func() map[string]any {
 			}
 			return map[string]any{"last_command_at": last.UTC().Format(time.RFC3339)}
 		},
+		// Issue #14: publish the device's primary RFC1918 IPv4
+		// (lan_ip), Tailscale IPv4 (tailscale_ip), and MagicDNS
+		// name (tailscale_name) when each is detected. Fields are
+		// OMITTED (not "") when their detector returns empty so
+		// cp-ingest's conditional UPDATE doesn't clobber stored
+		// values when the agent loses tailnet visibility mid-life.
+		NewNetworkCollector(SystemInterfaceAddrs{}, SystemTailscaleStatusRunner{}),
 	}
 }
 
