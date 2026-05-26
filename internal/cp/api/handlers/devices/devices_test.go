@@ -220,6 +220,34 @@ func TestGetDeviceSiteAndClientAreNullWhenUnassigned(t *testing.T) {
 	}
 }
 
+func TestGetDeviceSurfacesAssetNumber(t *testing.T) {
+	asset := "AC-00237"
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:          "dev-1",
+		EnrolledAt:  time.Now(),
+		AssetNumber: &asset,
+	}})
+
+	out := getDevice(t, h)
+
+	if got := out["asset_number"]; got != asset {
+		t.Errorf("asset_number: got %v want %q", got, asset)
+	}
+}
+
+func TestGetDeviceAssetNumberIsNullWhenUnassigned(t *testing.T) {
+	h := NewGet(fakeService{dev: registry.Device{
+		ID:         "dev-1",
+		EnrolledAt: time.Now(),
+	}})
+
+	out := getDevice(t, h)
+
+	if got, ok := out["asset_number"]; !ok || got != nil {
+		t.Errorf("asset_number: got %v want null (key must be present)", got)
+	}
+}
+
 // Phase 2 slice 2: service_config block renders override + last-applied
 // from the registry's ServiceConfig. No override ⇒ both *override fields
 // null; no ACK yet ⇒ last_applied_* null. Dashboard differentiates

@@ -51,6 +51,10 @@ type response struct {
 	// the per-device view shows "Unassigned" for those.
 	SiteName   *string `json:"site_name"`
 	ClientName *string `json:"client_name"`
+	// AssetNumber is the fleet-tracking identifier (migration 014).
+	// Null until install-module 11 populates it; rendered as
+	// "Unassigned" on the per-device Deployment card.
+	AssetNumber *string `json:"asset_number"`
 	// Services is the per-service state snapshot from the agent's last
 	// service-status report (Phase 2). Empty array (not null) for a
 	// device that has never reported — the dashboard distinguishes
@@ -227,6 +231,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		EnrolledAt:            dev.EnrolledAt.UTC().Format(time.RFC3339),
 		SiteName:              dev.SiteName,
 		ClientName:            dev.ClientName,
+		AssetNumber:           dev.AssetNumber,
 		Services:              services,
 		ServiceConfig:         serviceConfig,
 	})
