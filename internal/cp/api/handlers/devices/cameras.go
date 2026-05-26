@@ -64,6 +64,10 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "label is required", http.StatusBadRequest)
 		return
 	}
+	if !strings.HasPrefix(req.RtspURL, "rtsp://") && !strings.HasPrefix(req.RtspURL, "rtsps://") {
+		http.Error(w, "rtsp_url must begin with rtsp:// or rtsps://", http.StatusBadRequest)
+		return
+	}
 
 	cam, err := h.store.InsertCamera(r.Context(), id, label, req.RtspURL, req.IsLPR)
 	if err != nil {

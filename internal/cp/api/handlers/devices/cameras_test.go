@@ -102,6 +102,50 @@ func TestCameraPostReturns201WithNewCamera(t *testing.T) {
 	}
 }
 
+// rtsp_url must begin with rtsp:// or rtsps://. Catches the most
+// common operator mistake (pasted the http: admin-UI URL by accident);
+// permissive enough on everything after the scheme so vendor URLs with
+// credentials + special chars (@, :, &) are not rejected.
+func TestCameraPostRejectsBadRtspScheme(t *testing.T) {
+	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
+	h := devices.NewCameraPost(store)
+
+	cases := []string{
+		`{"label":"x","rtsp_url":"http://10.0.0.42/stream","is_lpr":false}`,
+		`{"label":"x","rtsp_url":"10.0.0.42/stream","is_lpr":false}`,
+		`{"label":"x","rtsp_url":"","is_lpr":false}`,
+	}
+	for _, body := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+		req.SetPathValue("id", "dev-abc")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status for body %s: got %d want 400; resp=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if len(store.inserts) != 0 {
+		t.Errorf("InsertCamera must not be called on validation failure; got %d", len(store.inserts))
+	}
+}
+
+// rtsps:// is the secure-RTSP scheme and must also be accepted.
+func TestCameraPostAcceptsRtspsScheme(t *testing.T) {
+	store := &cameraStore{known: map[string]bool{"dev-abc": true}, nextID: "cam1"}
+	h := devices.NewCameraPost(store)
+
+	body := `{"label":"x","rtsp_url":"rtsps://user:p@host:8322/stream","is_lpr":false}`
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-abc/cameras", strings.NewReader(body))
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("rtsps:// scheme should be accepted; got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // Empty / whitespace-only labels are rejected with 400; InsertCamera
 // is never called. A camera with no label is unidentifiable to the
 // operator — same hygiene as not allowing empty hostnames.
