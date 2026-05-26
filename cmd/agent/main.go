@@ -18,6 +18,10 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
+	// launchd's default PATH is minimal; nmap (network.scan) and docker
+	// (log.tail docker kind) ship under Homebrew's prefix.
+	agent.AugmentSubprocessPath()
+
 	configPath := flag.String("config", "", "path to JSON config file (required)")
 	flag.Parse()
 
