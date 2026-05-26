@@ -95,6 +95,22 @@ describe("per-device view", () => {
     expect(fieldValue("Site")).toBe("Unassigned");
   });
 
+  it("shows the asset number on the Deployment card", async () => {
+    deviceReturns(device({ asset_number: "AC-00237" }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("Asset number")).toBe("AC-00237");
+  });
+
+  it("shows Unassigned when the asset number is null", async () => {
+    deviceReturns(device({ asset_number: null }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("Asset number")).toBe("Unassigned");
+  });
+
   it("shows a presence chip reflecting the device's online state", async () => {
     deviceReturns(device({ is_online: true }));
     renderWithClient(<DevicePage />);

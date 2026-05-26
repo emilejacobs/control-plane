@@ -74,6 +74,10 @@ export interface Device {
   enrolledAt: string;
   siteName: string | null;
   clientName: string | null;
+  // Fleet-tracking identifier set during install. Null until
+  // install-module 11 starts shipping it; rendered "Unassigned" on
+  // the per-device Deployment card.
+  assetNumber: string | null;
   // Phase 2: per-service state from the agent's last service-status
   // report. Empty array for a device that has never reported (the
   // dashboard distinguishes "no report yet" from a missing field).
@@ -121,6 +125,7 @@ interface DeviceWire {
   enrolled_at: string;
   site_name: string | null;
   client_name: string | null;
+  asset_number: string | null;
   services: DeviceServiceWire[];
   service_config: ServiceConfigWire;
 }
@@ -164,6 +169,7 @@ export async function getDevice(id: string): Promise<Device> {
     enrolledAt: d.enrolled_at,
     siteName: d.site_name,
     clientName: d.client_name,
+    assetNumber: d.asset_number ?? null,
     services: (d.services ?? []).map((s) => ({
       name: s.name,
       state: s.state as DeviceService["state"],

@@ -128,6 +128,7 @@ export default function DevicePage() {
                   items={[
                     ["Client", d.clientName ?? UNASSIGNED],
                     ["Site", d.siteName ?? UNASSIGNED],
+                    ["Asset number", d.assetNumber ?? UNASSIGNED],
                     ["Agent version", <span className="mono">{d.agentVersion}</span>],
                     [
                       "Hardware UUID",
