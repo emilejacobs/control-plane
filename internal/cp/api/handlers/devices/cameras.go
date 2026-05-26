@@ -65,15 +65,11 @@ func (h *CameraPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := cameras.ValidateCamera(req.Label, req.RtspURL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	label := strings.TrimSpace(req.Label)
-	if label == "" {
-		http.Error(w, "label is required", http.StatusBadRequest)
-		return
-	}
-	if !strings.HasPrefix(req.RtspURL, "rtsp://") && !strings.HasPrefix(req.RtspURL, "rtsps://") {
-		http.Error(w, "rtsp_url must begin with rtsp:// or rtsps://", http.StatusBadRequest)
-		return
-	}
 
 	cam, err := h.store.InsertCamera(r.Context(), id, label, req.RtspURL, req.IsLPR)
 	if err != nil {
@@ -166,15 +162,11 @@ func (h *CameraPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := cameras.ValidateCamera(req.Label, req.RtspURL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	label := strings.TrimSpace(req.Label)
-	if label == "" {
-		http.Error(w, "label is required", http.StatusBadRequest)
-		return
-	}
-	if !strings.HasPrefix(req.RtspURL, "rtsp://") && !strings.HasPrefix(req.RtspURL, "rtsps://") {
-		http.Error(w, "rtsp_url must begin with rtsp:// or rtsps://", http.StatusBadRequest)
-		return
-	}
 
 	cam, err := h.store.UpdateCamera(r.Context(), id, cameraID, label, req.RtspURL, req.IsLPR)
 	if err != nil {
