@@ -1,0 +1,8 @@
+# The edge-ui-out/ directory is the //go:embed target for the
+# Next.js static export. `make edge-ui` populates it from edge-ui/out
+# after `next build`. We commit only the placeholder index.html + this
+# .gitignore so `go test`/`go build` work on a fresh checkout without
+# having run the make target — every other file is build output.
+*
+!.gitignore
+!index.html
