@@ -87,7 +87,7 @@ func main() {
 		ServiceAllowList:      cfg.ServiceAllowList,
 		ServiceStatusInterval: serviceStatusInterval,
 		ConfigPath:            *configPath,
-	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend()))
+	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend(logger)))
 	if err != nil {
 		logger.Error("agent", "error", err)
 		os.Exit(1)

@@ -31,21 +31,12 @@ type launchctlBackend struct {
 }
 
 // NewSystemBackend returns a launchctlBackend wired to the real
-// exec.CommandContext + /dev/console uid lookup. The logger defaults
-// to discard; callers wanting visibility into the GUI-context
-// fallback should set logger via NewSystemBackendWithLogger.
-func NewSystemBackend() Backend {
-	return newSystemBackend(slog.New(slog.NewJSONHandler(io.Discard, nil)))
-}
-
-// NewSystemBackendWithLogger is the production constructor variant
-// used by the agent so the dual-context fallback's debug line is
-// visible in agent stderr.
-func NewSystemBackendWithLogger(logger *slog.Logger) Backend {
-	return newSystemBackend(logger)
-}
-
-func newSystemBackend(logger *slog.Logger) *launchctlBackend {
+// exec.CommandContext + /dev/console uid lookup. The logger receives
+// debug lines from the GUI-context fallback; pass nil to discard.
+func NewSystemBackend(logger *slog.Logger) Backend {
+	if logger == nil {
+		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
 	return &launchctlBackend{
 		run:        execRun,
 		consoleUID: consoleUIDFromDevConsole,

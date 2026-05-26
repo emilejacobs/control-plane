@@ -7,13 +7,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 )
 
 type systemctlBackend struct{}
 
-func NewSystemBackend() Backend { return &systemctlBackend{} }
+// NewSystemBackend returns a systemctlBackend. The logger parameter
+// is accepted for cross-platform parity with the darwin constructor
+// (which uses it for the dual-context fallback debug log); the Linux
+// path has no equivalent fallback so the logger is currently unused.
+func NewSystemBackend(_ *slog.Logger) Backend { return &systemctlBackend{} }
 
 // Status shells out to `systemctl show --property=LoadState,ActiveState <name>`,
 // which returns key=value lines regardless of unit existence and uses the
