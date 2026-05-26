@@ -55,6 +55,26 @@ type Request struct {
 	CIDR string `json:"cidr,omitempty"`
 }
 
+// Host is one candidate row in the scan result. IP is the v4 address
+// string; MAC is the link-layer address in colon-separated lowercase
+// hex (the canonical form most OUI tables use); Vendor is the lookup
+// hit or empty string when unknown; OpenPorts is a sorted ascending
+// list filtered to the camera-relevant set (80, 443, 554, 8000, 8080).
+type Host struct {
+	IP        string `json:"ip"`
+	MAC       string `json:"mac"`
+	Vendor    string `json:"vendor"`
+	OpenPorts []int  `json:"open_ports"`
+}
+
+// Response is the success-path agent → cp shape sent in
+// envelope.Result.Result. Empty Hosts is a successful scan that found
+// nothing, distinct from a scanner failure (which surfaces as a
+// CodeScanFailed envelope error instead).
+type Response struct {
+	Hosts []Host `json:"hosts"`
+}
+
 // ParseRequest enforces the field whitelist (rejects unknown fields)
 // and the CIDR validation (when non-empty). Empty / absent input is a
 // valid request: the agent auto-detects.

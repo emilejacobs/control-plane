@@ -44,6 +44,37 @@ func TestValidateCIDR(t *testing.T) {
 	}
 }
 
+// The Response on-wire shape: a list of candidate hosts. Each host has
+// ip / mac / vendor (string, possibly empty) and a sorted list of
+// open camera-relevant ports. JSON keys are snake_case to match the
+// rest of the cmd protocol.
+func TestResponseSerialization(t *testing.T) {
+	resp := networkscan.Response{
+		Hosts: []networkscan.Host{
+			{
+				IP:        "192.168.1.10",
+				MAC:       "aa:bb:cc:dd:ee:ff",
+				Vendor:    "Hikvision",
+				OpenPorts: []int{80, 554},
+			},
+		},
+	}
+	out, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"hosts":[{"ip":"192.168.1.10","mac":"aa:bb:cc:dd:ee:ff","vendor":"Hikvision","open_ports":[80,554]}]}`
+	if string(out) != want {
+		t.Errorf("Marshal:\n got  %s\n want %s", out, want)
+	}
+	// Empty list serialises as an empty array, not null — dashboard
+	// distinguishes "scan returned nothing" from a fetch failure.
+	empty, _ := json.Marshal(networkscan.Response{Hosts: []networkscan.Host{}})
+	if string(empty) != `{"hosts":[]}` {
+		t.Errorf("empty hosts: got %s, want {\"hosts\":[]}", empty)
+	}
+}
+
 // ParseRequest accepts an empty payload (auto-detect mode) and a payload
 // carrying a single optional `cidr` override. Unknown top-level fields
 // are rejected with CodeUnknownField per ADR-028's protective stance.
