@@ -123,6 +123,54 @@ interface CamerasResponseWire {
   last_applied_correlation_id: string | null;
 }
 
+// CameraInput is the request body for POST + PUT — camera_id is
+// server-assigned on POST, path-param on PUT, so it's never in the body.
+export interface CameraInput {
+  label: string;
+  rtspUrl: string;
+  isLpr: boolean;
+}
+
+export async function postCamera(deviceId: string, input: CameraInput): Promise<Camera> {
+  const res = await apiRequest(`/devices/${deviceId}/cameras`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ label: input.label, rtsp_url: input.rtspUrl, is_lpr: input.isLpr }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.text());
+  }
+  const d = (await res.json()) as CameraWire;
+  return { cameraId: d.camera_id, label: d.label, rtspUrl: d.rtsp_url, isLpr: d.is_lpr };
+}
+
+export async function putCamera(
+  deviceId: string,
+  cameraId: string,
+  input: CameraInput,
+): Promise<Camera> {
+  const res = await apiRequest(`/devices/${deviceId}/cameras/${cameraId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ label: input.label, rtsp_url: input.rtspUrl, is_lpr: input.isLpr }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.text());
+  }
+  const d = (await res.json()) as CameraWire;
+  return { cameraId: d.camera_id, label: d.label, rtspUrl: d.rtsp_url, isLpr: d.is_lpr };
+}
+
+export async function deleteCamera(deviceId: string, cameraId: string): Promise<void> {
+  const res = await apiRequest(`/devices/${deviceId}/cameras/${cameraId}`, {
+    method: "DELETE",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new ApiError(res.status, await res.text());
+  }
+}
+
 export async function getCameras(deviceId: string): Promise<CamerasResponse> {
   const res = await apiRequest(`/devices/${deviceId}/cameras`);
   if (!res.ok) {

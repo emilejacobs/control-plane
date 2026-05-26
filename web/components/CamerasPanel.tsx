@@ -14,24 +14,63 @@ import { Pill } from "./ui/Pill";
 interface Props {
   cameras: Camera[];
   lastAppliedAt: string | null;
+  // Action callbacks open the CameraDialog at the page level. Each
+  // is wired by page.tsx; the panel itself does not own the modal
+  // state.
+  onAddCamera?: () => void;
+  onEditCamera?: (camera: Camera) => void;
+  onDeleteCamera?: (camera: Camera) => void;
 }
 
-export function CamerasPanel({ cameras, lastAppliedAt }: Props) {
+export function CamerasPanel({
+  cameras,
+  lastAppliedAt,
+  onAddCamera,
+  onEditCamera,
+  onDeleteCamera,
+}: Props) {
   const pending = lastAppliedAt === null && cameras.length > 0;
 
   return (
     <div>
-      {pending && (
-        <div style={{ marginBottom: 8 }}>
-          <Pill tone="amber">Pending</Pill>
-          <span
-            className="muted"
-            style={{ marginLeft: 8, fontSize: 12.5 }}
-          >
-            Waiting for the agent to ACK the latest change.
-          </span>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 8,
+        }}
+      >
+        <div>
+          {pending && (
+            <>
+              <Pill tone="amber">Pending</Pill>
+              <span
+                className="muted"
+                style={{ marginLeft: 8, fontSize: 12.5 }}
+              >
+                Waiting for the agent to ACK the latest change.
+              </span>
+            </>
+          )}
         </div>
-      )}
+        {onAddCamera && (
+          <button
+            type="button"
+            onClick={onAddCamera}
+            style={{
+              padding: "4px 10px",
+              fontSize: 12.5,
+              background: "transparent",
+              border: "1px solid var(--line, #ccc)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            + Add camera
+          </button>
+        )}
+      </div>
       {cameras.length === 0 ? (
         <p className="muted" style={{ fontSize: 13, margin: 0 }}>
           No cameras configured yet. Use "Scan network" or "Add
@@ -47,6 +86,9 @@ export function CamerasPanel({ cameras, lastAppliedAt }: Props) {
               <th style={{ padding: "6px 8px" }}>Label</th>
               <th style={{ padding: "6px 8px", width: 60 }}>LPR</th>
               <th style={{ padding: "6px 8px" }}>RTSP URL</th>
+              {(onEditCamera || onDeleteCamera) && (
+                <th style={{ padding: "6px 8px", width: 120 }}></th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -70,6 +112,44 @@ export function CamerasPanel({ cameras, lastAppliedAt }: Props) {
                 >
                   {c.rtspUrl}
                 </td>
+                {(onEditCamera || onDeleteCamera) && (
+                  <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                    {onEditCamera && (
+                      <button
+                        type="button"
+                        onClick={() => onEditCamera(c)}
+                        style={{
+                          fontSize: 12,
+                          padding: "2px 8px",
+                          background: "transparent",
+                          border: "1px solid var(--line, #ccc)",
+                          borderRadius: 4,
+                          marginRight: 4,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                    {onDeleteCamera && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteCamera(c)}
+                        style={{
+                          fontSize: 12,
+                          padding: "2px 8px",
+                          background: "transparent",
+                          border: "1px solid var(--line, #ccc)",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          color: "var(--red, #c00)",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

@@ -5,11 +5,13 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDevice, useNow, useCameras } from "../../../lib/api/hooks";
+import { postCamera, putCamera, deleteCamera, type Camera } from "../../../lib/api/devices";
 import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
+import { CameraDialog } from "../../../components/CameraDialog";
 import { EditServicesModal } from "../../../components/EditServicesModal";
 import { LogsPanel } from "../../../components/LogsPanel";
 import { Topbar } from "../../../components/ui/Topbar";
@@ -39,6 +41,30 @@ export default function DevicePage() {
   const camData = cameras.data;
   const queryClient = useQueryClient();
   const [editingServices, setEditingServices] = useState(false);
+  // Dialog state for the cameras CRUD UI. null = closed.
+  // mode === "add" → empty form; "edit"/"delete" carry the target row.
+  const [cameraDialog, setCameraDialog] = useState<
+    | { mode: "add" }
+    | { mode: "edit"; camera: Camera }
+    | { mode: "delete"; camera: Camera }
+    | null
+  >(null);
+
+  async function handleCameraSubmit(input: {
+    label: string;
+    rtspUrl: string;
+    isLpr: boolean;
+  }) {
+    if (cameraDialog?.mode === "add") {
+      await postCamera(id, input);
+    } else if (cameraDialog?.mode === "edit") {
+      await putCamera(id, cameraDialog.camera.cameraId, input);
+    } else if (cameraDialog?.mode === "delete") {
+      await deleteCamera(id, cameraDialog.camera.cameraId);
+    }
+    setCameraDialog(null);
+    void queryClient.invalidateQueries({ queryKey: ["device", id, "cameras"] });
+  }
 
   // Cert "pill" tone derived from days remaining — mirrors the band logic
   // in CertExpiryIndicator without duplicating its text shape.
@@ -243,8 +269,19 @@ export default function DevicePage() {
               <CamerasPanel
                 cameras={camData?.cameras ?? []}
                 lastAppliedAt={camData?.lastAppliedAt ?? null}
+                onAddCamera={() => setCameraDialog({ mode: "add" })}
+                onEditCamera={(c) => setCameraDialog({ mode: "edit", camera: c })}
+                onDeleteCamera={(c) => setCameraDialog({ mode: "delete", camera: c })}
               />
             </Card>
+            {cameraDialog && (
+              <CameraDialog
+                mode={cameraDialog.mode}
+                camera={"camera" in cameraDialog ? cameraDialog.camera : undefined}
+                onSubmit={handleCameraSubmit}
+                onClose={() => setCameraDialog(null)}
+              />
+            )}
 
             <div style={{ height: 16 }} />
 
