@@ -39,3 +39,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 029 | [Edge UI rework — CP-authoritative, rewrite onto CP stack, drop unused features](./adr/0029-edge-ui-rework-scope.md) | Accepted (2026-05-25) |
 | 030 | [Edge UI per-feature surface model](./adr/0030-edge-ui-per-feature-surface.md) | Accepted (2026-05-25) |
 | 031 | [Webhook endpoint registry — CP-wide config primitive](./adr/0031-webhook-endpoint-registry.md) | Accepted (2026-05-25) |
+| 032 | [Edge UI v1 — Next.js+Go, port 5051, plain HTTP, parallel install](./adr/0032-edge-ui-v1-stack-port-tls.md) | Accepted (2026-05-26) — clarifies ADR-030 §§ 1, 8 |
