@@ -40,6 +40,8 @@ env:
   ECS_CLUSTER: uknomi-cp
   AUDIT_MIRROR_RULE: uknomi-cp-audit-mirror-daily
   AUDIT_MIRROR_TASK_DEF: uknomi-cp-audit-mirror
+  TAXONOMY_SYNC_RULE: uknomi-cp-taxonomy-sync-daily
+  TAXONOMY_SYNC_TASK_DEF: uknomi-cp-taxonomy-sync
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
@@ -62,10 +64,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # Hyphenated GHA expression keys require bracket access, not dot.
-      cp-api:       ${{ steps.combine.outputs['cp-api'] }}
-      cp-ingest:    ${{ steps.combine.outputs['cp-ingest'] }}
-      dashboard:    ${{ steps.combine.outputs['dashboard'] }}
-      audit-mirror: ${{ steps.combine.outputs['audit-mirror'] }}
+      cp-api:        ${{ steps.combine.outputs['cp-api'] }}
+      cp-ingest:     ${{ steps.combine.outputs['cp-ingest'] }}
+      dashboard:     ${{ steps.combine.outputs['dashboard'] }}
+      audit-mirror:  ${{ steps.combine.outputs['audit-mirror'] }}
+      taxonomy-sync: ${{ steps.combine.outputs['taxonomy-sync'] }}
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +100,7 @@ jobs:
               - 'internal/cp/bootstrap/**'
               - 'internal/cp/iotprovisioner/**'
               - 'internal/cp/iotpublisher/**'
+              - 'internal/cp/taxonomy/**'
             cp-ingest:
               - 'go.mod'
               - 'go.sum'
@@ -122,6 +126,13 @@ jobs:
               - 'internal/service/**'
               - 'cmd/audit-mirror/**'
               - 'internal/cp/auditmirror/**'
+            taxonomy-sync:
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/cp/storage/**'
+              - 'internal/cp/cplog/**'
+              - 'cmd/taxonomy-sync/**'
+              - 'internal/cp/taxonomy/**'
             dashboard:
               - 'web/**'
 
@@ -131,6 +142,7 @@ jobs:
           F_CP_API: ${{ steps.filter.outputs['cp-api'] }}
           F_CP_INGEST: ${{ steps.filter.outputs['cp-ingest'] }}
           F_AUDIT_MIRROR: ${{ steps.filter.outputs['audit-mirror'] }}
+          F_TAXONOMY_SYNC: ${{ steps.filter.outputs['taxonomy-sync'] }}
           F_DASHBOARD: ${{ steps.filter.outputs['dashboard'] }}
         run: |
           set -euo pipefail
@@ -143,10 +155,11 @@ jobs:
             echo "${key}=${val}" >> "$GITHUB_OUTPUT"
             echo "${key}=${val}"
           }
-          out cp-api       "$F_CP_API"
-          out cp-ingest    "$F_CP_INGEST"
-          out audit-mirror "$F_AUDIT_MIRROR"
-          out dashboard    "$F_DASHBOARD"
+          out cp-api        "$F_CP_API"
+          out cp-ingest     "$F_CP_INGEST"
+          out audit-mirror  "$F_AUDIT_MIRROR"
+          out taxonomy-sync "$F_TAXONOMY_SYNC"
+          out dashboard     "$F_DASHBOARD"
 
   # ─────────────────────────────────────────────────────────────────────────
   # Build + push only the affected images. The matrix entry's `if` is
@@ -160,7 +173,8 @@ jobs:
       needs.changes.outputs['cp-api'] == 'true' ||
       needs.changes.outputs['cp-ingest'] == 'true' ||
       needs.changes.outputs['dashboard'] == 'true' ||
-      needs.changes.outputs['audit-mirror'] == 'true'
+      needs.changes.outputs['audit-mirror'] == 'true' ||
+      needs.changes.outputs['taxonomy-sync'] == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -181,6 +195,10 @@ jobs:
           - name: audit-mirror
             context: .
             dockerfile: cmd/audit-mirror/Dockerfile
+            build_args: ""
+          - name: taxonomy-sync
+            context: .
+            dockerfile: cmd/taxonomy-sync/Dockerfile
             build_args: ""
     steps:
       - name: Skip if service unaffected
@@ -340,3 +358,56 @@ jobs:
           )"
           echo "::notice::Started audit-mirror task ${task_arn}"
           echo "Failures surface through the uknomi-cp-audit-mirror-failure CloudWatch alarm."
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Same shape as audit-mirror-run: taxonomy-sync is scheduled daily but
+  # exercise the freshly-built image immediately on push. Failures bubble
+  # through the uknomi-cp-taxonomy-sync-failure log-metric alarm.
+  taxonomy-sync-run:
+    name: Smoke-run taxonomy-sync
+    runs-on: ubuntu-latest
+    needs: [changes, build]
+    if: needs.changes.outputs['taxonomy-sync'] == 'true'
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Derive network config from the EventBridge target
+        id: netconf
+        # Same PascalCase → camelCase translation as audit-mirror.
+        run: |
+          set -euo pipefail
+          awsvpc_json="$(
+            aws events list-targets-by-rule \
+              --rule "$TAXONOMY_SYNC_RULE" \
+              --query 'Targets[0].EcsParameters.NetworkConfiguration.awsvpcConfiguration' \
+              --output json
+          )"
+          netconf="$(jq -cn --argjson c "$awsvpc_json" '{
+            awsvpcConfiguration: {
+              subnets:        $c.Subnets,
+              securityGroups: $c.SecurityGroups,
+              assignPublicIp: $c.AssignPublicIp
+            }
+          }')"
+          echo "netconf=$netconf" >> "$GITHUB_OUTPUT"
+
+      - name: Run taxonomy-sync task
+        env:
+          NETCONF: ${{ steps.netconf.outputs.netconf }}
+        run: |
+          set -euo pipefail
+          task_arn="$(
+            aws ecs run-task \
+              --cluster "$ECS_CLUSTER" \
+              --launch-type FARGATE \
+              --task-definition "$TAXONOMY_SYNC_TASK_DEF" \
+              --network-configuration "$NETCONF" \
+              --started-by "gha-build-images-${GITHUB_RUN_ID}" \
+              --query 'tasks[0].taskArn' \
+              --output text
+          )"
+          echo "::notice::Started taxonomy-sync task ${task_arn}"
+          echo "Failures surface through the uknomi-cp-taxonomy-sync-failure CloudWatch alarm."

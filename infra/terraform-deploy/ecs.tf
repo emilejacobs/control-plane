@@ -20,7 +20,7 @@ locals {
   # own /uknomi/cp-ingest log group. A deploy-root group would just sit
   # empty (and earlier confused the sweeper-tick metric filter into
   # reading the wrong group; see git history for the fix).
-  services = toset(["cp-api", "dashboard", "tailscale-subnet-router", "audit-mirror"])
+  services = toset(["cp-api", "dashboard", "tailscale-subnet-router", "audit-mirror", "taxonomy-sync"])
 }
 
 resource "aws_cloudwatch_log_group" "service" {

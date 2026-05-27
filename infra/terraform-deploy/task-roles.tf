@@ -75,6 +75,24 @@ data "aws_iam_policy_document" "cp_api" {
       "arn:aws:iot:${var.region}:${data.aws_caller_identity.current.account_id}:topic/devices/*/cmd",
     ]
   }
+  # ADR-033 § 3 — "Force sync now" button. cp-api runs the same
+  # cp-taxonomy-sync task def the EventBridge schedule fires; the
+  # task itself handles concurrency via pg_try_advisory_lock.
+  statement {
+    sid       = "TaxonomyRunTask"
+    actions   = ["ecs:RunTask"]
+    resources = ["${aws_ecs_task_definition.taxonomy_sync.arn_without_revision}:*"]
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
+  }
+  statement {
+    sid       = "TaxonomyPassRole"
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.task_execution.arn, aws_iam_role.taxonomy_sync.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_api" {

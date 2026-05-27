@@ -97,9 +97,12 @@ data "aws_iam_policy_document" "gha_deploy" {
   }
 
   statement {
-    sid       = "RunAuditMirrorTask"
-    actions   = ["ecs:RunTask"]
-    resources = ["${aws_ecs_task_definition.audit_mirror.arn_without_revision}:*"]
+    sid     = "RunScheduledTasks"
+    actions = ["ecs:RunTask"]
+    resources = [
+      "${aws_ecs_task_definition.audit_mirror.arn_without_revision}:*",
+      "${aws_ecs_task_definition.taxonomy_sync.arn_without_revision}:*",
+    ]
     condition {
       test     = "ArnEquals"
       variable = "ecs:cluster"
@@ -116,11 +119,12 @@ data "aws_iam_policy_document" "gha_deploy" {
   }
 
   statement {
-    sid     = "PassRolesToAuditMirrorTask"
+    sid     = "PassRolesToScheduledTasks"
     actions = ["iam:PassRole"]
     resources = [
       aws_iam_role.task_execution.arn,
       aws_iam_role.audit_mirror.arn,
+      aws_iam_role.taxonomy_sync.arn,
     ]
     condition {
       test     = "StringEquals"
@@ -130,9 +134,12 @@ data "aws_iam_policy_document" "gha_deploy" {
   }
 
   statement {
-    sid       = "ReadAuditMirrorRuleTargets"
-    actions   = ["events:ListTargetsByRule"]
-    resources = [aws_cloudwatch_event_rule.audit_mirror_daily.arn]
+    sid     = "ReadScheduledRuleTargets"
+    actions = ["events:ListTargetsByRule"]
+    resources = [
+      aws_cloudwatch_event_rule.audit_mirror_daily.arn,
+      aws_cloudwatch_event_rule.taxonomy_sync_daily.arn,
+    ]
   }
 }
 

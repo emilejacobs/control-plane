@@ -84,3 +84,30 @@ resource "aws_secretsmanager_secret_version" "db_dsn" {
     ignore_changes = [secret_string]
   }
 }
+
+# Cognito service-account credentials the cmd/taxonomy-sync task
+# uses to call api.uknomi.com (ADR-033 § 7). The secret was created
+# out-of-band on 2026-05-26 via AWS CLI and populated with real
+# credentials by the user — import this resource before first apply:
+#
+#   terraform import aws_secretsmanager_secret.taxonomy_api_creds \
+#     arn:aws:secretsmanager:us-east-1:523612763411:secret:uknomi/cp/taxonomy-api-creds-sPrbF6
+#
+# First apply re-encrypts the secret under aws_kms_key.main (the CP-
+# managed key) — one-time, no data loss. `ignore_changes` on
+# secret_string keeps Terraform from clobbering the real value with
+# the placeholder.
+resource "aws_secretsmanager_secret" "taxonomy_api_creds" {
+  name        = "uknomi/cp/taxonomy-api-creds"
+  description = "Cognito {username,password} for cmd/taxonomy-sync's SignIn against api.uknomi.com (ADR-033)."
+  kms_key_id  = aws_kms_key.main.arn
+}
+
+resource "aws_secretsmanager_secret_version" "taxonomy_api_creds" {
+  secret_id     = aws_secretsmanager_secret.taxonomy_api_creds.id
+  secret_string = "{\"username\":\"REPLACE_ME\",\"password\":\"REPLACE_ME\"}"
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}

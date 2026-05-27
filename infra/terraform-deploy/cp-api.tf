@@ -64,6 +64,13 @@ resource "aws_ecs_task_definition" "cp_api" {
         { name = "AWS_REGION", value = var.region },
         { name = "CP_BOOTSTRAP_SECRET_ID", value = "uknomi/cp/bootstrap-key" },
         { name = "CORS_ALLOWED_ORIGINS", value = "https://control.uknomi.com" },
+        # ADR-033 § 3 — taxonomy "Force sync now" button. Setting these
+        # enables POST /taxonomy/sync; unsetting them disables the
+        # route at cp-api startup (read surface keeps working).
+        { name = "TAXONOMY_ECS_CLUSTER", value = aws_ecs_cluster.main.arn },
+        { name = "TAXONOMY_ECS_TASK_DEF", value = aws_ecs_task_definition.taxonomy_sync.arn_without_revision },
+        { name = "TAXONOMY_ECS_SUBNETS", value = join(",", aws_subnet.private[*].id) },
+        { name = "TAXONOMY_ECS_SGS", value = aws_security_group.tasks.id },
       ]
 
       secrets = [
