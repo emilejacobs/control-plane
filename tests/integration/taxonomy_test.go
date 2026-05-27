@@ -418,10 +418,11 @@ const taxoSigninJSON = `{"AuthenticationResult":{"IdToken":"jwt","AccessToken":"
 // TestTaxonomyRunnerOneBrandOneStore is the tracer for the orchestration
 // shell against the real upstream wire shape: numeric ids on /brand and
 // /brand/{id}/store, flat client_id (no nested client), no `active`
-// field. Runner walks /brand → /brand/{id}/store, synthesizes a
-// placeholder client name from client_id (Client #14), upserts the
-// client first (its UUID is the FK target), then stamps the brand on
-// the site row.
+// field. Runner walks /brand → /brand/{id}/store, derives the client
+// name from the joined set of brands the client operates (the
+// brand-as-client-name substitute until the upstream exposes real
+// client metadata — #18 follow-up), upserts the client, then stamps
+// the brand on the site row.
 func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
@@ -462,8 +463,8 @@ func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
 	).Scan(&clientName, &active); err != nil {
 		t.Fatalf("read client: %v", err)
 	}
-	if clientName != "Client #14" || !active {
-		t.Errorf("client row: name=%q active=%v (want placeholder 'Client #14' + active=true)", clientName, active)
+	if clientName != "Burger King" || !active {
+		t.Errorf("client row: name=%q active=%v (want brand-derived 'Burger King' + active=true)", clientName, active)
 	}
 	if err := pool.QueryRow(ctx,
 		`SELECT brand_name, brand_external_id, active FROM sites WHERE external_id = $1`, "50",
@@ -526,6 +527,19 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 	}
 	if clientCount != 1 {
 		t.Errorf("client rows for client_id=14: got %d want 1 (must dedupe across brands)", clientCount)
+	}
+
+	// Multi-brand client gets the joined, sorted brand list as their
+	// name — the brand-as-client-name substitute.
+	var clientName string
+	if err := pool.QueryRow(ctx,
+		`SELECT name FROM clients WHERE external_id = $1`, "14",
+	).Scan(&clientName); err != nil {
+		t.Fatal(err)
+	}
+	if clientName != "Burger King, Dunkin Donuts" {
+		t.Errorf("client name: got %q want %q (sorted comma-joined brand names)",
+			clientName, "Burger King, Dunkin Donuts")
 	}
 
 	// Sites split by brand, both stamped with their own brand metadata.

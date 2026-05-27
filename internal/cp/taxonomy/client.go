@@ -25,10 +25,12 @@ type Brand struct {
 // "Store" is the upstream's vocabulary; CP calls the same entity a
 // Site. The upstream response is flat — `client_id` is a foreign key
 // with no nested client metadata, and there is no `/client` endpoint
-// to enrich from. The syncer synthesizes a placeholder client name
-// (`Client #<n>`) until the API exposes client identity (see #18
-// follow-up). There is no `active` field; absence-from-walk is the
-// only soft-delete signal.
+// to enrich from. The Runner derives a client name from the joined
+// set of brands the client operates ("Burger King, Dunkin Donuts" for
+// a client running both, "Eegee's" for a single-brand client) — the
+// brand-name substitute for real client identity until the upstream
+// API exposes it (#18 follow-up). There is no `active` field on the
+// store; absence-from-walk is the only soft-delete signal.
 //
 // Wire shape verified against api.uknomi.com 2026-05-27. The upstream
 // payload carries many other fields (address, geo, POS account, etc.)
