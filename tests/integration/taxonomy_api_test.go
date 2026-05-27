@@ -168,6 +168,141 @@ func (r *recordingRunTaskInvoker) Run(ctx context.Context) (string, error) {
 	return r.arn, nil
 }
 
+// TestSitesEndpointReturnsClientsWithSites locks the picker surface:
+// GET /sites returns a nested tree of clients + their active sites so
+// the device-deployment edit modal can render a single grouped list.
+// Active-only by default; inactive sites are filtered.
+func TestSitesEndpointReturnsClientsWithSites(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	store := taxonomy.NewStore(srv.Pool)
+	synced := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	c14, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "14", Name: "Client #14", SyncedAt: synced})
+	c11, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "11", Name: "Client #11", SyncedAt: synced})
+	_, _ = store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "50", Name: "DD09", ClientID: c14, BrandName: "Dunkin Donuts", BrandExternalID: "13",
+		Active: true, SyncedAt: synced,
+	})
+	_, _ = store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "60", Name: "BK Mesa", ClientID: c14, BrandName: "Burger King", BrandExternalID: "12",
+		Active: true, SyncedAt: synced,
+	})
+	_, _ = store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "70", Name: "CCs Coffee", ClientID: c11, BrandName: "CCs Coffee", BrandExternalID: "9",
+		Active: false, SyncedAt: synced, // shuttered upstream
+	})
+
+	token := mintAccessToken(t, ctx, srv)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Clients []struct {
+			ID         string `json:"id"`
+			ExternalID string `json:"external_id"`
+			Name       string `json:"name"`
+			Sites      []struct {
+				ID              string `json:"id"`
+				ExternalID      string `json:"external_id"`
+				Name            string `json:"name"`
+				BrandName       string `json:"brand_name"`
+				BrandExternalID string `json:"brand_external_id"`
+				Active          bool   `json:"active"`
+			} `json:"sites"`
+		} `json:"clients"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Client 11 has no active sites — it should be excluded from the picker.
+	if len(body.Clients) != 1 {
+		t.Fatalf("clients: got %d want 1 (client #11 has no active sites, must filter)", len(body.Clients))
+	}
+	c := body.Clients[0]
+	if c.ExternalID != "14" || c.Name != "Client #14" {
+		t.Errorf("client[0]: %+v", c)
+	}
+	if len(c.Sites) != 2 {
+		t.Fatalf("client[0].sites: got %d want 2", len(c.Sites))
+	}
+	// Sites sorted by name for stable picker order: BK Mesa, DD09.
+	if c.Sites[0].Name != "BK Mesa" || c.Sites[1].Name != "DD09" {
+		t.Errorf("sites not name-ordered: %+v", c.Sites)
+	}
+	if c.Sites[0].BrandName != "Burger King" || c.Sites[0].BrandExternalID != "12" {
+		t.Errorf("brand metadata on sites[0]: %+v", c.Sites[0])
+	}
+}
+
+// TestSitesEndpointIncludeInactiveQueryParam covers the
+// power-user/staff fallback: ?include_inactive=true returns inactive
+// sites alongside actives so a staff operator can re-assign a device
+// to a site that was swept (e.g. the upstream sync incorrectly
+// flagged it).
+func TestSitesEndpointIncludeInactiveQueryParam(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	store := taxonomy.NewStore(srv.Pool)
+	synced := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	cid, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "1", Name: "Client #1", SyncedAt: synced})
+	_, _ = store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "100", Name: "Active Site", ClientID: cid, BrandName: "X", BrandExternalID: "0",
+		Active: true, SyncedAt: synced,
+	})
+	_, _ = store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "101", Name: "Shuttered Site", ClientID: cid, BrandName: "X", BrandExternalID: "0",
+		Active: false, SyncedAt: synced,
+	})
+
+	token := mintAccessToken(t, ctx, srv)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/sites?include_inactive=true", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	var body struct {
+		Clients []struct {
+			Sites []struct {
+				Name   string `json:"name"`
+				Active bool   `json:"active"`
+			} `json:"sites"`
+		} `json:"clients"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Clients) != 1 || len(body.Clients[0].Sites) != 2 {
+		t.Fatalf("include_inactive: want 1 client × 2 sites, got %+v", body)
+	}
+	gotInactive := false
+	for _, s := range body.Clients[0].Sites {
+		if !s.Active {
+			gotInactive = true
+		}
+	}
+	if !gotInactive {
+		t.Error("?include_inactive=true: no inactive site present")
+	}
+}
+
 // mintNonStaffAccessToken is the non-staff sibling of mintAccessToken.
 // Inserts a TOTP-enrolled operator with is_staff=false and returns a
 // signed access token reflecting that.

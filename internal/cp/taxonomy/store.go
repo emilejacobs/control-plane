@@ -166,6 +166,92 @@ func (s *Store) Status(ctx context.Context) (StatusSnapshot, error) {
 	return snap, nil
 }
 
+// ClientWithSites is one row of the picker tree: a client and its sites
+// in display order (sites sorted by name).
+type ClientWithSites struct {
+	ID         string
+	ExternalID string
+	Name       string
+	Sites      []SiteSummary
+}
+
+// SiteSummary is the on-the-picker representation of a Site. Carries
+// enough to render a label ("BK Mesa — Burger King · 50") and apply
+// the assignment (ID is the local FK target for devices.site_id).
+type SiteSummary struct {
+	ID              string
+	ExternalID      string
+	Name            string
+	BrandName       string
+	BrandExternalID string
+	Active          bool
+}
+
+// ListClientsWithSites returns the picker tree. By default only active
+// clients × active sites are included; includeInactive=true returns
+// all rows (the staff fallback for re-assigning a device whose
+// previous site was incorrectly swept). Clients with zero matching
+// sites are excluded — empty groups are useless in the picker.
+//
+// Ordering: clients by name, sites within each client by name. The
+// picker shows them in this order so the operator sees the same
+// layout every time.
+func (s *Store) ListClientsWithSites(ctx context.Context, includeInactive bool) ([]ClientWithSites, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+		    c.id::text, c.external_id, c.name,
+		    s.id::text, s.external_id, s.name,
+		    s.brand_name, s.brand_external_id, s.active
+		FROM clients c
+		INNER JOIN sites s ON s.client_id = c.id
+		WHERE ($1 OR c.active)
+		  AND ($1 OR s.active)
+		ORDER BY c.name, s.name
+	`, includeInactive)
+	if err != nil {
+		return nil, fmt.Errorf("list clients with sites: %w", err)
+	}
+	defer rows.Close()
+
+	// Build the tree in pass order: rows arrive grouped by client because of ORDER BY c.name.
+	var out []ClientWithSites
+	var currentID string
+	for rows.Next() {
+		var (
+			cID, cExt, cName        string
+			sID, sExt, sName        string
+			brandName, brandExtID   *string
+			siteActive              bool
+		)
+		if err := rows.Scan(&cID, &cExt, &cName, &sID, &sExt, &sName, &brandName, &brandExtID, &siteActive); err != nil {
+			return nil, fmt.Errorf("scan site row: %w", err)
+		}
+		if cID != currentID {
+			out = append(out, ClientWithSites{ID: cID, ExternalID: cExt, Name: cName})
+			currentID = cID
+		}
+		out[len(out)-1].Sites = append(out[len(out)-1].Sites, SiteSummary{
+			ID:              sID,
+			ExternalID:      sExt,
+			Name:            sName,
+			BrandName:       strOrEmpty(brandName),
+			BrandExternalID: strOrEmpty(brandExtID),
+			Active:          siteActive,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter site rows: %w", err)
+	}
+	return out, nil
+}
+
+func strOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 // AcquireSyncLock tries to acquire the taxonomy-sync advisory lock on
 // a dedicated connection held for the duration of the run. Returns
 // ok=true and a release closure if obtained; ok=false (with a no-op

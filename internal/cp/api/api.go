@@ -219,6 +219,13 @@ func NewBuilderWith(d Deps) *Builder {
 				b.Post("/taxonomy/sync",
 					requireAuth(requireEnrolled(requireStaff(taxonomyhttp.NewSync(d.TaxonomyRunTask, auditW)))))
 			}
+			// GET /sites is the picker surface for the
+			// device-deployment edit modal: auth + TOTP, but not
+			// staff-gated — operators see the catalog so the device
+			// list can render real client/site names. Edit endpoints
+			// stay staff-only (PUT /devices/{id}/deployment below).
+			b.Get("/sites",
+				requireAuth(requireEnrolled(taxonomyhttp.NewSites(d.TaxonomyStore))))
 		}
 	}
 	return b
