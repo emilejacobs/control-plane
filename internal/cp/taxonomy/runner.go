@@ -30,15 +30,29 @@ func NewRunner(client *Client, store *Store, now func() time.Time) *Runner {
 // gracefully without doing any upstream HTTP work — the scheduled
 // daily run and the manual button race-free.
 func (r *Runner) Run(ctx context.Context) error {
-	release, gotLock, err := r.store.AcquireSyncLock(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire sync lock: %w", err)
+	return r.run(ctx, false)
+}
+
+// RunDryRun signs in and walks /brand + /brand/{id}/store the same way
+// Run does, but skips every Postgres write. Used by the binary's
+// --dry-run flag to validate Cognito credentials and payload parsing
+// from bench without touching the mirror tables.
+func (r *Runner) RunDryRun(ctx context.Context) error {
+	return r.run(ctx, true)
+}
+
+func (r *Runner) run(ctx context.Context, dryRun bool) error {
+	if !dryRun {
+		release, gotLock, err := r.store.AcquireSyncLock(ctx)
+		if err != nil {
+			return fmt.Errorf("acquire sync lock: %w", err)
+		}
+		if !gotLock {
+			slog.InfoContext(ctx, "taxonomy.sync.skipped", "reason", "advisory_lock_held")
+			return nil
+		}
+		defer release()
 	}
-	if !gotLock {
-		slog.InfoContext(ctx, "taxonomy.sync.skipped", "reason", "advisory_lock_held")
-		return nil
-	}
-	defer release()
 
 	syncStart := r.now()
 	if _, err := r.client.SignIn(ctx); err != nil {
@@ -48,7 +62,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get brands: %w", err)
 	}
-	slog.InfoContext(ctx, "taxonomy.sync.start", "brands", len(brands), "started_at", syncStart)
+	slog.InfoContext(ctx, "taxonomy.sync.start",
+		"brands", len(brands), "started_at", syncStart, "dry_run", dryRun)
 
 	for _, brand := range brands {
 		if !brand.Active {
@@ -57,6 +72,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		stores, err := r.client.GetStores(ctx, brand.ID)
 		if err != nil {
 			return fmt.Errorf("get stores for brand %q: %w", brand.ID, err)
+		}
+		if dryRun {
+			continue
 		}
 		for _, store := range stores {
 			clientLocalID, err := r.store.UpsertClient(ctx, ClientRow{
@@ -81,13 +99,15 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 	}
 
-	// Sweep happens after a successful walk only: failing partway through
-	// (e.g. /brand/{id}/store returns 5xx for one brand) leaves the
-	// already-mirrored rows alone rather than nuking them on stale data.
-	if err := r.store.SweepInactive(ctx, syncStart); err != nil {
-		return fmt.Errorf("sweep inactive: %w", err)
+	if !dryRun {
+		// Sweep happens after a successful walk only: failing partway through
+		// (e.g. /brand/{id}/store returns 5xx for one brand) leaves the
+		// already-mirrored rows alone rather than nuking them on stale data.
+		if err := r.store.SweepInactive(ctx, syncStart); err != nil {
+			return fmt.Errorf("sweep inactive: %w", err)
+		}
 	}
 
-	slog.InfoContext(ctx, "taxonomy.sync.done", "started_at", syncStart)
+	slog.InfoContext(ctx, "taxonomy.sync.done", "started_at", syncStart, "dry_run", dryRun)
 	return nil
 }

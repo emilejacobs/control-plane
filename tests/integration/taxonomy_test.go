@@ -734,3 +734,67 @@ func TestTaxonomyRunnerAdvisoryLockSkipsConcurrent(t *testing.T) {
 		t.Errorf("r1: %v", err)
 	}
 }
+
+// TestTaxonomyRunnerDryRunWalksWithoutWriting locks #18's --dry-run
+// contract: the binary still signs in + walks /brand + /brand/{id}/store
+// (so a misconfigured Cognito user or unparseable payload still
+// surfaces an error) but writes nothing to Postgres. This is the
+// "exercises auth + parsing without writing" path operators use
+// from bench to validate creds before the real run.
+func TestTaxonomyRunnerDryRunWalksWithoutWriting(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/user/signin":
+			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+		case "/brand":
+			_, _ = w.Write([]byte(`[{"id":"bk","name":"BK","active":true}]`))
+		case "/brand/bk/store":
+			_, _ = w.Write([]byte(`[{"id":"s1","name":"Site","active":true,"client":{"id":"c1","name":"Client"}}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	runner := taxonomy.NewRunner(
+		taxonomy.NewClient(srv.URL, "u", "p"),
+		taxonomy.NewStore(pool),
+		func() time.Time { return time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC) },
+	)
+	if err := runner.RunDryRun(ctx); err != nil {
+		t.Fatalf("RunDryRun: %v", err)
+	}
+
+	wantHits := []string{"/user/signin", "/brand", "/brand/bk/store"}
+	if len(hits) != len(wantHits) {
+		t.Fatalf("hits: got %v want %v", hits, wantHits)
+	}
+	for i := range wantHits {
+		if hits[i] != wantHits[i] {
+			t.Errorf("hits[%d]: got %q want %q", i, hits[i], wantHits[i])
+		}
+	}
+
+	// Postgres untouched.
+	var clientCount, siteCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM clients`).Scan(&clientCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sites`).Scan(&siteCount); err != nil {
+		t.Fatal(err)
+	}
+	if clientCount != 0 || siteCount != 0 {
+		t.Errorf("dry-run wrote to Postgres: clients=%d sites=%d", clientCount, siteCount)
+	}
+}
