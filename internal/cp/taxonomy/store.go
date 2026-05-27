@@ -36,13 +36,16 @@ type ClientRow struct {
 // SiteRow is the per-site payload the syncer hands to UpsertSite. The
 // brand columns are flat metadata: CP does not model Brand as its own
 // hierarchy level (ADR-033 § 4). ClientID is the parent's local UUID,
-// returned from a prior UpsertClient call.
+// returned from a prior UpsertClient call. Active mirrors the
+// upstream's per-store active flag — ADR-033 § 5's "API flag" signal.
+// Absent-from-sync rows are handled separately via SweepInactive.
 type SiteRow struct {
 	ExternalID      string
 	Name            string
 	ClientID        string
 	BrandName       string
 	BrandExternalID string
+	Active          bool
 	SyncedAt        time.Time
 }
 
@@ -78,17 +81,17 @@ func (s *Store) UpsertClient(ctx context.Context, in ClientRow) (string, error) 
 func (s *Store) UpsertSite(ctx context.Context, in SiteRow) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO sites (external_id, name, client_id, brand_name, brand_external_id, last_synced_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO sites (external_id, name, client_id, brand_name, brand_external_id, active, last_synced_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (external_id) DO UPDATE
 		   SET name              = EXCLUDED.name,
 		       client_id         = EXCLUDED.client_id,
 		       brand_name        = EXCLUDED.brand_name,
 		       brand_external_id = EXCLUDED.brand_external_id,
-		       last_synced_at    = EXCLUDED.last_synced_at,
-		       active            = true
+		       active            = EXCLUDED.active,
+		       last_synced_at    = EXCLUDED.last_synced_at
 		RETURNING id::text
-	`, in.ExternalID, in.Name, in.ClientID, in.BrandName, in.BrandExternalID, in.SyncedAt).Scan(&id)
+	`, in.ExternalID, in.Name, in.ClientID, in.BrandName, in.BrandExternalID, in.Active, in.SyncedAt).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("upsert site %q: %w", in.ExternalID, err)
 	}

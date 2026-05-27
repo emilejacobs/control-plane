@@ -61,11 +61,19 @@ func (r *Runner) Run(ctx context.Context) error {
 				ClientID:        clientLocalID,
 				BrandName:       brand.Name,
 				BrandExternalID: brand.ID,
+				Active:          store.Active,
 				SyncedAt:        syncStart,
 			}); err != nil {
 				return fmt.Errorf("upsert site %q: %w", store.ID, err)
 			}
 		}
+	}
+
+	// Sweep happens after a successful walk only: failing partway through
+	// (e.g. /brand/{id}/store returns 5xx for one brand) leaves the
+	// already-mirrored rows alone rather than nuking them on stale data.
+	if err := r.store.SweepInactive(ctx, syncStart); err != nil {
+		return fmt.Errorf("sweep inactive: %w", err)
 	}
 
 	slog.InfoContext(ctx, "taxonomy.sync.done", "started_at", syncStart)

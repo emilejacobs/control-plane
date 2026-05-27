@@ -164,6 +164,7 @@ func TestTaxonomyUpsertSitePersistsBrandMetadata(t *testing.T) {
 		ClientID:        clientID,
 		BrandName:       "Burger King",
 		BrandExternalID: "brand-ext-bk",
+		Active:          true,
 		SyncedAt:        syncedAt,
 	})
 	if err != nil {
@@ -210,6 +211,7 @@ func TestTaxonomyUpsertSitePersistsBrandMetadata(t *testing.T) {
 		ClientID:        clientID,
 		BrandName:       "Dunkin Donuts",
 		BrandExternalID: "brand-ext-dd",
+		Active:          true,
 		SyncedAt:        next,
 	})
 	if err != nil {
@@ -267,13 +269,13 @@ func TestTaxonomySweepInactiveMarksAbsentRows(t *testing.T) {
 	// One site under each client from a previous run.
 	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
 		ExternalID: "site-stale", Name: "Stale Site", ClientID: staleClientID,
-		BrandName: "BK", BrandExternalID: "bk", SyncedAt: old,
+		BrandName: "BK", BrandExternalID: "bk", Active: true, SyncedAt: old,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
 		ExternalID: "site-fresh", Name: "Fresh Site", ClientID: freshClientID,
-		BrandName: "BK", BrandExternalID: "bk", SyncedAt: old,
+		BrandName: "BK", BrandExternalID: "bk", Active: true, SyncedAt: old,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +288,7 @@ func TestTaxonomySweepInactiveMarksAbsentRows(t *testing.T) {
 	}
 	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
 		ExternalID: "site-fresh", Name: "Fresh Site", ClientID: freshClientID,
-		BrandName: "BK", BrandExternalID: "bk", SyncedAt: current,
+		BrandName: "BK", BrandExternalID: "bk", Active: true, SyncedAt: current,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -349,13 +351,13 @@ func TestTaxonomyStatusCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = cInactive
-	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s1", Name: "S1", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", SyncedAt: later}); err != nil {
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s1", Name: "S1", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", Active: true, SyncedAt: later}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s2", Name: "S2", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", SyncedAt: earlier}); err != nil {
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s2", Name: "S2", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", Active: true, SyncedAt: earlier}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s3", Name: "S3", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", SyncedAt: earlier}); err != nil {
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s3", Name: "S3", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", Active: true, SyncedAt: earlier}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE sites SET active = false WHERE external_id = $1`, "s3"); err != nil {
@@ -556,5 +558,107 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 	}
 	if len(clientIDs) != 1 {
 		t.Errorf("distinct client_id across both sites: got %v want one shared id", clientIDs)
+	}
+}
+
+// TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag locks ADR-033 § 5
+// dual-signal soft-delete:
+//   - "absent from sync" — a previously-mirrored site that no store
+//     walk re-touches gets active=false via the post-walk sweep.
+//   - "API flag" — a store the API returns with active=false gets
+//     active=false directly on the upsert, even if it appears in the walk.
+//
+// Tests preload Postgres with an existing site (from a prior run) that
+// the current upstream payload omits entirely, plus one with active=false.
+func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := taxonomy.NewStore(pool)
+
+	old := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	current := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+
+	// Seed: a previously synced client + site that the upcoming run will not see.
+	staleClientID, err := store.UpsertClient(ctx, taxonomy.ClientRow{
+		ExternalID: "client-old", Name: "Old Co", SyncedAt: old,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "site-old", Name: "Old Site", ClientID: staleClientID,
+		BrandName: "bk", BrandExternalID: "bk", Active: true, SyncedAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/user/signin":
+			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+		case "/brand":
+			_, _ = w.Write([]byte(`[{"id":"bk","name":"Burger King","active":true}]`))
+		case "/brand/bk/store":
+			// site-fresh is current+active; site-shuttered came back with active=false
+			// (e.g. franchisee closed the location upstream).
+			_, _ = w.Write([]byte(`[
+				{"id":"site-fresh","name":"Fresh","active":true,"client":{"id":"client-new","name":"New Co"}},
+				{"id":"site-shuttered","name":"Shuttered","active":false,"client":{"id":"client-new","name":"New Co"}}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	runner := taxonomy.NewRunner(
+		taxonomy.NewClient(srv.URL, "u", "p"),
+		store,
+		func() time.Time { return current },
+	)
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := map[string]bool{
+		"site-fresh":     true,  // explicitly active in payload
+		"site-shuttered": false, // explicitly inactive in payload (API flag)
+		"site-old":       false, // absent from payload (sweep)
+	}
+	rows, err := pool.Query(ctx, `SELECT external_id, active FROM sites`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]bool{}
+	for rows.Next() {
+		var ext string
+		var active bool
+		if err := rows.Scan(&ext, &active); err != nil {
+			t.Fatal(err)
+		}
+		got[ext] = active
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("site %s: active=%v want %v (full got=%+v)", k, got[k], v, got)
+		}
+	}
+
+	// And client-old (no longer referenced by any current store) was
+	// also swept inactive.
+	var oldActive bool
+	if err := pool.QueryRow(ctx,
+		`SELECT active FROM clients WHERE external_id = 'client-old'`).Scan(&oldActive); err != nil {
+		t.Fatal(err)
+	}
+	if oldActive {
+		t.Errorf("client-old: active=true after sweep — want false")
 	}
 }
