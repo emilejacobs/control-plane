@@ -2,7 +2,7 @@
 // path to server state (Issue 16; no setInterval in components).
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   firstRun,
   getFirstRunStatus,
@@ -11,6 +11,11 @@ import {
   type LoginInput,
 } from "./auth";
 import { getDevices, getDevice, getCameras, getNetworkScan } from "./devices";
+import {
+  getSitesTree,
+  updateDeviceDeployment,
+  type DeploymentUpdate,
+} from "./taxonomy";
 
 interface Credentials {
   email: string;
@@ -101,6 +106,33 @@ export function useNetworkScan(deviceId: string, correlationId: string | null) {
       const data = query.state.data;
       if (data?.status === "done" || data?.status === "error") return false;
       return networkScanPollInterval;
+    },
+  });
+}
+
+// useSitesTree loads the clients/sites picker tree. Long staleTime
+// because the upstream daily sync is the only realistic mutator;
+// dashboard interactions don't change this shape. Force-sync from the
+// Settings page invalidates this query when the dashboard reloads.
+export function useSitesTree() {
+  return useQuery({
+    queryKey: ["sites-tree"],
+    queryFn: getSitesTree,
+    staleTime: 5 * 60_000,
+  });
+}
+
+// useUpdateDeviceDeployment is the EditDeploymentModal's save mutation.
+// On success it invalidates the per-device record so the Deployment
+// card re-renders with the new site_name / client_name / asset_number.
+export function useUpdateDeviceDeployment(deviceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: DeploymentUpdate) =>
+      updateDeviceDeployment(deviceId, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["device", deviceId] });
+      qc.invalidateQueries({ queryKey: ["devices"] });
     },
   });
 }
