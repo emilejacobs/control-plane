@@ -127,6 +127,11 @@ type Device struct {
 	PresenceChangedAt *time.Time
 	MtlsCertExpiresAt *time.Time
 	EnrolledAt        time.Time
+	// SiteID is the local UUID of the assigned site, mirrored from the
+	// devices.site_id column. Nil for an unassigned device. The
+	// dashboard's EditDeploymentModal reads it to pre-select the
+	// current site in the picker (avoiding a fragile name-match).
+	SiteID *string
 	// SiteName and ClientName are resolved by GetByID and List via the site
 	// model; nil for a device with no site assigned.
 	SiteName   *string
@@ -166,6 +171,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       devices.os_version, devices.agent_version, devices.iot_thing_arn,
 		       devices.last_seen, devices.is_online, devices.presence_changed_at,
 		       devices.mtls_cert_expires_at, devices.enrolled_at,
+		       devices.site_id::text AS site_id,
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name
@@ -180,6 +186,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.OSVersion, &d.AgentVersion, &d.IoTThingARN,
 		&d.LastSeen, &d.IsOnline, &d.PresenceChangedAt,
 		&d.MtlsCertExpiresAt, &d.EnrolledAt,
+		&d.SiteID,
 		&d.SiteName, &d.ClientName,
 		&d.AssetNumber,
 		&d.LanIP, &d.TailscaleIP, &d.TailscaleName,

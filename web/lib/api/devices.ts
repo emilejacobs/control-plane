@@ -72,6 +72,10 @@ export interface Device {
   certExpiresAt: string | null;
   certDaysRemaining: number | null;
   enrolledAt: string;
+  // siteId is the local UUID — used by the EditDeploymentModal to
+  // pre-select the current site in the picker without fragile
+  // name-matching. Null when unassigned.
+  siteId: string | null;
   siteName: string | null;
   clientName: string | null;
   // Fleet-tracking identifier set during install. Null until
@@ -280,6 +284,7 @@ interface DeviceWire {
   mtls_cert_expires_at: string | null;
   mtls_cert_days_remaining: number | null;
   enrolled_at: string;
+  site_id: string | null;
   site_name: string | null;
   client_name: string | null;
   asset_number: string | null;
@@ -327,6 +332,7 @@ export async function getDevice(id: string): Promise<Device> {
     certExpiresAt: d.mtls_cert_expires_at,
     certDaysRemaining: d.mtls_cert_days_remaining,
     enrolledAt: d.enrolled_at,
+    siteId: d.site_id ?? null,
     siteName: d.site_name,
     clientName: d.client_name,
     assetNumber: d.asset_number ?? null,

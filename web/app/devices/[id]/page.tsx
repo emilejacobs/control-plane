@@ -5,7 +5,14 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
-import { useDevice, useNow, useCameras, useNetworkScan } from "../../../lib/api/hooks";
+import {
+  useDevice,
+  useNow,
+  useCameras,
+  useNetworkScan,
+  useSitesTree,
+  useUpdateDeviceDeployment,
+} from "../../../lib/api/hooks";
 import {
   postCamera,
   putCamera,
@@ -23,6 +30,7 @@ import { CamerasPanel } from "../../../components/CamerasPanel";
 import { CameraDialog } from "../../../components/CameraDialog";
 import { NetworkScanModal } from "../../../components/NetworkScanModal";
 import { EditServicesModal } from "../../../components/EditServicesModal";
+import { EditDeploymentModal } from "../../../components/EditDeploymentModal";
 import { LogsPanel } from "../../../components/LogsPanel";
 import { Topbar } from "../../../components/ui/Topbar";
 import { Card } from "../../../components/ui/Card";
@@ -51,6 +59,9 @@ export default function DevicePage() {
   const camData = cameras.data;
   const queryClient = useQueryClient();
   const [editingServices, setEditingServices] = useState(false);
+  const [editingDeployment, setEditingDeployment] = useState(false);
+  const sitesTree = useSitesTree();
+  const updateDeployment = useUpdateDeviceDeployment(id);
   // Dialog state for the cameras CRUD UI. null = closed.
   // mode === "add" → empty form; "edit"/"delete" carry the target row.
   // The optional `prefillIp` on "add" is set by the NetworkScanModal's
@@ -179,7 +190,18 @@ export default function DevicePage() {
                 />
               </Card>
 
-              <Card label="Deployment">
+              <Card
+                label="Deployment"
+                actions={
+                  <button
+                    type="button"
+                    onClick={() => setEditingDeployment(true)}
+                    className="btn"
+                  >
+                    Edit
+                  </button>
+                }
+              >
                 <KV
                   items={[
                     ["Client", d.clientName ?? UNASSIGNED],
@@ -287,6 +309,19 @@ export default function DevicePage() {
                 onApplied={() => {
                   void queryClient.invalidateQueries({ queryKey: ["device", id] });
                 }}
+              />
+            )}
+            {editingDeployment && d && (
+              <EditDeploymentModal
+                tree={sitesTree.data ?? []}
+                currentSiteId={d.siteId}
+                currentAssetNumber={d.assetNumber ?? null}
+                saving={updateDeployment.isPending}
+                onSubmit={async (input) => {
+                  await updateDeployment.mutateAsync(input);
+                  setEditingDeployment(false);
+                }}
+                onClose={() => setEditingDeployment(false)}
               />
             )}
 

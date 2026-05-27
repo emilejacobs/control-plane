@@ -47,6 +47,10 @@ type response struct {
 	MtlsCertExpiresAt     *string `json:"mtls_cert_expires_at"`
 	MtlsCertDaysRemaining *int    `json:"mtls_cert_days_remaining"`
 	EnrolledAt            string  `json:"enrolled_at"`
+	// SiteID is the local UUID of the assigned site (or null when
+	// unassigned). The EditDeploymentModal uses it to pre-select the
+	// current site in the picker so name collisions don't mis-resolve.
+	SiteID *string `json:"site_id"`
 	// SiteName / ClientName are null for a device with no site assigned;
 	// the per-device view shows "Unassigned" for those.
 	SiteName   *string `json:"site_name"`
@@ -238,6 +242,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		MtlsCertExpiresAt:     certExpiresAt,
 		MtlsCertDaysRemaining: certDaysRemaining,
 		EnrolledAt:            dev.EnrolledAt.UTC().Format(time.RFC3339),
+		SiteID:                dev.SiteID,
 		SiteName:              dev.SiteName,
 		ClientName:            dev.ClientName,
 		AssetNumber:           dev.AssetNumber,
