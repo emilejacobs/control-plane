@@ -10,12 +10,30 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
 )
 
-// TestClientSignInPostsCredentialsAndReturnsToken is the cycle-6 tracer
-// for the upstream HTTP client. POST /user/signin against api.uknomi.com
-// (ADR-033 § 7) takes a JSON {username, password} body and returns a
-// Cognito JWT the caller threads through Authorization: Bearer on
-// subsequent requests. The client wraps that single exchange.
-func TestClientSignInPostsCredentialsAndReturnsToken(t *testing.T) {
+// signinPayload is the Cognito-native shape api.uknomi.com's
+// /user/signin returns (the upstream Lambda proxies InitiateAuth
+// straight through). Tests build it via helper so the fixture stays
+// faithful to the wire shape verified 2026-05-27.
+func signinPayload(idToken string) string {
+	b, _ := json.Marshal(map[string]any{
+		"AuthenticationResult": map[string]any{
+			"IdToken":      idToken,
+			"AccessToken":  "fake-access",
+			"RefreshToken": "fake-refresh",
+			"ExpiresIn":    86400,
+			"TokenType":    "Bearer",
+		},
+	})
+	return string(b)
+}
+
+// TestClientSignInExtractsIdTokenFromAuthenticationResult verifies
+// the upstream `/user/signin` wire shape: a Cognito-native
+// {AuthenticationResult: {IdToken, AccessToken, ...}} envelope. The
+// client extracts IdToken specifically — AccessToken is rejected by
+// the API Gateway COGNITO_USER_POOLS authorizer on the protected
+// routes (verified 2026-05-27).
+func TestClientSignInExtractsIdTokenFromAuthenticationResult(t *testing.T) {
 	var gotMethod, gotPath, gotContentType string
 	var gotBody struct {
 		Username string `json:"username"`
@@ -27,7 +45,7 @@ func TestClientSignInPostsCredentialsAndReturnsToken(t *testing.T) {
 		gotContentType = r.Header.Get("Content-Type")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "fake-jwt"})
+		_, _ = w.Write([]byte(signinPayload("the-real-id-jwt")))
 	}))
 	defer srv.Close()
 
@@ -49,8 +67,8 @@ func TestClientSignInPostsCredentialsAndReturnsToken(t *testing.T) {
 	if gotBody.Username != "user@uknomi" || gotBody.Password != "hunter2" {
 		t.Errorf("body: got %+v", gotBody)
 	}
-	if token != "fake-jwt" {
-		t.Errorf("token: got %q want fake-jwt", token)
+	if token != "the-real-id-jwt" {
+		t.Errorf("token: got %q want the-real-id-jwt (IdToken from AuthenticationResult)", token)
 	}
 }
 
@@ -70,22 +88,40 @@ func TestClientSignInReturnsErrorOnNon200(t *testing.T) {
 	}
 }
 
+// TestClientSignInRejectsEmptyIdToken locks the contract: a 200 with
+// AuthenticationResult missing IdToken (e.g. challenge response, or
+// the API team changing the shape) must surface as an error rather
+// than silently proceeding with an empty Bearer token.
+func TestClientSignInRejectsEmptyIdToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"AuthenticationResult":{"AccessToken":"acc"}}`))
+	}))
+	defer srv.Close()
+
+	c := taxonomy.NewClient(srv.URL, "u", "p")
+	if _, err := c.SignIn(context.Background()); err == nil {
+		t.Errorf("SignIn: want error on empty IdToken")
+	}
+}
+
 // TestClientGetBrandsSendsBearer verifies the authenticated read path:
-// GET /brand requires a prior SignIn, threads the JWT through the
-// Authorization header per ADR-033 § 7, and parses the brand list.
+// GET /brand sends the SignIn-issued IdToken as Bearer and parses the
+// real wire shape — a flat array of numeric-id brands (verified
+// against api.uknomi.com 2026-05-27, no `active` field).
 func TestClientGetBrandsSendsBearer(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/user/signin":
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{"token": "jwt-1"})
+			_, _ = w.Write([]byte(signinPayload("jwt-1")))
 		case "/brand":
 			gotAuth = r.Header.Get("Authorization")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[
-				{"id":"b1","name":"Burger King","active":true},
-				{"id":"b2","name":"Dunkin Donuts","active":true}
+				{"id":12,"name":"Burger King"},
+				{"id":13,"name":"Dunkin Donuts"}
 			]`))
 		default:
 			http.NotFound(w, r)
@@ -107,7 +143,7 @@ func TestClientGetBrandsSendsBearer(t *testing.T) {
 	if len(brands) != 2 {
 		t.Fatalf("brands: got %d want 2", len(brands))
 	}
-	if brands[0].ID != "b1" || brands[0].Name != "Burger King" || !brands[0].Active {
+	if brands[0].ID != 12 || brands[0].Name != "Burger King" {
 		t.Errorf("brands[0]: %+v", brands[0])
 	}
 }
@@ -123,7 +159,11 @@ func TestClientGetBrandsReSignsOn401(t *testing.T) {
 		case "/user/signin":
 			signins++
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"token":"jwt-` + map[bool]string{true: "1", false: "2"}[signins == 1] + `"}`))
+			token := "jwt-2"
+			if signins == 1 {
+				token = "jwt-1"
+			}
+			_, _ = w.Write([]byte(signinPayload(token)))
 		case "/brand":
 			brandHits++
 			// First /brand call: pretend the token expired. Second call:
@@ -133,7 +173,7 @@ func TestClientGetBrandsReSignsOn401(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`[{"id":"b1","name":"BK","active":true}]`))
+			_, _ = w.Write([]byte(`[{"id":12,"name":"BK"}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -155,22 +195,26 @@ func TestClientGetBrandsReSignsOn401(t *testing.T) {
 	}
 }
 
-// TestClientGetStoresReturnsClientNested verifies the per-brand store
-// walk: GET /brand/{id}/store returns stores with their nested client
-// info — the syncer dedupes clients across brands via the nested IDs.
-func TestClientGetStoresReturnsClientNested(t *testing.T) {
+// TestClientGetStoresReturnsFlatClientID verifies the per-brand store
+// walk: GET /brand/{id}/store returns a flat array where each store
+// carries `client_id` and `brand_id` as numeric foreign keys (no
+// nested client object, no `active` field — verified against
+// api.uknomi.com 2026-05-27). Extra upstream fields beyond what the
+// mirror needs (address, geo, POS account, etc.) are silently ignored
+// by the JSON decoder.
+func TestClientGetStoresReturnsFlatClientID(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/user/signin":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"token":"jwt"}`))
-		case r.URL.Path == "/brand/b1/store":
+			_, _ = w.Write([]byte(signinPayload("jwt")))
+		case r.URL.Path == "/brand/13/store":
 			gotPath = r.URL.Path
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[
-				{"id":"s1","name":"Site 1","active":true,"client":{"id":"c1","name":"Rao"}},
-				{"id":"s2","name":"Site 2","active":false,"client":{"id":"c1","name":"Rao"}}
+				{"id":50,"name":"DD09","client_id":14,"brand_id":13,"address_line_1":"114 Bruckner Blvd","country":"US"},
+				{"id":51,"name":"DD10","client_id":14,"brand_id":13}
 			]`))
 		default:
 			http.NotFound(w, r)
@@ -182,20 +226,17 @@ func TestClientGetStoresReturnsClientNested(t *testing.T) {
 	if _, err := c.SignIn(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	stores, err := c.GetStores(context.Background(), "b1")
+	stores, err := c.GetStores(context.Background(), 13)
 	if err != nil {
 		t.Fatalf("GetStores: %v", err)
 	}
-	if gotPath != "/brand/b1/store" {
-		t.Errorf("path: got %q", gotPath)
+	if gotPath != "/brand/13/store" {
+		t.Errorf("path: got %q want /brand/13/store", gotPath)
 	}
 	if len(stores) != 2 {
 		t.Fatalf("stores: got %d", len(stores))
 	}
-	if stores[0].Client.ID != "c1" || stores[0].Client.Name != "Rao" {
-		t.Errorf("stores[0].Client: %+v", stores[0].Client)
-	}
-	if stores[1].Active != false {
-		t.Errorf("stores[1].Active: got %v want false", stores[1].Active)
+	if stores[0].ID != 50 || stores[0].Name != "DD09" || stores[0].ClientID != 14 || stores[0].BrandID != 13 {
+		t.Errorf("stores[0]: %+v", stores[0])
 	}
 }

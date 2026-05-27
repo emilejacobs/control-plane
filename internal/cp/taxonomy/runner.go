@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 )
 
@@ -66,35 +67,41 @@ func (r *Runner) run(ctx context.Context, dryRun bool) error {
 		"brands", len(brands), "started_at", syncStart, "dry_run", dryRun)
 
 	for _, brand := range brands {
-		if !brand.Active {
-			continue
-		}
 		stores, err := r.client.GetStores(ctx, brand.ID)
 		if err != nil {
-			return fmt.Errorf("get stores for brand %q: %w", brand.ID, err)
+			return fmt.Errorf("get stores for brand %d: %w", brand.ID, err)
 		}
 		if dryRun {
 			continue
 		}
+		brandExtID := strconv.Itoa(brand.ID)
 		for _, store := range stores {
+			clientExtID := strconv.Itoa(store.ClientID)
 			clientLocalID, err := r.store.UpsertClient(ctx, ClientRow{
-				ExternalID: store.Client.ID,
-				Name:       store.Client.Name,
-				SyncedAt:   syncStart,
+				ExternalID: clientExtID,
+				// Upstream exposes no client metadata — only client_id.
+				// Synthesize a placeholder until the API surfaces names;
+				// dashboard renders "Client #14" in pickers. Tracked as
+				// a #18 follow-up.
+				Name:     "Client #" + clientExtID,
+				SyncedAt: syncStart,
 			})
 			if err != nil {
-				return fmt.Errorf("upsert client %q: %w", store.Client.ID, err)
+				return fmt.Errorf("upsert client %d: %w", store.ClientID, err)
 			}
 			if _, err := r.store.UpsertSite(ctx, SiteRow{
-				ExternalID:      store.ID,
+				ExternalID:      strconv.Itoa(store.ID),
 				Name:            store.Name,
 				ClientID:        clientLocalID,
 				BrandName:       brand.Name,
-				BrandExternalID: brand.ID,
-				Active:          store.Active,
-				SyncedAt:        syncStart,
+				BrandExternalID: brandExtID,
+				// Upstream `/brand/{id}/store` has no per-row active flag;
+				// a store returned by the walk IS active. Absence-from-walk
+				// is the sole soft-delete signal (handled by SweepInactive).
+				Active:   true,
+				SyncedAt: syncStart,
 			}); err != nil {
-				return fmt.Errorf("upsert site %q: %w", store.ID, err)
+				return fmt.Errorf("upsert site %d: %w", store.ID, err)
 			}
 		}
 	}

@@ -410,12 +410,18 @@ func TestTaxonomyStatusEmptyReportsNilLastSyncedAt(t *testing.T) {
 	}
 }
 
-// TestTaxonomyRunnerOneBrandOneStore is the cycle-8 tracer for the
-// orchestration shell: given a httptest fake of the upstream API
-// returning a single active brand whose only store carries one client,
-// the Runner walks /brand → /brand/{id}/store, upserts the client first
-// (its UUID is needed by the site), then upserts the site with the
-// brand stamped onto the row.
+// taxoSigninJSON is the Cognito-native InitiateAuth shape the real
+// api.uknomi.com /user/signin returns (verified 2026-05-27). Fixtures
+// use it so tests stay faithful to the wire shape.
+const taxoSigninJSON = `{"AuthenticationResult":{"IdToken":"jwt","AccessToken":"acc","RefreshToken":"r","ExpiresIn":86400,"TokenType":"Bearer"}}`
+
+// TestTaxonomyRunnerOneBrandOneStore is the tracer for the orchestration
+// shell against the real upstream wire shape: numeric ids on /brand and
+// /brand/{id}/store, flat client_id (no nested client), no `active`
+// field. Runner walks /brand → /brand/{id}/store, synthesizes a
+// placeholder client name from client_id (Client #14), upserts the
+// client first (its UUID is the FK target), then stamps the brand on
+// the site row.
 func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
@@ -429,11 +435,11 @@ func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user/signin":
-			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			_, _ = w.Write([]byte(taxoSigninJSON))
 		case "/brand":
-			_, _ = w.Write([]byte(`[{"id":"bk","name":"Burger King","active":true}]`))
-		case "/brand/bk/store":
-			_, _ = w.Write([]byte(`[{"id":"s1","name":"Mesa AZ","active":true,"client":{"id":"rao","name":"Rao"}}]`))
+			_, _ = w.Write([]byte(`[{"id":12,"name":"Burger King"}]`))
+		case "/brand/12/store":
+			_, _ = w.Write([]byte(`[{"id":50,"name":"Mesa AZ","client_id":14,"brand_id":12}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -452,29 +458,30 @@ func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
 	var clientName, brandName, brandExtID string
 	var active bool
 	if err := pool.QueryRow(ctx,
-		`SELECT name, active FROM clients WHERE external_id = $1`, "rao",
+		`SELECT name, active FROM clients WHERE external_id = $1`, "14",
 	).Scan(&clientName, &active); err != nil {
 		t.Fatalf("read client: %v", err)
 	}
-	if clientName != "Rao" || !active {
-		t.Errorf("client row: name=%q active=%v", clientName, active)
+	if clientName != "Client #14" || !active {
+		t.Errorf("client row: name=%q active=%v (want placeholder 'Client #14' + active=true)", clientName, active)
 	}
 	if err := pool.QueryRow(ctx,
-		`SELECT brand_name, brand_external_id, active FROM sites WHERE external_id = $1`, "s1",
+		`SELECT brand_name, brand_external_id, active FROM sites WHERE external_id = $1`, "50",
 	).Scan(&brandName, &brandExtID, &active); err != nil {
 		t.Fatalf("read site: %v", err)
 	}
-	if brandName != "Burger King" || brandExtID != "bk" || !active {
+	if brandName != "Burger King" || brandExtID != "12" || !active {
 		t.Errorf("site row: brand=(%q,%q) active=%v", brandName, brandExtID, active)
 	}
 }
 
-// TestTaxonomyRunnerDedupesClientAcrossBrands locks ADR-033 § 4: a
-// single client (Rao) that operates both Burger King and Dunkin Donuts
-// shows up nested in stores under two different brands. CP's hierarchy
-// is Client → Site with Brand as flat per-Site metadata, so the run
-// produces exactly one clients row, two sites rows, each stamped with
-// its own brand label.
+// TestTaxonomyRunnerDedupesClientAcrossBrands locks ADR-033 § 4 against
+// the real wire shape: client 14 operates Burger King (brand 12) AND
+// Dunkin Donuts (brand 13) in the live data; both /brand/12/store and
+// /brand/13/store return a store with client_id=14. CP's hierarchy is
+// Client → Site with Brand as flat per-Site metadata, so the run
+// produces exactly one clients row and two sites rows, each stamped
+// with its own brand label.
 func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
@@ -488,16 +495,16 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user/signin":
-			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			_, _ = w.Write([]byte(taxoSigninJSON))
 		case "/brand":
 			_, _ = w.Write([]byte(`[
-				{"id":"bk","name":"Burger King","active":true},
-				{"id":"dd","name":"Dunkin Donuts","active":true}
+				{"id":12,"name":"Burger King"},
+				{"id":13,"name":"Dunkin Donuts"}
 			]`))
-		case "/brand/bk/store":
-			_, _ = w.Write([]byte(`[{"id":"s-bk-1","name":"Rao BK Mesa","active":true,"client":{"id":"rao","name":"Rao Holdings"}}]`))
-		case "/brand/dd/store":
-			_, _ = w.Write([]byte(`[{"id":"s-dd-1","name":"Rao DD Tempe","active":true,"client":{"id":"rao","name":"Rao Holdings"}}]`))
+		case "/brand/12/store":
+			_, _ = w.Write([]byte(`[{"id":60,"name":"BK Mesa","client_id":14,"brand_id":12}]`))
+		case "/brand/13/store":
+			_, _ = w.Write([]byte(`[{"id":50,"name":"DD09","client_id":14,"brand_id":13}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -514,11 +521,11 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 	}
 
 	var clientCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM clients WHERE external_id = $1`, "rao").Scan(&clientCount); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM clients WHERE external_id = $1`, "14").Scan(&clientCount); err != nil {
 		t.Fatal(err)
 	}
 	if clientCount != 1 {
-		t.Errorf("client rows for rao: got %d want 1 (must dedupe across brands)", clientCount)
+		t.Errorf("client rows for client_id=14: got %d want 1 (must dedupe across brands)", clientCount)
 	}
 
 	// Sites split by brand, both stamped with their own brand metadata.
@@ -535,7 +542,7 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 		}
 		got[ext] = brand
 	}
-	want := map[string]string{"s-bk-1": "bk", "s-dd-1": "dd"}
+	want := map[string]string{"50": "13", "60": "12"}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("site %s: brand=%q want %q (full got=%+v)", k, got[k], v, got)
@@ -543,7 +550,7 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 	}
 
 	// Both sites point at the same local client_id.
-	rows2, err := pool.Query(ctx, `SELECT DISTINCT client_id::text FROM sites WHERE external_id IN ('s-bk-1','s-dd-1')`)
+	rows2, err := pool.Query(ctx, `SELECT DISTINCT client_id::text FROM sites WHERE external_id IN ('50','60')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,16 +568,15 @@ func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
 	}
 }
 
-// TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag locks ADR-033 § 5
-// dual-signal soft-delete:
-//   - "absent from sync" — a previously-mirrored site that no store
-//     walk re-touches gets active=false via the post-walk sweep.
-//   - "API flag" — a store the API returns with active=false gets
-//     active=false directly on the upsert, even if it appears in the walk.
-//
-// Tests preload Postgres with an existing site (from a prior run) that
-// the current upstream payload omits entirely, plus one with active=false.
-func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
+// TestTaxonomyRunnerSweepsAbsentRows locks ADR-033 § 5 absence-detection
+// against the real wire shape: a previously-mirrored client + site that
+// the current upstream payload omits entirely gets active=false via
+// the post-walk sweep. The upstream exposes no per-row `active` flag,
+// so absence-from-walk is the sole soft-delete signal. (The Store
+// layer's Active field is still tested directly via
+// TestTaxonomyUpsertSitePersistsBrandMetadata — the per-row flag stays
+// in the storage contract for forward-compat if the API ever adds it.)
+func TestTaxonomyRunnerSweepsAbsentRows(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
 
@@ -585,14 +591,14 @@ func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
 
 	// Seed: a previously synced client + site that the upcoming run will not see.
 	staleClientID, err := store.UpsertClient(ctx, taxonomy.ClientRow{
-		ExternalID: "client-old", Name: "Old Co", SyncedAt: old,
+		ExternalID: "99", Name: "Client #99", SyncedAt: old,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
-		ExternalID: "site-old", Name: "Old Site", ClientID: staleClientID,
-		BrandName: "bk", BrandExternalID: "bk", Active: true, SyncedAt: old,
+		ExternalID: "999", Name: "Old Site", ClientID: staleClientID,
+		BrandName: "Burger King", BrandExternalID: "12", Active: true, SyncedAt: old,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -601,16 +607,12 @@ func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user/signin":
-			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			_, _ = w.Write([]byte(taxoSigninJSON))
 		case "/brand":
-			_, _ = w.Write([]byte(`[{"id":"bk","name":"Burger King","active":true}]`))
-		case "/brand/bk/store":
-			// site-fresh is current+active; site-shuttered came back with active=false
-			// (e.g. franchisee closed the location upstream).
-			_, _ = w.Write([]byte(`[
-				{"id":"site-fresh","name":"Fresh","active":true,"client":{"id":"client-new","name":"New Co"}},
-				{"id":"site-shuttered","name":"Shuttered","active":false,"client":{"id":"client-new","name":"New Co"}}
-			]`))
+			_, _ = w.Write([]byte(`[{"id":12,"name":"Burger King"}]`))
+		case "/brand/12/store":
+			// Only site 50 is in the current payload; site 999 (seeded above) is absent.
+			_, _ = w.Write([]byte(`[{"id":50,"name":"Fresh","client_id":14,"brand_id":12}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -627,9 +629,8 @@ func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"site-fresh":     true,  // explicitly active in payload
-		"site-shuttered": false, // explicitly inactive in payload (API flag)
-		"site-old":       false, // absent from payload (sweep)
+		"50":  true,  // present in current walk
+		"999": false, // absent from current walk → sweep
 	}
 	rows, err := pool.Query(ctx, `SELECT external_id, active FROM sites`)
 	if err != nil {
@@ -651,15 +652,14 @@ func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
 		}
 	}
 
-	// And client-old (no longer referenced by any current store) was
-	// also swept inactive.
+	// Client 99 (no longer referenced by any current store) was also swept inactive.
 	var oldActive bool
 	if err := pool.QueryRow(ctx,
-		`SELECT active FROM clients WHERE external_id = 'client-old'`).Scan(&oldActive); err != nil {
+		`SELECT active FROM clients WHERE external_id = '99'`).Scan(&oldActive); err != nil {
 		t.Fatal(err)
 	}
 	if oldActive {
-		t.Errorf("client-old: active=true after sweep — want false")
+		t.Errorf("client 99: active=true after sweep — want false")
 	}
 }
 
@@ -685,7 +685,7 @@ func TestTaxonomyRunnerAdvisoryLockSkipsConcurrent(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user/signin":
-			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			_, _ = w.Write([]byte(taxoSigninJSON))
 		case "/brand":
 			brandSeen <- struct{}{}
 			<-brandBlock
@@ -756,11 +756,11 @@ func TestTaxonomyRunnerDryRunWalksWithoutWriting(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user/signin":
-			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			_, _ = w.Write([]byte(taxoSigninJSON))
 		case "/brand":
-			_, _ = w.Write([]byte(`[{"id":"bk","name":"BK","active":true}]`))
-		case "/brand/bk/store":
-			_, _ = w.Write([]byte(`[{"id":"s1","name":"Site","active":true,"client":{"id":"c1","name":"Client"}}]`))
+			_, _ = w.Write([]byte(`[{"id":12,"name":"BK"}]`))
+		case "/brand/12/store":
+			_, _ = w.Write([]byte(`[{"id":50,"name":"Site","client_id":14,"brand_id":12}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -776,7 +776,7 @@ func TestTaxonomyRunnerDryRunWalksWithoutWriting(t *testing.T) {
 		t.Fatalf("RunDryRun: %v", err)
 	}
 
-	wantHits := []string{"/user/signin", "/brand", "/brand/bk/store"}
+	wantHits := []string{"/user/signin", "/brand", "/brand/12/store"}
 	if len(hits) != len(wantHits) {
 		t.Fatalf("hits: got %v want %v", hits, wantHits)
 	}

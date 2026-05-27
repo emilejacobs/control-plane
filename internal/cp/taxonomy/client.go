@@ -11,42 +11,42 @@ import (
 )
 
 // Brand is the upstream `/brand` element. CP captures Brand as flat
-// metadata on Site (ADR-033 § 4) — no local table.
+// metadata on Site (ADR-033 § 4) — no local table. The upstream
+// returns numeric IDs and exposes no `active` field; a brand returned
+// by `/brand` IS the active set, so the syncer walks every brand.
+//
+// Wire shape verified against api.uknomi.com 2026-05-27.
 type Brand struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Active bool   `json:"active"`
-}
-
-// UpstreamClient is the nested client info inside each Store the
-// upstream returns via `/brand/{id}/store`. The syncer dedupes Clients
-// across brands by ID before upserting locally.
-type UpstreamClient struct {
-	ID   string `json:"id"`
+	ID   int    `json:"id"`
 	Name string `json:"name"`
 }
 
 // UpstreamStore is one element of the `/brand/{id}/store` response.
 // "Store" is the upstream's vocabulary; CP calls the same entity a
-// Site. Active is the per-row flag the syncer threads through to
-// sites.active.
+// Site. The upstream response is flat — `client_id` is a foreign key
+// with no nested client metadata, and there is no `/client` endpoint
+// to enrich from. The syncer synthesizes a placeholder client name
+// (`Client #<n>`) until the API exposes client identity (see #18
+// follow-up). There is no `active` field; absence-from-walk is the
+// only soft-delete signal.
 //
-// The exact JSON shape here is provisional pending sample payloads
-// from the API team (#18 § "Pre-implementation coordination"). The
-// bench smoke step is where it gets verified against real responses.
+// Wire shape verified against api.uknomi.com 2026-05-27. The upstream
+// payload carries many other fields (address, geo, POS account, etc.)
+// the mirror does not need; the JSON decoder ignores them.
 type UpstreamStore struct {
-	ID     string         `json:"id"`
-	Name   string         `json:"name"`
-	Active bool           `json:"active"`
-	Client UpstreamClient `json:"client"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	ClientID int    `json:"client_id"`
+	BrandID  int    `json:"brand_id"`
 }
 
 // Client talks to the upstream HTTP API at api.uknomi.com (ADR-033 § 7).
-// Auth is a single layer: POST /user/signin exchanges
-// {username, password} for a Cognito JWT held in memory for the
-// remainder of the sync run; subsequent GETs send it as Bearer. On
-// HTTP 401 the client re-signs once transparently and retries — the
-// runner stays free of token-lifecycle bookkeeping.
+// Auth is a single layer: POST /user/signin proxies through to Cognito
+// and returns the raw InitiateAuth response; the client extracts the
+// IdToken (the AccessToken is rejected by the API Gateway authorizer)
+// and sends it as Bearer on subsequent calls. On HTTP 401 the client
+// re-signs once transparently and retries — the runner stays free of
+// token-lifecycle bookkeeping.
 //
 // Not safe for concurrent use; one Client per sync run.
 type Client struct {
@@ -70,7 +70,17 @@ func NewClient(baseURL, username, password string) *Client {
 	}
 }
 
-// SignIn exchanges the bound credentials for a Cognito JWT. The
+// signinResponse mirrors the raw Cognito InitiateAuth payload the
+// upstream Lambda passes through unmodified. Only AuthenticationResult
+// .IdToken is consumed — the AccessToken doesn't satisfy the API
+// Gateway COGNITO_USER_POOLS authorizer on the protected routes.
+type signinResponse struct {
+	AuthenticationResult struct {
+		IdToken string `json:"IdToken"`
+	} `json:"AuthenticationResult"`
+}
+
+// SignIn exchanges the bound credentials for a Cognito IdToken. The
 // returned token is also stashed on the Client so subsequent
 // GetBrands/GetStores calls authenticate transparently.
 func (c *Client) SignIn(ctx context.Context) (string, error) {
@@ -96,17 +106,15 @@ func (c *Client) SignIn(ctx context.Context) (string, error) {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return "", fmt.Errorf("signin: HTTP %d: %s", resp.StatusCode, snippet)
 	}
-	var out struct {
-		Token string `json:"token"`
-	}
+	var out signinResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", fmt.Errorf("decode signin response: %w", err)
 	}
-	if out.Token == "" {
-		return "", fmt.Errorf("signin: empty token in response")
+	if out.AuthenticationResult.IdToken == "" {
+		return "", fmt.Errorf("signin: empty IdToken in response")
 	}
-	c.token = out.Token
-	return out.Token, nil
+	c.token = out.AuthenticationResult.IdToken
+	return c.token, nil
 }
 
 // GetBrands fetches the upstream `/brand` list. On HTTP 401 it
@@ -121,10 +129,10 @@ func (c *Client) GetBrands(ctx context.Context) ([]Brand, error) {
 
 // GetStores fetches the upstream `/brand/{id}/store` list for a brand.
 // Same re-sign-on-401 behavior as GetBrands.
-func (c *Client) GetStores(ctx context.Context, brandID string) ([]UpstreamStore, error) {
+func (c *Client) GetStores(ctx context.Context, brandID int) ([]UpstreamStore, error) {
 	var out []UpstreamStore
-	if err := c.authedGet(ctx, "/brand/"+brandID+"/store", &out); err != nil {
-		return nil, fmt.Errorf("get stores for brand %q: %w", brandID, err)
+	if err := c.authedGet(ctx, fmt.Sprintf("/brand/%d/store", brandID), &out); err != nil {
+		return nil, fmt.Errorf("get stores for brand %d: %w", brandID, err)
 	}
 	return out, nil
 }
