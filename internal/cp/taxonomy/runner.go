@@ -25,9 +25,21 @@ func NewRunner(client *Client, store *Store, now func() time.Time) *Runner {
 	return &Runner{client: client, store: store, now: now}
 }
 
-// Run executes one sync pass. It is the single entry point cmd/taxonomy-sync
-// calls; concurrency control (advisory lock) is layered around it.
+// Run executes one sync pass. The Postgres advisory lock (ADR-033 § 8)
+// gates concurrency: a second invocation while one is in flight exits
+// gracefully without doing any upstream HTTP work — the scheduled
+// daily run and the manual button race-free.
 func (r *Runner) Run(ctx context.Context) error {
+	release, gotLock, err := r.store.AcquireSyncLock(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire sync lock: %w", err)
+	}
+	if !gotLock {
+		slog.InfoContext(ctx, "taxonomy.sync.skipped", "reason", "advisory_lock_held")
+		return nil
+	}
+	defer release()
+
 	syncStart := r.now()
 	if _, err := r.client.SignIn(ctx); err != nil {
 		return fmt.Errorf("signin: %w", err)

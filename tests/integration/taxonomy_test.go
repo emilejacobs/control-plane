@@ -662,3 +662,75 @@ func TestTaxonomyRunnerSweepsAbsentAndHonorsActiveFlag(t *testing.T) {
 		t.Errorf("client-old: active=true after sweep — want false")
 	}
 }
+
+// TestTaxonomyRunnerAdvisoryLockSkipsConcurrent locks ADR-033 § 8: a
+// second concurrent invocation exits gracefully without doing work
+// when the per-process advisory lock (key 0x74786E73796E63) is
+// already held. The first runner is parked mid-walk via a blocking
+// /brand handler; the second runner must return nil without issuing
+// any HTTP calls.
+func TestTaxonomyRunnerAdvisoryLockSkipsConcurrent(t *testing.T) {
+	requireDocker(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	brandSeen := make(chan struct{}, 4)
+	brandBlock := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/user/signin":
+			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+		case "/brand":
+			brandSeen <- struct{}{}
+			<-brandBlock
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	now := func() time.Time { return time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC) }
+	r1 := taxonomy.NewRunner(taxonomy.NewClient(srv.URL, "u", "p"), taxonomy.NewStore(pool), now)
+	r2 := taxonomy.NewRunner(taxonomy.NewClient(srv.URL, "u", "p"), taxonomy.NewStore(pool), now)
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- r1.Run(ctx) }()
+
+	// Wait until r1 has signed in, acquired the lock, and is parked inside /brand.
+	select {
+	case <-brandSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("r1 never reached /brand")
+	}
+
+	// r2 must return promptly without making any HTTP calls and without erroring.
+	r2Done := make(chan error, 1)
+	go func() { r2Done <- r2.Run(ctx) }()
+	select {
+	case err := <-r2Done:
+		if err != nil {
+			t.Errorf("r2: got err %v want nil (graceful no-op when locked)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("r2 did not return within 2s — advisory lock did not gate; r2 is blocked on /brand")
+	}
+
+	// No second /brand hit while r1 was holding.
+	select {
+	case <-brandSeen:
+		t.Errorf("r2 hit /brand — advisory lock did not gate")
+	default:
+	}
+
+	close(brandBlock)
+	if err := <-firstDone; err != nil {
+		t.Errorf("r1: %v", err)
+	}
+}

@@ -13,6 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// syncLockKey is the Postgres advisory-lock key the taxonomy sync
+// uses to serialize itself (ADR-033 § 8). The bytes spell "txnsync"
+// in ASCII — globally distinct from any other CP advisory lock.
+const syncLockKey int64 = 0x74786E73796E63
+
 // Store persists clients and sites mirrored from the upstream API.
 type Store struct {
 	pool *pgxpool.Pool
@@ -159,4 +164,39 @@ func (s *Store) Status(ctx context.Context) (StatusSnapshot, error) {
 	}
 	snap.LastSyncedAt = last
 	return snap, nil
+}
+
+// AcquireSyncLock tries to acquire the taxonomy-sync advisory lock on
+// a dedicated connection held for the duration of the run. Returns
+// ok=true and a release closure if obtained; ok=false (with a no-op
+// release) when another invocation already holds it — the caller
+// logs and exits gracefully per ADR-033 § 8 (no queueing). Release
+// runs pg_advisory_unlock and returns the connection to the pool;
+// it is safe to defer immediately after AcquireSyncLock returns.
+//
+// Postgres releases session-level advisory locks automatically when
+// the underlying connection drops — a crashed sync task therefore
+// never wedges the lock for the next scheduled run.
+func (s *Store) AcquireSyncLock(ctx context.Context) (release func(), ok bool, err error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return func() {}, false, fmt.Errorf("acquire conn: %w", err)
+	}
+	var got bool
+	if err := conn.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock($1)`, syncLockKey).Scan(&got); err != nil {
+		conn.Release()
+		return func() {}, false, fmt.Errorf("pg_try_advisory_lock: %w", err)
+	}
+	if !got {
+		conn.Release()
+		return func() {}, false, nil
+	}
+	return func() {
+		// Use a fresh background context so the unlock still runs if
+		// the original ctx was cancelled (e.g. SIGTERM mid-run).
+		_, _ = conn.Exec(context.Background(),
+			`SELECT pg_advisory_unlock($1)`, syncLockKey)
+		conn.Release()
+	}, true, nil
 }
