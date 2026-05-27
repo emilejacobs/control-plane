@@ -8,6 +8,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -36,6 +37,12 @@ type Deps struct {
 	// don't exercise the surface omit it.
 	TaxonomyStore *taxonomy.Store
 
+	// TaxonomyRunTask triggers an on-demand ecs:RunTask for the
+	// cp-taxonomy-sync task def (ADR-033 § 3). Bound by the cp-api
+	// main to a real ECS client; tests inject a fake. nil disables
+	// POST /taxonomy/sync (the read surface still works).
+	TaxonomyRunTask RunTaskInvoker
+
 	// CmdPublisher is the IoT-Core data-plane publisher used by the
 	// Phase 2 slice 2 service-config PUT to push a config.update down
 	// the cmd channel. nil disables the route (the rest of the API
@@ -57,6 +64,13 @@ type Deps struct {
 	// origin (https://control.uknomi.com) from main; tests pass nothing
 	// unless they specifically need to exercise CORS.
 	CORSAllowedOrigins []string
+}
+
+// RunTaskInvoker triggers a one-shot Fargate task and returns its
+// ARN. Production wires an ECS-backed adapter; tests inject a
+// recording fake. The handler stays free of the AWS SDK surface.
+type RunTaskInvoker interface {
+	Run(ctx context.Context) (taskARN string, err error)
 }
 
 // Route names a method + path pair for the CI-gate test to probe.
@@ -201,6 +215,10 @@ func NewBuilderWith(d Deps) *Builder {
 			requireStaff := middleware.RequireStaff()
 			b.Get("/taxonomy/status",
 				requireAuth(requireEnrolled(requireStaff(taxonomyhttp.NewStatus(d.TaxonomyStore)))))
+			if d.TaxonomyRunTask != nil {
+				b.Post("/taxonomy/sync",
+					requireAuth(requireEnrolled(requireStaff(taxonomyhttp.NewSync(d.TaxonomyRunTask, auditW)))))
+			}
 		}
 	}
 	return b

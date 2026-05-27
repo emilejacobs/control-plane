@@ -90,6 +90,84 @@ func TestTaxonomyStatusEndpointForbidsNonStaff(t *testing.T) {
 	}
 }
 
+// TestTaxonomySyncEndpointStaffTriggersRunTask locks ADR-033 § 8: a
+// staff POST /taxonomy/sync invokes ECS RunTask on the
+// cp-taxonomy-sync task def and returns 202 with the new task ARN.
+// The handler itself does no work beyond the RunTask call —
+// concurrency is gated by the task's own pg_try_advisory_lock.
+func TestTaxonomySyncEndpointStaffTriggersRunTask(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	fakeARN := "arn:aws:ecs:us-east-1:523612763411:task/uknomi/cafef00d"
+	invoker := &recordingRunTaskInvoker{arn: fakeARN}
+	srv := newTestServerWithRunTask(t, ctx, invoker)
+
+	token := mintAccessToken(t, ctx, srv)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/taxonomy/sync", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Idempotency-Key", "tax-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status: got %d want 202", resp.StatusCode)
+	}
+
+	var body struct {
+		TaskARN string `json:"task_arn"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.TaskARN != fakeARN {
+		t.Errorf("task_arn: got %q want %q", body.TaskARN, fakeARN)
+	}
+	if invoker.calls != 1 {
+		t.Errorf("RunTask calls: got %d want 1", invoker.calls)
+	}
+}
+
+// TestTaxonomySyncEndpointForbidsNonStaff locks the staff-gate on
+// the manual button: a non-staff operator gets 403 and the RunTask
+// invoker is never called.
+func TestTaxonomySyncEndpointForbidsNonStaff(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	invoker := &recordingRunTaskInvoker{arn: "arn:should:never:fire"}
+	srv := newTestServerWithRunTask(t, ctx, invoker)
+
+	token := mintNonStaffAccessToken(t, ctx, srv)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/taxonomy/sync", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Idempotency-Key", "tax-non-staff")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d want 403", resp.StatusCode)
+	}
+	if invoker.calls != 0 {
+		t.Errorf("RunTask must not be invoked for non-staff: calls=%d", invoker.calls)
+	}
+}
+
+// recordingRunTaskInvoker is the test double for the AWS ECS RunTask
+// call. Counts invocations and hands back a fixed ARN.
+type recordingRunTaskInvoker struct {
+	arn   string
+	calls int
+}
+
+func (r *recordingRunTaskInvoker) Run(ctx context.Context) (string, error) {
+	r.calls++
+	return r.arn, nil
+}
+
 // mintNonStaffAccessToken is the non-staff sibling of mintAccessToken.
 // Inserts a TOTP-enrolled operator with is_staff=false and returns a
 // signed access token reflecting that.

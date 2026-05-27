@@ -93,6 +93,15 @@ func newTracedTestServer(t *testing.T, ctx context.Context) (*testServer, *query
 	return buildTestServer(t, ctx, startPostgres(t, ctx, rec), authn.Config{}), rec
 }
 
+// newTestServerWithRunTask is newTestServer with an injected
+// TaxonomyRunTask invoker — POST /taxonomy/sync triggers it instead
+// of the real ECS client.
+func newTestServerWithRunTask(t *testing.T, ctx context.Context, invoker api.RunTaskInvoker) *testServer {
+	return buildTestServerWith(t, ctx, startPostgres(t, ctx, nil), authn.Config{}, func(d *api.Deps) {
+		d.TaxonomyRunTask = invoker
+	})
+}
+
 // testBootstrapVerifier builds a bootstrap-key verifier that accepts
 // testBootstrapKey — the integration-test equivalent of the Secrets
 // Manager-backed verifier production wires in.
@@ -109,6 +118,13 @@ func testBootstrapVerifier(t *testing.T, ctx context.Context) *bootstrap.Verifie
 // cleanup. An empty SigningKey / TotpEncryptionKey is backfilled with the
 // test keys.
 func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, authnCfg authn.Config) *testServer {
+	return buildTestServerWith(t, ctx, pool, authnCfg, nil)
+}
+
+// buildTestServerWith is buildTestServer with an optional callback to
+// tweak api.Deps before the router is built — used by tests that need
+// to inject a fake TaxonomyRunTask etc.
+func buildTestServerWith(t *testing.T, ctx context.Context, pool *pgxpool.Pool, authnCfg authn.Config, mut func(*api.Deps)) *testServer {
 	t.Helper()
 	if authnCfg.SigningKey == nil {
 		authnCfg.SigningKey = testSigningKey
@@ -126,7 +142,7 @@ func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, auth
 	authzSvc := authz.New(pool)
 	auditW := audit.NewPostgresWriter(pool)
 	logs := &syncBuffer{}
-	srv := httptest.NewServer(api.NewRouter(api.Deps{
+	deps := api.Deps{
 		Registry:         reg,
 		AuthN:            authnSvc,
 		AuthZ:            authzSvc,
@@ -134,7 +150,11 @@ func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, auth
 		TaxonomyStore:    taxonomy.NewStore(pool),
 		Audit:            auditW,
 		Logger:           cplog.New(logs, "cp-api-test"),
-	}))
+	}
+	if mut != nil {
+		mut(&deps)
+	}
+	srv := httptest.NewServer(api.NewRouter(deps))
 	t.Cleanup(srv.Close)
 	return &testServer{URL: srv.URL, Pool: pool, IoT: iot, Logs: logs, AuthN: authnSvc, AuthZ: authzSvc, Registry: reg}
 }

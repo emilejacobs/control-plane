@@ -16,6 +16,11 @@
 //	                        Production sets this to the dashboard origin (https://control.uknomi.com).
 //	AWS_REGION              AWS region (default from default credentials chain)
 //	AWS_ENDPOINT_URL        override the AWS service endpoint (dev/moto only)
+//	TAXONOMY_ECS_CLUSTER    ECS cluster ARN for the cp-taxonomy-sync RunTask (ADR-033).
+//	                        Unset disables POST /taxonomy/sync.
+//	TAXONOMY_ECS_TASK_DEF   ECS task definition ARN/family for cp-taxonomy-sync.
+//	TAXONOMY_ECS_SUBNETS    comma-separated private subnet ids.
+//	TAXONOMY_ECS_SGS        comma-separated security group ids.
 package main
 
 import (
@@ -33,6 +38,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -48,6 +54,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
+	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
 )
 
 func main() {
@@ -103,6 +110,7 @@ func run(logger *slog.Logger) error {
 	var iotOpts []func(*iot.Options)
 	var iotDataOpts []func(*iotdataplane.Options)
 	var smOpts []func(*secretsmanager.Options)
+	var ecsOpts []func(*ecs.Options)
 	if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
 		logger.Info("AWS_ENDPOINT_URL override active", "endpoint", endpoint)
 		iotOpts = append(iotOpts, func(o *iot.Options) {
@@ -112,6 +120,9 @@ func run(logger *slog.Logger) error {
 			o.BaseEndpoint = aws.String(endpoint)
 		})
 		smOpts = append(smOpts, func(o *secretsmanager.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+		})
+		ecsOpts = append(ecsOpts, func(o *ecs.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 		})
 	}
@@ -140,6 +151,25 @@ func run(logger *slog.Logger) error {
 	authzSvc := authz.New(pool)
 	auditW := audit.NewPostgresWriter(pool)
 
+	// Taxonomy mirror surface (ADR-033). Always wire the store so
+	// GET /taxonomy/status works; only wire the RunTask invoker when
+	// the ECS env vars are all set — until Terraform creates the task
+	// def, the POST /taxonomy/sync route stays disabled.
+	taxonomyStore := taxonomy.NewStore(pool)
+	var taxonomyRunTask api.RunTaskInvoker
+	if cluster := os.Getenv("TAXONOMY_ECS_CLUSTER"); cluster != "" {
+		ecsClient := ecs.NewFromConfig(awsCfg, ecsOpts...)
+		taxonomyRunTask = taxonomy.NewAWSRunTaskInvoker(ecsClient, taxonomy.RunTaskConfig{
+			Cluster:        cluster,
+			TaskDefinition: mustEnv("TAXONOMY_ECS_TASK_DEF"),
+			Subnets:        csvEnv("TAXONOMY_ECS_SUBNETS"),
+			SecurityGroups: csvEnv("TAXONOMY_ECS_SGS"),
+		})
+		logger.Info("taxonomy RunTask wired", "task_def", os.Getenv("TAXONOMY_ECS_TASK_DEF"))
+	} else {
+		logger.Info("taxonomy RunTask disabled — TAXONOMY_ECS_CLUSTER unset")
+	}
+
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
@@ -147,6 +177,8 @@ func run(logger *slog.Logger) error {
 			AuthN:              authnSvc,
 			AuthZ:              authzSvc,
 			IdempotencyStore:   idemStore,
+			TaxonomyStore:      taxonomyStore,
+			TaxonomyRunTask:    taxonomyRunTask,
 			Audit:              auditW,
 			Logger:             logger,
 			CORSAllowedOrigins: csvEnv("CORS_ALLOWED_ORIGINS"),
