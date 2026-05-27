@@ -2,6 +2,8 @@ package integration_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -403,5 +405,64 @@ func TestTaxonomyStatusEmptyReportsNilLastSyncedAt(t *testing.T) {
 	}
 	if got.LastSyncedAt != nil {
 		t.Errorf("LastSyncedAt: got %v want nil", got.LastSyncedAt)
+	}
+}
+
+// TestTaxonomyRunnerOneBrandOneStore is the cycle-8 tracer for the
+// orchestration shell: given a httptest fake of the upstream API
+// returning a single active brand whose only store carries one client,
+// the Runner walks /brand → /brand/{id}/store, upserts the client first
+// (its UUID is needed by the site), then upserts the site with the
+// brand stamped onto the row.
+func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/user/signin":
+			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+		case "/brand":
+			_, _ = w.Write([]byte(`[{"id":"bk","name":"Burger King","active":true}]`))
+		case "/brand/bk/store":
+			_, _ = w.Write([]byte(`[{"id":"s1","name":"Mesa AZ","active":true,"client":{"id":"rao","name":"Rao"}}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	runner := taxonomy.NewRunner(
+		taxonomy.NewClient(srv.URL, "u", "p"),
+		taxonomy.NewStore(pool),
+		func() time.Time { return time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC) },
+	)
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var clientName, brandName, brandExtID string
+	var active bool
+	if err := pool.QueryRow(ctx,
+		`SELECT name, active FROM clients WHERE external_id = $1`, "rao",
+	).Scan(&clientName, &active); err != nil {
+		t.Fatalf("read client: %v", err)
+	}
+	if clientName != "Rao" || !active {
+		t.Errorf("client row: name=%q active=%v", clientName, active)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT brand_name, brand_external_id, active FROM sites WHERE external_id = $1`, "s1",
+	).Scan(&brandName, &brandExtID, &active); err != nil {
+		t.Fatalf("read site: %v", err)
+	}
+	if brandName != "Burger King" || brandExtID != "bk" || !active {
+		t.Errorf("site row: brand=(%q,%q) active=%v", brandName, brandExtID, active)
 	}
 }
