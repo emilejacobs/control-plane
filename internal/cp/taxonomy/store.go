@@ -34,14 +34,21 @@ type ClientRow struct {
 }
 
 // UpsertClient inserts or updates a client row keyed by external_id and
-// returns its local UUID. New rows default to active=true; the syncer
-// flips active later for rows that arrive flagged inactive or that no
-// longer appear in a sync.
+// returns its local UUID. On conflict the row's name and last_synced_at
+// are refreshed and active is flipped back to true (reactivation: a
+// sweep may have parked the row inactive, and re-observing it upstream
+// is the explicit "still here" signal). The local UUID is preserved —
+// devices.site_id and operator_sites grants reference local IDs, so
+// reissuing them would orphan every assignment.
 func (s *Store) UpsertClient(ctx context.Context, in ClientRow) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO clients (external_id, name, last_synced_at)
 		VALUES ($1, $2, $3)
+		ON CONFLICT (external_id) DO UPDATE
+		   SET name           = EXCLUDED.name,
+		       last_synced_at = EXCLUDED.last_synced_at,
+		       active         = true
 		RETURNING id::text
 	`, in.ExternalID, in.Name, in.SyncedAt).Scan(&id)
 	if err != nil {
