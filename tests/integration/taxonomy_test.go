@@ -466,3 +466,95 @@ func TestTaxonomyRunnerOneBrandOneStore(t *testing.T) {
 		t.Errorf("site row: brand=(%q,%q) active=%v", brandName, brandExtID, active)
 	}
 }
+
+// TestTaxonomyRunnerDedupesClientAcrossBrands locks ADR-033 § 4: a
+// single client (Rao) that operates both Burger King and Dunkin Donuts
+// shows up nested in stores under two different brands. CP's hierarchy
+// is Client → Site with Brand as flat per-Site metadata, so the run
+// produces exactly one clients row, two sites rows, each stamped with
+// its own brand label.
+func TestTaxonomyRunnerDedupesClientAcrossBrands(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/user/signin":
+			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+		case "/brand":
+			_, _ = w.Write([]byte(`[
+				{"id":"bk","name":"Burger King","active":true},
+				{"id":"dd","name":"Dunkin Donuts","active":true}
+			]`))
+		case "/brand/bk/store":
+			_, _ = w.Write([]byte(`[{"id":"s-bk-1","name":"Rao BK Mesa","active":true,"client":{"id":"rao","name":"Rao Holdings"}}]`))
+		case "/brand/dd/store":
+			_, _ = w.Write([]byte(`[{"id":"s-dd-1","name":"Rao DD Tempe","active":true,"client":{"id":"rao","name":"Rao Holdings"}}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	runner := taxonomy.NewRunner(
+		taxonomy.NewClient(srv.URL, "u", "p"),
+		taxonomy.NewStore(pool),
+		func() time.Time { return time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC) },
+	)
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var clientCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM clients WHERE external_id = $1`, "rao").Scan(&clientCount); err != nil {
+		t.Fatal(err)
+	}
+	if clientCount != 1 {
+		t.Errorf("client rows for rao: got %d want 1 (must dedupe across brands)", clientCount)
+	}
+
+	// Sites split by brand, both stamped with their own brand metadata.
+	rows, err := pool.Query(ctx, `SELECT external_id, brand_external_id FROM sites ORDER BY external_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var ext, brand string
+		if err := rows.Scan(&ext, &brand); err != nil {
+			t.Fatal(err)
+		}
+		got[ext] = brand
+	}
+	want := map[string]string{"s-bk-1": "bk", "s-dd-1": "dd"}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("site %s: brand=%q want %q (full got=%+v)", k, got[k], v, got)
+		}
+	}
+
+	// Both sites point at the same local client_id.
+	rows2, err := pool.Query(ctx, `SELECT DISTINCT client_id::text FROM sites WHERE external_id IN ('s-bk-1','s-dd-1')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows2.Close()
+	var clientIDs []string
+	for rows2.Next() {
+		var s string
+		if err := rows2.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		clientIDs = append(clientIDs, s)
+	}
+	if len(clientIDs) != 1 {
+		t.Errorf("distinct client_id across both sites: got %v want one shared id", clientIDs)
+	}
+}
