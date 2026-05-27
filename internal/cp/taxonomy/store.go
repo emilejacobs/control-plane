@@ -33,6 +33,19 @@ type ClientRow struct {
 	SyncedAt   time.Time
 }
 
+// SiteRow is the per-site payload the syncer hands to UpsertSite. The
+// brand columns are flat metadata: CP does not model Brand as its own
+// hierarchy level (ADR-033 § 4). ClientID is the parent's local UUID,
+// returned from a prior UpsertClient call.
+type SiteRow struct {
+	ExternalID      string
+	Name            string
+	ClientID        string
+	BrandName       string
+	BrandExternalID string
+	SyncedAt        time.Time
+}
+
 // UpsertClient inserts or updates a client row keyed by external_id and
 // returns its local UUID. On conflict the row's name and last_synced_at
 // are refreshed and active is flipped back to true (reactivation: a
@@ -53,6 +66,31 @@ func (s *Store) UpsertClient(ctx context.Context, in ClientRow) (string, error) 
 	`, in.ExternalID, in.Name, in.SyncedAt).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("upsert client %q: %w", in.ExternalID, err)
+	}
+	return id, nil
+}
+
+// UpsertSite inserts or updates a site row keyed by external_id and
+// returns its local UUID. On conflict the row's name, client linkage,
+// brand metadata, and last_synced_at are refreshed and active is flipped
+// back to true. The local UUID is preserved — devices.site_id and
+// operator_sites grants point at it.
+func (s *Store) UpsertSite(ctx context.Context, in SiteRow) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO sites (external_id, name, client_id, brand_name, brand_external_id, last_synced_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (external_id) DO UPDATE
+		   SET name              = EXCLUDED.name,
+		       client_id         = EXCLUDED.client_id,
+		       brand_name        = EXCLUDED.brand_name,
+		       brand_external_id = EXCLUDED.brand_external_id,
+		       last_synced_at    = EXCLUDED.last_synced_at,
+		       active            = true
+		RETURNING id::text
+	`, in.ExternalID, in.Name, in.ClientID, in.BrandName, in.BrandExternalID, in.SyncedAt).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("upsert site %q: %w", in.ExternalID, err)
 	}
 	return id, nil
 }

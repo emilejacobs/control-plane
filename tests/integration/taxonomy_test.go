@@ -128,3 +128,100 @@ func TestTaxonomyUpsertClientIsIdempotent(t *testing.T) {
 		t.Errorf("row count: got %d want 1 (upsert must not duplicate)", count)
 	}
 }
+
+// TestTaxonomyUpsertSitePersistsBrandMetadata locks ADR-033 § 4: Brand
+// is captured per Site as flat metadata (brand_name + brand_external_id)
+// rather than as its own table or hierarchy level. UpsertSite ties the
+// site to its parent client's local UUID, stamps the brand columns, and
+// returns the site's local UUID. A second observation with the same
+// external_id updates name + brand metadata + last_synced_at, reactivates,
+// and keeps the local UUID stable (devices.site_id reference).
+func TestTaxonomyUpsertSitePersistsBrandMetadata(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := taxonomy.NewStore(pool)
+
+	syncedAt := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	clientID, err := store.UpsertClient(ctx, taxonomy.ClientRow{
+		ExternalID: "client-ext-1",
+		Name:       "Rao Holdings",
+		SyncedAt:   syncedAt,
+	})
+	if err != nil {
+		t.Fatalf("UpsertClient: %v", err)
+	}
+
+	siteID, err := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID:      "site-ext-42",
+		Name:            "Rao Mesa AZ",
+		ClientID:        clientID,
+		BrandName:       "Burger King",
+		BrandExternalID: "brand-ext-bk",
+		SyncedAt:        syncedAt,
+	})
+	if err != nil {
+		t.Fatalf("UpsertSite: %v", err)
+	}
+
+	var (
+		name, gotClientID, brandName, brandExtID string
+		active                                   bool
+		gotSyncedAt                              time.Time
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT name, client_id::text, brand_name, brand_external_id, active, last_synced_at
+		FROM sites WHERE external_id = $1
+	`, "site-ext-42").Scan(&name, &gotClientID, &brandName, &brandExtID, &active, &gotSyncedAt); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if name != "Rao Mesa AZ" {
+		t.Errorf("name: got %q", name)
+	}
+	if gotClientID != clientID {
+		t.Errorf("client_id: got %s want %s", gotClientID, clientID)
+	}
+	if brandName != "Burger King" || brandExtID != "brand-ext-bk" {
+		t.Errorf("brand metadata: got (%q,%q)", brandName, brandExtID)
+	}
+	if !active {
+		t.Errorf("active: false")
+	}
+	if !gotSyncedAt.Equal(syncedAt) {
+		t.Errorf("last_synced_at: got %v want %v", gotSyncedAt, syncedAt)
+	}
+
+	// Simulate a previous sweep deactivating the site, then re-observe with
+	// a new brand label (Rao moved the store to a different brand). UUID
+	// must be stable; active must flip back to true.
+	if _, err := pool.Exec(ctx, `UPDATE sites SET active = false WHERE external_id = $1`, "site-ext-42"); err != nil {
+		t.Fatal(err)
+	}
+	next := syncedAt.Add(24 * time.Hour)
+	id2, err := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID:      "site-ext-42",
+		Name:            "Rao Mesa AZ",
+		ClientID:        clientID,
+		BrandName:       "Dunkin Donuts",
+		BrandExternalID: "brand-ext-dd",
+		SyncedAt:        next,
+	})
+	if err != nil {
+		t.Fatalf("second UpsertSite: %v", err)
+	}
+	if id2 != siteID {
+		t.Errorf("UUID changed: %s vs %s (orphans devices.site_id)", siteID, id2)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT brand_name, brand_external_id, active FROM sites WHERE external_id = $1
+	`, "site-ext-42").Scan(&brandName, &brandExtID, &active); err != nil {
+		t.Fatal(err)
+	}
+	if brandName != "Dunkin Donuts" || brandExtID != "brand-ext-dd" || !active {
+		t.Errorf("after re-observe: brand=(%q,%q) active=%v", brandName, brandExtID, active)
+	}
+}
