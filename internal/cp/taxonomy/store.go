@@ -94,3 +94,31 @@ func (s *Store) UpsertSite(ctx context.Context, in SiteRow) (string, error) {
 	}
 	return id, nil
 }
+
+// SweepInactive flips active=false on every clients and sites row whose
+// last_synced_at predates cutoff — those rows the just-finished sync run
+// never re-touched, which is the upstream's "absent" signal per
+// ADR-033 § 5. Rows are not hard-deleted: devices.site_id and
+// operator_sites grants reference local UUIDs, and the dashboard renders
+// inactive entities with an "Inactive" badge instead of silent
+// disappearance. Reactivation happens for free in the next UpsertClient
+// / UpsertSite that re-observes the external_id.
+//
+// Cutoff must be the sync run's start time (captured before any
+// network call), not "now" — using "now" would race with rows the run
+// upserted only seconds earlier.
+func (s *Store) SweepInactive(ctx context.Context, cutoff time.Time) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE clients SET active = false
+		 WHERE last_synced_at IS NULL OR last_synced_at < $1
+	`, cutoff); err != nil {
+		return fmt.Errorf("sweep clients: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE sites SET active = false
+		 WHERE last_synced_at IS NULL OR last_synced_at < $1
+	`, cutoff); err != nil {
+		return fmt.Errorf("sweep sites: %w", err)
+	}
+	return nil
+}

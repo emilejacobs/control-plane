@@ -225,3 +225,98 @@ func TestTaxonomyUpsertSitePersistsBrandMetadata(t *testing.T) {
 		t.Errorf("after re-observe: brand=(%q,%q) active=%v", brandName, brandExtID, active)
 	}
 }
+
+// TestTaxonomySweepInactiveMarksAbsentRows locks ADR-033 § 5 absent-row
+// detection: after a sync run finishes, any client or site row whose
+// last_synced_at predates the run's start time is the upstream's
+// "absent" signal — the syncer never re-touched it. SweepInactive flips
+// active=false for those rows. Rows touched during the run (their
+// last_synced_at >= cutoff) stay active. The local id is preserved so
+// downstream foreign-key references (devices.site_id, operator_sites)
+// still resolve and operators see an "Inactive" badge rather than a
+// disappeared site.
+func TestTaxonomySweepInactiveMarksAbsentRows(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := taxonomy.NewStore(pool)
+
+	old := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	current := cutoff.Add(5 * time.Minute)
+
+	// Two clients from a previous run.
+	staleClientID, err := store.UpsertClient(ctx, taxonomy.ClientRow{
+		ExternalID: "client-stale", Name: "Stale", SyncedAt: old,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshClientID, err := store.UpsertClient(ctx, taxonomy.ClientRow{
+		ExternalID: "client-fresh", Name: "Fresh", SyncedAt: old,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One site under each client from a previous run.
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "site-stale", Name: "Stale Site", ClientID: staleClientID,
+		BrandName: "BK", BrandExternalID: "bk", SyncedAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "site-fresh", Name: "Fresh Site", ClientID: freshClientID,
+		BrandName: "BK", BrandExternalID: "bk", SyncedAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Current run re-touches the "fresh" rows only.
+	if _, err := store.UpsertClient(ctx, taxonomy.ClientRow{
+		ExternalID: "client-fresh", Name: "Fresh", SyncedAt: current,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "site-fresh", Name: "Fresh Site", ClientID: freshClientID,
+		BrandName: "BK", BrandExternalID: "bk", SyncedAt: current,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SweepInactive(ctx, cutoff); err != nil {
+		t.Fatalf("SweepInactive: %v", err)
+	}
+
+	check := func(table string) map[string]bool {
+		t.Helper()
+		rs, err := pool.Query(ctx,
+			`SELECT external_id, active FROM `+table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rs.Close()
+		out := map[string]bool{}
+		for rs.Next() {
+			var ext string
+			var active bool
+			if err := rs.Scan(&ext, &active); err != nil {
+				t.Fatal(err)
+			}
+			out[ext] = active
+		}
+		return out
+	}
+
+	if got := check("clients"); got["client-fresh"] != true || got["client-stale"] != false {
+		t.Errorf("clients active: got %+v want {client-fresh:true client-stale:false}", got)
+	}
+	if got := check("sites"); got["site-fresh"] != true || got["site-stale"] != false {
+		t.Errorf("sites active: got %+v want {site-fresh:true site-stale:false}", got)
+	}
+}
