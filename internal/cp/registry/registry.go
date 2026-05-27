@@ -30,6 +30,12 @@ import (
 // PRD § API contracts).
 var ErrInvalidBootstrapKey = errors.New("invalid bootstrap key")
 
+// ErrSiteNotFound is returned by SetDeployment when the supplied
+// site_id doesn't exist in the local mirror. The staff-only handler
+// translates it to 400 rather than letting an FK violation surface
+// as a 500.
+var ErrSiteNotFound = errors.New("site not found")
+
 // ErrDeviceNotFound is returned by GetByID when no row matches the id.
 // Handlers translate it to HTTP 404.
 var ErrDeviceNotFound = errors.New("device not found")
@@ -297,6 +303,48 @@ func (r *Registry) UpdateHeartbeatNetwork(ctx context.Context, deviceID string, 
 	`, deviceID, lanIP, tailscaleIP, tailscaleName)
 	if err != nil {
 		return fmt.Errorf("update heartbeat network: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// SetDeployment assigns a device to a site (or clears the
+// assignment) and sets/clears the asset_number in a single update.
+// PUT-semantics: both fields are always written — pass the prior
+// values if you mean to keep them. nil clears the column.
+//
+// A non-nil siteID is pre-checked against the local mirror so an
+// unknown-site call returns ErrSiteNotFound (→ 400) instead of a
+// raw FK violation (→ 500). A missing device returns ErrDeviceNotFound.
+func (r *Registry) SetDeployment(ctx context.Context, deviceID string, siteID *string, assetNumber *string) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	if siteID != nil {
+		if _, err := uuid.Parse(*siteID); err != nil {
+			return ErrSiteNotFound
+		}
+		var exists bool
+		if err := r.pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM sites WHERE id = $1)`, *siteID,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("check site exists: %w", err)
+		}
+		if !exists {
+			return ErrSiteNotFound
+		}
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET site_id      = $2,
+		    asset_number = $3,
+		    updated_at   = now()
+		WHERE id = $1
+	`, deviceID, siteID, assetNumber)
+	if err != nil {
+		return fmt.Errorf("update deployment: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrDeviceNotFound

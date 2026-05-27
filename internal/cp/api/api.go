@@ -226,6 +226,11 @@ func NewBuilderWith(d Deps) *Builder {
 			// stay staff-only (PUT /devices/{id}/deployment below).
 			b.Get("/sites",
 				requireAuth(requireEnrolled(taxonomyhttp.NewSites(d.TaxonomyStore))))
+			// PUT /devices/{id}/deployment — staff-only edit of a
+			// device's site assignment + asset_number. The picker
+			// (GET /sites) is the read counterpart.
+			b.Put("/devices/{id}/deployment",
+				requireAuth(requireEnrolled(requireStaff(devices.NewDeploymentPut(d.Registry, auditW)))))
 		}
 	}
 	return b

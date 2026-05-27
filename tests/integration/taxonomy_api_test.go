@@ -1,8 +1,10 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -300,6 +302,180 @@ func TestSitesEndpointIncludeInactiveQueryParam(t *testing.T) {
 	}
 	if !gotInactive {
 		t.Error("?include_inactive=true: no inactive site present")
+	}
+}
+
+// TestDeviceDeploymentPutAssignsSiteAndAssetNumber covers the
+// happy-path edit: a staff PUT /devices/{id}/deployment with a
+// {site_id, asset_number} body updates both columns on the device
+// and surfaces them on the subsequent GET /devices/{id} as
+// site_name / client_name / asset_number.
+func TestDeviceDeploymentPutAssignsSiteAndAssetNumber(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// Seed a single client+site so the FK target exists.
+	store := taxonomy.NewStore(srv.Pool)
+	synced := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	cid, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "14", Name: "Client #14", SyncedAt: synced})
+	siteID, _ := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "50", Name: "DD09", ClientID: cid, BrandName: "Dunkin Donuts", BrandExternalID: "13",
+		Active: true, SyncedAt: synced,
+	})
+
+	// And a real enrolled device whose site_id starts null.
+	deviceID := enrollForTest(t, srv, "07-eegees-mesa-macmini", "a04a6bc9-d702-587a-95f8-522cb618f1ff")
+
+	token := mintAccessToken(t, ctx, srv)
+	body, _ := json.Marshal(map[string]any{
+		"site_id":      siteID,
+		"asset_number": "UK-MAC-007",
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/devices/"+deviceID+"/deployment", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "deploy-"+deviceID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200; body=%s", resp.StatusCode, raw)
+	}
+
+	// Subsequent GET /devices/{id} surfaces the assigned site, client, and asset_number.
+	getResp := doDeviceGet(t, srv.URL, deviceID, token)
+	defer getResp.Body.Close()
+	var out struct {
+		SiteName    *string `json:"site_name"`
+		ClientName  *string `json:"client_name"`
+		AssetNumber *string `json:"asset_number"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.SiteName == nil || *out.SiteName != "DD09" {
+		t.Errorf("site_name: got %v want 'DD09'", out.SiteName)
+	}
+	if out.ClientName == nil || *out.ClientName != "Client #14" {
+		t.Errorf("client_name: got %v", out.ClientName)
+	}
+	if out.AssetNumber == nil || *out.AssetNumber != "UK-MAC-007" {
+		t.Errorf("asset_number: got %v want 'UK-MAC-007'", out.AssetNumber)
+	}
+}
+
+// TestDeviceDeploymentPutUnassignsWithNulls locks the unassign path:
+// a body with both fields explicitly null clears the columns. The
+// dashboard's Unassign action sends exactly this shape.
+func TestDeviceDeploymentPutUnassignsWithNulls(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	// Seed: client, site, device. Pre-assign the device to the site + asset number.
+	store := taxonomy.NewStore(srv.Pool)
+	synced := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	cid, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "1", Name: "Client #1", SyncedAt: synced})
+	sid, _ := store.UpsertSite(ctx, taxonomy.SiteRow{
+		ExternalID: "10", Name: "Site 10", ClientID: cid, BrandName: "X", BrandExternalID: "0",
+		Active: true, SyncedAt: synced,
+	})
+	deviceID := enrollForTest(t, srv, "test-mac", "11111111-1111-1111-1111-111111111111")
+	if _, err := srv.Pool.Exec(ctx,
+		`UPDATE devices SET site_id = $1, asset_number = $2 WHERE id = $3`,
+		sid, "UK-OLD", deviceID); err != nil {
+		t.Fatal(err)
+	}
+
+	token := mintAccessToken(t, ctx, srv)
+	body, _ := json.Marshal(map[string]any{"site_id": nil, "asset_number": nil})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/devices/"+deviceID+"/deployment", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "unassign-"+deviceID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d want 200; body=%s", resp.StatusCode, raw)
+	}
+
+	var stored struct {
+		Site  *string
+		Asset *string
+	}
+	if err := srv.Pool.QueryRow(ctx,
+		`SELECT site_id::text, asset_number FROM devices WHERE id = $1`, deviceID,
+	).Scan(&stored.Site, &stored.Asset); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Site != nil {
+		t.Errorf("site_id: got %v want nil", *stored.Site)
+	}
+	if stored.Asset != nil {
+		t.Errorf("asset_number: got %v want nil", *stored.Asset)
+	}
+}
+
+// TestDeviceDeploymentPutForbidsNonStaff locks the staff-gate:
+// reassigning a device is an admin action; a site-scoped operator
+// cannot quietly move devices across sites.
+func TestDeviceDeploymentPutForbidsNonStaff(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "ns", "22222222-2222-2222-2222-222222222222")
+
+	token := mintNonStaffAccessToken(t, ctx, srv)
+	body, _ := json.Marshal(map[string]any{"site_id": nil, "asset_number": nil})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/devices/"+deviceID+"/deployment", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "ns-"+deviceID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d want 403", resp.StatusCode)
+	}
+}
+
+// TestDeviceDeploymentPutRejectsUnknownSite locks the FK guard:
+// a site_id that doesn't exist in the mirror surfaces as a 400
+// (operator error) rather than a 500 (FK violation surfacing as a
+// bare DB error). Asset_number-only updates with a bogus site_id are
+// rejected too.
+func TestDeviceDeploymentPutRejectsUnknownSite(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "rd", "33333333-3333-3333-3333-333333333333")
+
+	token := mintAccessToken(t, ctx, srv)
+	body, _ := json.Marshal(map[string]any{
+		"site_id":      "00000000-0000-0000-0000-000000000000",
+		"asset_number": "UK-X",
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/devices/"+deviceID+"/deployment", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "rd-"+deviceID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status: got %d want 400 for unknown site_id", resp.StatusCode)
 	}
 }
 
