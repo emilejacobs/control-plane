@@ -320,3 +320,88 @@ func TestTaxonomySweepInactiveMarksAbsentRows(t *testing.T) {
 		t.Errorf("sites active: got %+v want {site-fresh:true site-stale:false}", got)
 	}
 }
+
+// TestTaxonomyStatusCounts locks the read surface behind
+// GET /taxonomy/status (ADR-033 § 8): the Settings page renders "Last
+// successful sync: 4h ago — N clients, M sites (M active)". Status
+// computes the four counts plus the most recent last_synced_at across
+// either table, all from a single store call so the handler is a thin
+// pass-through.
+func TestTaxonomyStatusCounts(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := taxonomy.NewStore(pool)
+
+	earlier := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	later := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+
+	// 2 clients (1 active, 1 inactive) and 3 sites (2 active, 1 inactive).
+	cActive, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "c1", Name: "Active", SyncedAt: later})
+	cInactive, _ := store.UpsertClient(ctx, taxonomy.ClientRow{ExternalID: "c2", Name: "Gone", SyncedAt: earlier})
+	if _, err := pool.Exec(ctx, `UPDATE clients SET active = false WHERE external_id = $1`, "c2"); err != nil {
+		t.Fatal(err)
+	}
+	_ = cInactive
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s1", Name: "S1", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", SyncedAt: later}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s2", Name: "S2", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", SyncedAt: earlier}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSite(ctx, taxonomy.SiteRow{ExternalID: "s3", Name: "S3", ClientID: cActive, BrandName: "BK", BrandExternalID: "bk", SyncedAt: earlier}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE sites SET active = false WHERE external_id = $1`, "s3"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got.ClientsTotal != 2 {
+		t.Errorf("ClientsTotal: got %d want 2", got.ClientsTotal)
+	}
+	if got.ClientsActive != 1 {
+		t.Errorf("ClientsActive: got %d want 1", got.ClientsActive)
+	}
+	if got.SitesTotal != 3 {
+		t.Errorf("SitesTotal: got %d want 3", got.SitesTotal)
+	}
+	if got.SitesActive != 2 {
+		t.Errorf("SitesActive: got %d want 2", got.SitesActive)
+	}
+	if got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(later) {
+		t.Errorf("LastSyncedAt: got %v want %v", got.LastSyncedAt, later)
+	}
+}
+
+// TestTaxonomyStatusEmptyReportsNilLastSyncedAt covers the
+// never-run-yet state: the dashboard renders "Never" rather than a
+// 1970 epoch when there is no synced row at all.
+func TestTaxonomyStatusEmptyReportsNilLastSyncedAt(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+
+	pool := startPostgres(t, ctx, nil)
+	if err := storage.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := taxonomy.NewStore(pool)
+
+	got, err := store.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got.ClientsTotal != 0 || got.SitesTotal != 0 {
+		t.Errorf("counts: got %+v want all zero", got)
+	}
+	if got.LastSyncedAt != nil {
+		t.Errorf("LastSyncedAt: got %v want nil", got.LastSyncedAt)
+	}
+}

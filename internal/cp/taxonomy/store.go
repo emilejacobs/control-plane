@@ -122,3 +122,38 @@ func (s *Store) SweepInactive(ctx context.Context, cutoff time.Time) error {
 	}
 	return nil
 }
+
+// StatusSnapshot is the read surface behind GET /taxonomy/status. The
+// counts let the Settings page render "N clients, M sites (M active)";
+// LastSyncedAt is the most recent observation across either table (nil
+// when nothing has synced yet, which the dashboard renders as "Never").
+type StatusSnapshot struct {
+	ClientsTotal  int
+	ClientsActive int
+	SitesTotal    int
+	SitesActive   int
+	LastSyncedAt  *time.Time
+}
+
+// Status returns the counts and most recent last_synced_at across
+// clients + sites in a single read. LastSyncedAt is nil when no row
+// has ever synced.
+func (s *Store) Status(ctx context.Context) (StatusSnapshot, error) {
+	var snap StatusSnapshot
+	var last *time.Time
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+		    (SELECT count(*) FROM clients),
+		    (SELECT count(*) FROM clients WHERE active),
+		    (SELECT count(*) FROM sites),
+		    (SELECT count(*) FROM sites WHERE active),
+		    GREATEST(
+		        (SELECT max(last_synced_at) FROM clients),
+		        (SELECT max(last_synced_at) FROM sites)
+		    )
+	`).Scan(&snap.ClientsTotal, &snap.ClientsActive, &snap.SitesTotal, &snap.SitesActive, &last); err != nil {
+		return StatusSnapshot{}, fmt.Errorf("status: %w", err)
+	}
+	snap.LastSyncedAt = last
+	return snap, nil
+}
