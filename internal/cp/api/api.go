@@ -15,12 +15,14 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/auth"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
+	taxonomyhttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/taxonomy"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
 )
 
 type Deps struct {
@@ -28,6 +30,11 @@ type Deps struct {
 	AuthN            *authn.AuthN
 	AuthZ            *authz.AuthZ
 	IdempotencyStore middleware.IdempotencyStore
+
+	// TaxonomyStore is the clients/sites mirror store ADR-033 § 8's
+	// GET /taxonomy/status reads. nil disables the route — tests that
+	// don't exercise the surface omit it.
+	TaxonomyStore *taxonomy.Store
 
 	// CmdPublisher is the IoT-Core data-plane publisher used by the
 	// Phase 2 slice 2 service-config PUT to push a config.update down
@@ -185,6 +192,15 @@ func NewBuilderWith(d Deps) *Builder {
 				requireAuth(requireEnrolled(requireScope(devices.NewNetworkScanPost(d.Registry, d.CmdPublisher)))))
 			b.Get("/devices/{id}/network-scan/{correlation_id}",
 				requireAuth(requireEnrolled(requireScope(devices.NewNetworkScanGet(d.Registry)))))
+		}
+		// ADR-033 § 8 / Issue #18 — clients/sites taxonomy sync.
+		// Staff-only: the manual button is admin-only (non-zero ECS
+		// cost) and the status surface mirrors that scope. Read-only
+		// status here; the RunTask trigger lands in the next slice.
+		if d.TaxonomyStore != nil {
+			requireStaff := middleware.RequireStaff()
+			b.Get("/taxonomy/status",
+				requireAuth(requireEnrolled(requireStaff(taxonomyhttp.NewStatus(d.TaxonomyStore)))))
 		}
 	}
 	return b

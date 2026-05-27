@@ -25,6 +25,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
+	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
 )
 
 const testBootstrapKey = "test-bootstrap-key"
@@ -130,6 +131,7 @@ func buildTestServer(t *testing.T, ctx context.Context, pool *pgxpool.Pool, auth
 		AuthN:            authnSvc,
 		AuthZ:            authzSvc,
 		IdempotencyStore: idemStore,
+		TaxonomyStore:    taxonomy.NewStore(pool),
 		Audit:            auditW,
 		Logger:           cplog.New(logs, "cp-api-test"),
 	}))
