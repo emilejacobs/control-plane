@@ -101,17 +101,6 @@ button { font-family: inherit; }
   letter-spacing: -0.01em;
   font-size: 15px;
 }
-.topbar-logo {
-  width: 28px; height: 28px;
-  border-radius: 999px;
-  background: var(--green);
-  display: grid;
-  place-items: center;
-  color: oklch(15% 0.04 148);
-  font-weight: 800;
-  font-size: 13px;
-  letter-spacing: -0.05em;
-}
 .topbar-sub {
   color: var(--ink-on-dark-2);
   font-size: 13px;
@@ -472,7 +461,6 @@ label.field .hint {
   font-size: 16px;
   letter-spacing: -0.01em;
 }
-.auth-brand .topbar-logo { width: 26px; height: 26px; font-size: 12px; }
 .auth-title {
   font-size: 22px;
   font-weight: 700;
@@ -589,6 +577,10 @@ label.field .hint {
   margin-bottom: 16px;
 }
 .overview-row.single { grid-template-columns: 1fr; }
+
+/* The one-time temp-password reveal sits above the Operators table; give it
+   the same 16px gap that separates the dashboard's stacked cards. */
+.temp-pw-notice { margin-bottom: 16px; }
 
 .list-row {
   display: flex;

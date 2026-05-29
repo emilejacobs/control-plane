@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useFirstRun } from "../../lib/api/hooks";
+import { Logo } from "../../components/ui/Logo";
 
 // FirstRunPage claims the first-run admin account. cp-api still gates this
 // server-side (410 once initialized); on success the operator is routed
@@ -80,16 +81,7 @@ export default function FirstRunPage() {
 function Brand() {
   return (
     <div className="auth-brand">
-      <span className="topbar-logo" aria-hidden>
-        <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
-          <path
-            d="M3.5 6.5c.7 1.6 2 2.6 3.5 2.6s2.8-1 3.5-2.6"
-            stroke="currentColor"
-            strokeWidth={1.6}
-            strokeLinecap="round"
-          />
-        </svg>
-      </span>
+      <Logo />
       <span>uknomi</span>
       <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>Control Plane</span>
     </div>
