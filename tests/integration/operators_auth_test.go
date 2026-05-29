@@ -63,3 +63,32 @@ func TestLoginDeactivatedRejected(t *testing.T) {
 		t.Errorf("Login(deactivated) err = %v, want ErrInvalidCredentials", err)
 	}
 }
+
+// TestRefreshDeactivatedRejected — deactivation must also cut off the refresh
+// path: an operator deactivated mid-session cannot rotate a still-valid
+// refresh token into fresh access tokens (else soft-delete is defeated for up
+// to the refresh-token lifetime, indefinitely via rotation).
+func TestRefreshDeactivatedRejected(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	store := operators.New(srv.Pool)
+
+	res, err := store.Create(ctx, operators.CreateInput{Email: "session@acme.test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Log in while active to obtain a valid refresh token.
+	login, err := srv.AuthN.Login(ctx, authn.LoginInput{Email: "session@acme.test", Password: res.TempPassword})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	// Deactivate, then attempt to rotate the still-valid refresh token.
+	if err := store.SetActive(ctx, res.Operator.ID, false); err != nil {
+		t.Fatalf("SetActive(false): %v", err)
+	}
+	if _, err := srv.AuthN.Refresh(ctx, login.Tokens.RefreshToken); !errors.Is(err, authn.ErrInvalidRefreshToken) {
+		t.Errorf("Refresh(deactivated) err = %v, want ErrInvalidRefreshToken", err)
+	}
+}

@@ -309,10 +309,19 @@ func (a *AuthN) Refresh(ctx context.Context, refreshToken string) (Tokens, error
 
 	var email string
 	var isStaff bool
+	var deactivatedAt *time.Time
 	if err := a.pool.QueryRow(ctx, `
-		SELECT email, is_staff FROM operators WHERE id = $1
-	`, operatorID).Scan(&email, &isStaff); err != nil {
+		SELECT email, is_staff, deactivated_at FROM operators WHERE id = $1
+	`, operatorID).Scan(&email, &isStaff, &deactivatedAt); err != nil {
 		return Tokens{}, fmt.Errorf("lookup operator: %w", err)
+	}
+
+	// A deactivated (soft-deleted) operator cannot rotate tokens — the
+	// presented token has already been revoked above, so deactivation cuts
+	// off the refresh path within one rotation. Mirrors the Login-time check
+	// so soft-delete is not bypassable via a still-valid refresh token.
+	if deactivatedAt != nil {
+		return Tokens{}, ErrInvalidRefreshToken
 	}
 
 	return a.issueTokens(ctx, operatorID, email, isStaff)
