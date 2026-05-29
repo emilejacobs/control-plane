@@ -46,6 +46,10 @@ type loginResponse struct {
 	AccessToken            string `json:"access_token"`
 	RefreshToken           string `json:"refresh_token"`
 	RequiresTotpEnrollment bool   `json:"requires_totp_enrollment"`
+	// MustChangePassword is true when the operator is still on a
+	// system-generated temp password (#16); the client routes into the
+	// set-new-password flow before anything else.
+	MustChangePassword bool `json:"must_change_password"`
 }
 
 type FirstRunHandler struct {
@@ -205,6 +209,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		AccessToken:            result.Tokens.AccessToken,
 		RefreshToken:           result.Tokens.RefreshToken,
 		RequiresTotpEnrollment: result.RequiresTotpEnrollment,
+		MustChangePassword:     result.MustChangePassword,
 	})
 }
 
