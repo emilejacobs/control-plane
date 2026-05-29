@@ -41,3 +41,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 031 | [Webhook endpoint registry — CP-wide config primitive](./adr/0031-webhook-endpoint-registry.md) | Accepted (2026-05-25) |
 | 032 | [Edge UI v1 — Next.js+Go, port 5051, plain HTTP, parallel install](./adr/0032-edge-ui-v1-stack-port-tls.md) | Accepted (2026-05-26) — clarifies ADR-030 §§ 1, 8 |
 | 033 | [Clients/sites taxonomy — daily mirror sync from upstream HTTP API](./adr/0033-clients-sites-taxonomy-sync.md) | Accepted (2026-05-26) — supersedes the direct-MySQL plan in memory `external_mysql_taxonomy` |
+| 034 | [Agent backend abstraction for an OS-agnostic command + probe surface](./adr/0034-agent-backend-abstraction-os-agnostic-surface.md) | Accepted (2026-05-28) |
