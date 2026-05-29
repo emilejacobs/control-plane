@@ -49,9 +49,9 @@ func (s *configStore) SetServiceConfig(_ context.Context, deviceID string, allow
 // cmdPublisher captures every Publish call so the test can verify the
 // config.update envelope shape + topic.
 type cmdPublisher struct {
-	mu       sync.Mutex
-	calls    []pubCall
-	pubErr   error
+	mu     sync.Mutex
+	calls  []pubCall
+	pubErr error
 }
 type pubCall struct {
 	topic   string

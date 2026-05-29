@@ -31,13 +31,13 @@ func (nopPublisher) Publish(_ context.Context, _ string, _ []byte) error { retur
 // nextID is the server-assigned id the next Insert returns.
 // listing is the pre-populated cameras per device id for List tests.
 type cameraStore struct {
-	mu        sync.Mutex
-	known     map[string]bool
-	nextID    string
-	inserts   []insertCall
-	insertErr error
-	listing   map[string][]cameras.Camera
-	listErr   error
+	mu            sync.Mutex
+	known         map[string]bool
+	nextID        string
+	inserts       []insertCall
+	insertErr     error
+	listing       map[string][]cameras.Camera
+	listErr       error
 	updates       []updateCall
 	deletes       []deleteCall
 	camerasStatus registry.CamerasStatus
@@ -335,12 +335,12 @@ func (s *lprConflictPutStore) UpdateCamera(_ context.Context, _, _, _, _ string,
 // check that gates every handler.
 func TestCameraHandlersReturn404WhenDeviceMissing(t *testing.T) {
 	cases := []struct {
-		name    string
-		method  string
-		path    string
-		body    string
-		newH    func(devices.CameraStore) http.Handler
-		setCam  bool
+		name   string
+		method string
+		path   string
+		body   string
+		newH   func(devices.CameraStore) http.Handler
+		setCam bool
 	}{
 		{"POST", http.MethodPost, "/devices/dev-x/cameras", `{"label":"x","rtsp_url":"rtsp://x","is_lpr":false}`, func(s devices.CameraStore) http.Handler { return devices.NewCameraPost(s, nopPublisher{}) }, false},
 		{"GET", http.MethodGet, "/devices/dev-x/cameras", "", func(s devices.CameraStore) http.Handler { return devices.NewCameraList(s) }, false},

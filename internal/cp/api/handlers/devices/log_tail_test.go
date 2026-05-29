@@ -20,11 +20,11 @@ import (
 
 // logTailStore stubs the LogTailStore the POST + GET handlers depend on.
 type logTailStore struct {
-	mu       sync.Mutex
-	created  []registry.LogTailRequest
-	known    map[string]bool // deviceID → exists
-	getRet   map[string]registry.LogTail
-	getErr   error
+	mu        sync.Mutex
+	created   []registry.LogTailRequest
+	known     map[string]bool // deviceID → exists
+	getRet    map[string]registry.LogTail
+	getErr    error
 	createErr error
 }
 

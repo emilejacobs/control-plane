@@ -170,6 +170,10 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN, auditW)))
 		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
+		// Phase 2 fleet health probes (issue #19): per-device probe
+		// snapshot. Read-only; same auth + TOTP + site scope as the
+		// other per-device reads.
+		b.Get("/devices/{id}/health-probes", requireAuth(requireEnrolled(requireScope(devices.NewHealthProbeList(d.Registry)))))
 		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
 		// Read route (GET) requires only auth + TOTP + site scope.
 		// Mutating routes additionally need CmdPublisher to push the

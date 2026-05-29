@@ -115,6 +115,17 @@ type DeviceService struct {
 	LastReported time.Time
 }
 
+// DeviceHealthProbe is the read-side projection of one row in
+// device_health_probes (#19). Status is the agent-decided colour;
+// State the OS-agnostic signal token; Details the structured payload.
+type DeviceHealthProbe struct {
+	Name           string
+	Status         string
+	State          string
+	Details        map[string]any
+	LastObservedAt time.Time
+}
+
 type Device struct {
 	ID                string
 	Hostname          string
@@ -488,6 +499,42 @@ func (r *Registry) ListServices(ctx context.Context, deviceID string) ([]DeviceS
 		}
 		ds.State = service.State(stateStr)
 		out = append(out, ds)
+	}
+	return out, rows.Err()
+}
+
+// ListHealthProbes returns the per-probe rows for a device, ordered by
+// probe_name. An empty (non-nil) slice for a device that has never
+// reported. A non-UUID deviceID returns an empty slice rather than an
+// error — the per-device API treats it as "no probes" so the page still
+// renders (mirrors ListServices).
+func (r *Registry) ListHealthProbes(ctx context.Context, deviceID string) ([]DeviceHealthProbe, error) {
+	out := []DeviceHealthProbe{}
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT probe_name, status, state, details, last_observed_at
+		FROM device_health_probes
+		WHERE device_id = $1
+		ORDER BY probe_name
+	`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("list device_health_probes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p DeviceHealthProbe
+		var detailsJSON []byte
+		if err := rows.Scan(&p.Name, &p.Status, &p.State, &detailsJSON, &p.LastObservedAt); err != nil {
+			return nil, fmt.Errorf("scan device_health_probe: %w", err)
+		}
+		if len(detailsJSON) > 0 {
+			if err := json.Unmarshal(detailsJSON, &p.Details); err != nil {
+				return nil, fmt.Errorf("unmarshal probe details: %w", err)
+			}
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

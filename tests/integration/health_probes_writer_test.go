@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -116,5 +118,68 @@ func TestRegistryRecordHealthProbesUnknownDevice(t *testing.T) {
 		time.Now())
 	if !errors.Is(err, registry.ErrDeviceNotFound) {
 		t.Fatalf("err = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+// TestGetDeviceHealthProbesEndpoint — the GET /devices/{id}/health-probes
+// API round-trips stored probes through the real router + authz + DB.
+func TestGetDeviceHealthProbesEndpoint(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "mac-mini-probes-api", "44444444-5555-6666-7777-888888888888")
+
+	observedAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	if err := srv.Registry.RecordHealthProbes(ctx, deviceID, []healthprobes.Result{
+		{Name: healthprobes.ProbeAutoLogin, Status: healthprobes.StatusGreen, State: "configured"},
+		{
+			Name:    healthprobes.ProbeWhisperModel,
+			Status:  healthprobes.StatusGreen,
+			State:   "present",
+			Details: map[string]any{"variant": "medium.en", "size_mb": 539},
+		},
+	}, observedAt); err != nil {
+		t.Fatalf("RecordHealthProbes: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/devices/"+deviceID+"/health-probes", nil)
+	req.Header.Set("Authorization", "Bearer "+mintAccessToken(t, ctx, srv))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET health-probes: status %d; body=%s", resp.StatusCode, raw)
+	}
+
+	var body struct {
+		Probes []struct {
+			Name           string         `json:"name"`
+			Status         string         `json:"status"`
+			State          string         `json:"state"`
+			Details        map[string]any `json:"details"`
+			LastObservedAt string         `json:"last_observed_at"`
+		} `json:"probes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Probes) != 2 {
+		t.Fatalf("probes len = %d, want 2 (ordered by probe_name)", len(body.Probes))
+	}
+	// Ordered by probe_name: auto_login before whisper_model.
+	if body.Probes[0].Name != healthprobes.ProbeAutoLogin || body.Probes[0].State != "configured" {
+		t.Errorf("probe[0] = %+v", body.Probes[0])
+	}
+	if body.Probes[1].Name != healthprobes.ProbeWhisperModel {
+		t.Errorf("probe[1].Name = %q, want whisper_model", body.Probes[1].Name)
+	}
+	if v, _ := body.Probes[1].Details["variant"].(string); v != "medium.en" {
+		t.Errorf("whisper details variant = %v, want medium.en", body.Probes[1].Details["variant"])
+	}
+	if body.Probes[0].LastObservedAt != observedAt.Format(time.RFC3339) {
+		t.Errorf("last_observed_at = %q, want %q", body.Probes[0].LastObservedAt, observedAt.Format(time.RFC3339))
 	}
 }
