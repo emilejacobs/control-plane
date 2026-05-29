@@ -162,6 +162,35 @@ func TestProbePlateRecognizerConfig(t *testing.T) {
 	})
 }
 
+func TestProbeUSBAudio(t *testing.T) {
+	const cmd = "system_profiler SPAudioDataType"
+	t.Run("detected", func(t *testing.T) {
+		out := "Audio:\n\n    Devices:\n\n        Advanced USB Audio:\n          Input Channels: 2\n"
+		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {stdout: out}}}.run}
+		res := b.probeUSBAudio(context.Background())
+		if res.Name != healthprobes.ProbeUSBAudio {
+			t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbeUSBAudio)
+		}
+		if res.State != "detected" {
+			t.Errorf("State = %q, want detected", res.State)
+		}
+		if res.Status != healthprobes.StatusGreen {
+			t.Errorf("Status = %q, want green", res.Status)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		out := "Audio:\n\n    Devices:\n\n        MacBook Pro Speakers:\n"
+		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {stdout: out}}}.run}
+		res := b.probeUSBAudio(context.Background())
+		if res.State != "missing" {
+			t.Errorf("State = %q, want missing", res.State)
+		}
+		if res.Status != healthprobes.StatusRed {
+			t.Errorf("Status = %q, want red", res.Status)
+		}
+	})
+}
+
 func TestProbeGUISession(t *testing.T) {
 	cases := map[string]struct {
 		consoleUser string

@@ -93,7 +93,30 @@ func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 		b.probeGUISession(ctx),
 		b.probePlateRecognizerContainer(ctx),
 		b.probePlateRecognizerConfig(ctx),
+		b.probeUSBAudio(ctx),
 	}
+}
+
+// usbAudioDeviceName is the USB audio dongle the fleet records with.
+// macOS intermittently fails to enumerate it across reboots — the
+// recurring failure this probe catches.
+const usbAudioDeviceName = "Advanced USB Audio"
+
+// probeUSBAudio reports whether the USB audio capture device is
+// enumerated by the OS (the cause behind silent no-recording symptoms;
+// see #10 for the symptom-side check).
+func (b *darwinBackend) probeUSBAudio(ctx context.Context) healthprobes.Result {
+	res := healthprobes.Result{Name: healthprobes.ProbeUSBAudio, Details: map[string]any{}}
+
+	stdout, _, err := b.run(ctx, "system_profiler", "SPAudioDataType")
+	if err == nil && strings.Contains(string(stdout), usbAudioDeviceName) {
+		res.State = "detected"
+		res.Status = healthprobes.StatusGreen
+		return res
+	}
+	res.State = "missing"
+	res.Status = healthprobes.StatusRed
+	return res
 }
 
 const plateRecognizerConfigPath = "/usr/local/etc/plate-recognizer/stream/config.ini"
