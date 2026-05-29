@@ -31,9 +31,12 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 # .next/standalone includes a minimal server.js + the production deps the
-# build actually used; .next/static carries the hashed asset bundle.
+# build actually used; .next/static carries the hashed asset bundle. Next's
+# standalone output does NOT bundle public/ — it must be copied explicitly,
+# or static assets like /uknomi-logo.png 404 at runtime.
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]
