@@ -40,11 +40,19 @@ var ErrTotpAlreadyEnrolled = errors.New("totp already enrolled")
 // HTTP 401.
 var ErrInvalidTotp = errors.New("invalid totp code")
 
+// ErrWeakPassword is returned by SetPassword for a password below
+// minPasswordLength. Handlers translate it to HTTP 400.
+var ErrWeakPassword = errors.New("password too short")
+
 // Lockout policy: maxFailedAttempts consecutive failures lock the account
 // for lockoutWindow. A successful login clears both the counter and the lock.
 const (
 	maxFailedAttempts = 5
 	lockoutWindow     = 15 * time.Minute
+	// minPasswordLength is the floor for an operator-chosen password. The
+	// generated temp password is well above it; this guards the
+	// operator-set replacement.
+	minPasswordLength = 12
 )
 
 // Config is the per-instance AuthN configuration. SigningKey and
@@ -405,6 +413,52 @@ func (a *AuthN) EnrollTotp(ctx context.Context, operatorID string) (TotpEnrollme
 		ProvisioningURI: totpProvisioningURI(secret, email),
 		RecoveryCodes:   codes,
 	}, nil
+}
+
+// SetPassword replaces an operator's password and clears the
+// must_change_password flag — the constrained set-new-password path an
+// operator on a system-generated temp password must complete on first login.
+// It enforces minPasswordLength but is intentionally narrow: it does not
+// verify the current password (the operator is already authenticated) and is
+// not general self-service password change.
+func (a *AuthN) SetPassword(ctx context.Context, operatorID, newPassword string) error {
+	if len(newPassword) < minPasswordLength {
+		return ErrWeakPassword
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	tag, err := a.pool.Exec(ctx, `
+		UPDATE operators
+		SET password_hash = $2, must_change_password = false, updated_at = now()
+		WHERE id = $1
+	`, operatorID, hash)
+	if err != nil {
+		return fmt.Errorf("set password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
+// MustChangePassword reports whether the operator is still on a
+// system-generated temp password and must set a new one. The
+// password-change gate calls it on every protected request. An operator id
+// that matches no row is reported as not requiring a change.
+func (a *AuthN) MustChangePassword(ctx context.Context, operatorID string) (bool, error) {
+	var must bool
+	err := a.pool.QueryRow(ctx,
+		`SELECT must_change_password FROM operators WHERE id = $1`, operatorID,
+	).Scan(&must)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check must-change-password: %w", err)
+	}
+	return must, nil
 }
 
 func (a *AuthN) issueTokens(ctx context.Context, operatorID, email string, isStaff bool) (Tokens, error) {
