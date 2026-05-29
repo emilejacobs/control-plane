@@ -106,6 +106,11 @@ describe("apiRequest", () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
       refresh_token: "refresh-1",
     });
+    // /auth/refresh is a mutating POST behind the idempotency gate, which
+    // 400s a request with no Idempotency-Key — so the refresh call must
+    // carry one, just like every other mutating call.
+    const refreshInit = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(new Headers(refreshInit.headers).get("Idempotency-Key")).toBeTruthy();
 
     // The retry carried the rotated-in access token.
     const retryInit = fetchMock.mock.calls[2][1] as RequestInit;
