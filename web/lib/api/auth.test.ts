@@ -59,7 +59,10 @@ describe("login", () => {
       password: "correct-horse-battery-staple",
       totp_code: "123456",
     });
-    expect(result.requiresTotpEnrollment).toBe(false);
+    expect(result.kind).toBe("authenticated");
+    if (result.kind === "authenticated") {
+      expect(result.requiresTotpEnrollment).toBe(false);
+    }
     expect(currentTokens()).toEqual({ accessToken: "access-9", refreshToken: "refresh-9" });
   });
 
