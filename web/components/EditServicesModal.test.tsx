@@ -21,8 +21,13 @@ function deviceFixture(overrides: Partial<Device> = {}): Device {
     certExpiresAt: null,
     certDaysRemaining: 365,
     enrolledAt: "2026-05-01T09:00:00Z",
+    siteId: null,
     siteName: null,
     clientName: null,
+    assetNumber: null,
+    lanIp: null,
+    tailscaleIp: null,
+    tailscaleName: null,
     services: [
       { name: "com.uknomi.webui", state: "running", stateSince: "2026-05-24T17:00:00Z", lastReported: "2026-05-24T17:59:30Z" },
       { name: "com.tailscale.tailscaled", state: "running", stateSince: "2026-05-24T17:00:00Z", lastReported: "2026-05-24T17:59:30Z" },
