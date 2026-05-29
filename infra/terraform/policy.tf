@@ -37,6 +37,12 @@ resource "aws_iot_policy" "agent" {
           # so omitting this line was the cause of "agent looks healthy,
           # cp-ingest sees nothing" in the Wave 0 bench upgrade.
           "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/service-status",
+          # Phase 2 issue #19 fleet health probes: the agent's
+          # ProbePublisher emits a healthprobes.Report on this topic every
+          # 5 minutes. Same silent-drop trap as service-status above —
+          # omitting it made the agent look healthy (heartbeats on
+          # /telemetry still flow) while cp-ingest saw zero probe reports.
+          "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/health-probes",
         ]
       },
       {
