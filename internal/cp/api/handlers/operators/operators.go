@@ -23,8 +23,7 @@ type Store interface {
 	List(ctx context.Context) ([]ops.Operator, error)
 	Get(ctx context.Context, id string) (ops.Operator, error)
 	Create(ctx context.Context, in ops.CreateInput) (ops.CreateResult, error)
-	Update(ctx context.Context, id string, in ops.UpdateInput) (ops.Operator, error)
-	ResetPassword(ctx context.Context, id string) (string, error)
+	Update(ctx context.Context, id string, in ops.UpdateInput) (ops.UpdateResult, error)
 	SetActive(ctx context.Context, id string, active bool) error
 }
 
@@ -159,8 +158,9 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	o, err := h.store.Update(r.Context(), id, ops.UpdateInput{
-		IsStaff: req.IsStaff, SiteIDs: req.SiteIDs, ResetTotp: req.ResetTotp,
+	res, err := h.store.Update(r.Context(), id, ops.UpdateInput{
+		IsStaff: req.IsStaff, SiteIDs: req.SiteIDs,
+		ResetTotp: req.ResetTotp, ResetPassword: req.ResetPassword,
 	})
 	if errors.Is(err, ops.ErrNotFound) {
 		http.Error(w, "operator not found", http.StatusNotFound)
@@ -171,18 +171,9 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]any{"operator": toJSON(o)}
-	if req.ResetPassword {
-		temp, err := h.store.ResetPassword(r.Context(), id)
-		if errors.Is(err, ops.ErrNotFound) {
-			http.Error(w, "operator not found", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		resp["temp_password"] = temp
+	resp := map[string]any{"operator": toJSON(res.Operator)}
+	if res.TempPassword != "" {
+		resp["temp_password"] = res.TempPassword
 	}
 	writeAudit(r, h.audit, "audit.operator_update", id, "success", map[string]any{
 		"is_staff": req.IsStaff, "reset_totp": req.ResetTotp, "reset_password": req.ResetPassword,
