@@ -2,12 +2,13 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { useDevices } from "../../lib/api/hooks";
+import { useDevices, useFleetAlerts } from "../../lib/api/hooks";
 import { groupDevices } from "../../lib/fleet";
 import { Topbar } from "../../components/ui/Topbar";
 import { Card } from "../../components/ui/Card";
 import { Dot } from "../../components/ui/Dot";
 import { Pill } from "../../components/ui/Pill";
+import { FleetAlertsPanel } from "../../components/FleetAlertsPanel";
 import { RequireAuth } from "../../components/RequireAuth";
 
 // OverviewPage — fleet health at a glance.
@@ -33,6 +34,7 @@ export default function OverviewPage() {
 
 export function OverviewBody() {
   const devices = useDevices();
+  const fleetAlerts = useFleetAlerts();
 
   const stats = useMemo(() => {
     const list = devices.data ?? [];
@@ -170,6 +172,10 @@ export function OverviewBody() {
               </div>
 
             </div>
+
+            {fleetAlerts.data && (
+              <FleetAlertsPanel alerts={fleetAlerts.data} devices={devices.data} />
+            )}
 
             <div className="overview-row">
               <Card label="Needs attention" flush>
