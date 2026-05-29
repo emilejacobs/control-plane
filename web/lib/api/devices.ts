@@ -259,6 +259,45 @@ export interface DeviceService {
   lastReported: string; // RFC3339
 }
 
+// HealthProbe is one row from GET /devices/{id}/health-probes — what the
+// per-device Health panel renders (Phase 2, issue #19). status is the
+// agent-decided colour; state the OS-agnostic signal token; details the
+// structured per-probe payload (whisper variant/size, config sha, etc.).
+export interface HealthProbe {
+  name: string;
+  status: "green" | "yellow" | "red";
+  state: string;
+  details: Record<string, unknown>;
+  lastObservedAt: string; // RFC3339
+}
+
+interface HealthProbeWire {
+  name: string;
+  status: "green" | "yellow" | "red";
+  state: string;
+  details: Record<string, unknown>;
+  last_observed_at: string;
+}
+
+interface HealthProbesResponseWire {
+  probes: HealthProbeWire[];
+}
+
+export async function getHealthProbes(deviceId: string): Promise<HealthProbe[]> {
+  const res = await apiRequest(`/devices/${deviceId}/health-probes`);
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to load health probes");
+  }
+  const d = (await res.json()) as HealthProbesResponseWire;
+  return (d.probes ?? []).map((p) => ({
+    name: p.name,
+    status: p.status,
+    state: p.state,
+    details: p.details ?? {},
+    lastObservedAt: p.last_observed_at,
+  }));
+}
+
 // ServiceConfig is the per-device override block. null fields mean
 // "no override" (agent uses its bundled defaults); a non-null
 // allowListOverride of `[]` means "track nothing" — distinct from null.

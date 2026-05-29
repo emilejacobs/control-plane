@@ -9,6 +9,7 @@ import {
   useDevice,
   useNow,
   useCameras,
+  useHealthProbes,
   useNetworkScan,
   useSitesTree,
   useUpdateDeviceDeployment,
@@ -26,6 +27,7 @@ import { UNASSIGNED } from "../../../lib/fleet";
 import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
+import { HealthPanel } from "../../../components/HealthPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
 import { CameraDialog } from "../../../components/CameraDialog";
 import { NetworkScanModal } from "../../../components/NetworkScanModal";
@@ -54,6 +56,7 @@ export default function DevicePage() {
   const { id } = useParams<{ id: string }>();
   const device = useDevice(id);
   const cameras = useCameras(id);
+  const healthProbes = useHealthProbes(id);
   const now = useNow();
   const d = device.data;
   const camData = cameras.data;
@@ -301,6 +304,10 @@ export default function DevicePage() {
               }
             >
               <ServicesPanel services={d.services} now={now} />
+            </Card>
+
+            <Card label="Health">
+              <HealthPanel probes={healthProbes.data ?? []} now={now} />
             </Card>
             {editingServices && d && (
               <EditServicesModal

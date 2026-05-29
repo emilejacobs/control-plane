@@ -10,7 +10,7 @@ import {
   enrollTotp,
   type LoginInput,
 } from "./auth";
-import { getDevices, getDevice, getCameras, getNetworkScan } from "./devices";
+import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
 import {
   getSitesTree,
   updateDeviceDeployment,
@@ -87,6 +87,18 @@ export function useCameras(id: string) {
   return useQuery({
     queryKey: ["device", id, "cameras"],
     queryFn: () => getCameras(id),
+    refetchInterval: devicePollInterval,
+  });
+}
+
+// useHealthProbes loads the per-device fleet-health-probe snapshot
+// (Phase 2, issue #19). Same 10s poll cadence as the rest of the device
+// page; probe reports land every 5 minutes so the panel is never more
+// than a poll behind the latest report.
+export function useHealthProbes(id: string) {
+  return useQuery({
+    queryKey: ["device", id, "health-probes"],
+    queryFn: () => getHealthProbes(id),
     refetchInterval: devicePollInterval,
   });
 }
