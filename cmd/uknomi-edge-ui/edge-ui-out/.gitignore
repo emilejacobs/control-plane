@@ -1,8 +1,16 @@
 # The edge-ui-out/ directory is the //go:embed target for the
 # Next.js static export. `make edge-ui` populates it from edge-ui/out
-# after `next build`. We commit only the placeholder index.html + this
-# .gitignore so `go test`/`go build` work on a fresh checkout without
-# having run the make target — every other file is build output.
+# after `next build`. We commit only the placeholder HTML the static-
+# handler tests need + this .gitignore so `go test`/`go build` work on
+# a fresh checkout without having run the make target — every other
+# file is build output.
+#
+#   index.html      — TestStaticHandler_ServesIndexAtRoot
+#   preview/_.html  — TestStaticHandler_SPAFallbackToPreviewPlaceholder
+#                     (the /preview/<id> SPA-fallback placeholder)
 *
 !.gitignore
 !index.html
+!preview/
+preview/*
+!preview/_.html
