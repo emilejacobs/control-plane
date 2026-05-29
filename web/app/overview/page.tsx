@@ -173,9 +173,20 @@ export function OverviewBody() {
 
             </div>
 
-            {fleetAlerts.data && (
-              <FleetAlertsPanel alerts={fleetAlerts.data} devices={devices.data} />
-            )}
+            {fleetAlerts.data &&
+              (fleetAlerts.data.probes.length > 0 ||
+                fleetAlerts.data.services.length > 0) && (
+                // Alert-only: render (and reserve spacing) only when there's
+                // something to show. .overview-row.single gives the card the
+                // same 16px bottom margin that separates the Needs attention
+                // row from the Clients card below.
+                <div className="overview-row single">
+                  <FleetAlertsPanel
+                    alerts={fleetAlerts.data}
+                    devices={devices.data}
+                  />
+                </div>
+              )}
 
             <div className="overview-row">
               <Card label="Needs attention" flush>
