@@ -83,7 +83,42 @@ func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 	return []healthprobes.Result{
 		b.probeAutoLogin(ctx),
 		b.probeGUISession(ctx),
+		b.probePlateRecognizerContainer(ctx),
 	}
+}
+
+const plateRecognizerContainerName = "plate-recognizer-stream"
+
+// probePlateRecognizerContainer reports the Plate Recognizer container's
+// state via `docker ps -a`. NOTE (ADR-034 / #19 brief): the agent runs as
+// root but Docker Desktop's daemon is per-user, so when no one is logged
+// in the socket is unreachable — docker_unreachable is then the correct
+// signal (and auto-login has usually failed too).
+func (b *darwinBackend) probePlateRecognizerContainer(ctx context.Context) healthprobes.Result {
+	res := healthprobes.Result{Name: healthprobes.ProbePlateRecognizerContainer, Details: map[string]any{}}
+
+	stdout, _, err := b.run(ctx, "docker", "ps", "-a",
+		"--filter", "name="+plateRecognizerContainerName, "--format", "{{.Status}}")
+	if err != nil {
+		res.State = "docker_unreachable"
+		res.Status = healthprobes.StatusRed
+		return res
+	}
+
+	status := strings.TrimSpace(string(stdout))
+	res.Details["docker_status"] = status
+	switch {
+	case status == "":
+		res.State = "missing"
+		res.Status = healthprobes.StatusRed
+	case strings.HasPrefix(status, "Up"):
+		res.State = "running"
+		res.Status = healthprobes.StatusGreen
+	default:
+		res.State = "stopped"
+		res.Status = healthprobes.StatusRed
+	}
+	return res
 }
 
 // probeGUISession reports who owns /dev/console — the macOS convention

@@ -4,6 +4,7 @@ package probes
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -141,6 +142,40 @@ func TestProbeGUISession(t *testing.T) {
 			}
 			if res.Details["console_user"] != tc.consoleUser {
 				t.Errorf("Details[console_user] = %v, want %q", res.Details["console_user"], tc.consoleUser)
+			}
+		})
+	}
+}
+
+func TestProbePlateRecognizerContainer(t *testing.T) {
+	const cmd = "docker ps -a --filter name=plate-recognizer-stream --format {{.Status}}"
+	cases := map[string]struct {
+		result     cmdResult
+		wantState  string
+		wantStatus healthprobes.Status
+	}{
+		"running":           {cmdResult{stdout: "Up 3 days\n"}, "running", healthprobes.StatusGreen},
+		"stopped (exited)":  {cmdResult{stdout: "Exited (137) 2 hours ago\n"}, "stopped", healthprobes.StatusRed},
+		"missing (no rows)": {cmdResult{stdout: "\n"}, "missing", healthprobes.StatusRed},
+		"docker unreachable": {
+			cmdResult{stderr: "Cannot connect to the Docker daemon", err: errors.New("exit status 1")},
+			"docker_unreachable", healthprobes.StatusRed,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := &darwinBackend{
+				run: fakeRunner{results: map[string]cmdResult{cmd: tc.result}}.run,
+			}
+			res := b.probePlateRecognizerContainer(context.Background())
+			if res.Name != healthprobes.ProbePlateRecognizerContainer {
+				t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbePlateRecognizerContainer)
+			}
+			if res.State != tc.wantState {
+				t.Errorf("State = %q, want %q", res.State, tc.wantState)
+			}
+			if res.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", res.Status, tc.wantStatus)
 			}
 		})
 	}
