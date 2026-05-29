@@ -41,6 +41,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -49,6 +50,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
+	"github.com/emilejacobs/control-plane/internal/cp/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
@@ -171,6 +173,17 @@ func run(logger *slog.Logger) error {
 		logger.Info("taxonomy RunTask disabled — TAXONOMY_ECS_CLUSTER unset")
 	}
 
+	// Captures presigner (#8). Gated on CAPTURES_BUCKET so the signed-URL
+	// route stays off until Terraform provisions the bucket; the rest of the
+	// captures surface still serves.
+	var capturePresigner captures.Presigner
+	if bucket := os.Getenv("CAPTURES_BUCKET"); bucket != "" {
+		capturePresigner = captures.NewS3Presigner(s3.NewPresignClient(s3.NewFromConfig(awsCfg)), bucket)
+		logger.Info("captures presigner wired", "bucket", bucket)
+	} else {
+		logger.Info("captures presigner disabled — CAPTURES_BUCKET unset")
+	}
+
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
@@ -178,6 +191,7 @@ func run(logger *slog.Logger) error {
 			AuthN:              authnSvc,
 			AuthZ:              authzSvc,
 			Operators:          operators.New(pool),
+			CapturePresigner:   capturePresigner,
 			IdempotencyStore:   idemStore,
 			TaxonomyStore:      taxonomyStore,
 			TaxonomyRunTask:    taxonomyRunTask,

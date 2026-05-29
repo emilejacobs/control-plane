@@ -2,7 +2,10 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"testing"
 
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -76,5 +79,56 @@ func TestRegistryCaptureStore(t *testing.T) {
 
 	if _, err := srv.Registry.GetCapture(sctx, "00000000-0000-0000-0000-0000000000ff"); !errors.Is(err, registry.ErrCaptureNotFound) {
 		t.Errorf("GetCapture(unknown) err = %v, want ErrCaptureNotFound", err)
+	}
+}
+
+// TestCapturesAPI — GET /devices/{id}/captures lists through the real router;
+// GET /captures/{id}/url returns a signed S3 download URL.
+func TestCapturesAPI(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	deviceID := enrollForTest(t, srv, "mac-captures-api", "ffffffff-0000-0000-0000-000000000002")
+	cap, err := srv.Registry.InsertCapture(ctx, registry.CaptureInput{
+		DeviceID: deviceID, Kind: "snapshot", S3Key: "snapshots/" + deviceID + "/cam1/1.jpg",
+		ContentType: "image/jpeg", SizeBytes: 4242, Metadata: map[string]any{"camera_id": "cam1"},
+	})
+	if err != nil {
+		t.Fatalf("InsertCapture: %v", err)
+	}
+	tok := mintAccessToken(t, ctx, srv)
+
+	// List.
+	resp := doJSON(t, http.MethodGet, srv.URL+"/devices/"+deviceID+"/captures?kind=snapshot", tok, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("list captures: %d; body=%s", resp.StatusCode, raw)
+	}
+	var list struct {
+		Captures []struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"captures"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&list)
+	if len(list.Captures) != 1 || list.Captures[0].ID != cap.ID {
+		t.Fatalf("captures = %+v, want the inserted snapshot", list.Captures)
+	}
+
+	// Signed URL.
+	urlResp := doJSON(t, http.MethodGet, srv.URL+"/captures/"+cap.ID+"/url", tok, nil)
+	defer urlResp.Body.Close()
+	if urlResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(urlResp.Body)
+		t.Fatalf("capture url: %d; body=%s", urlResp.StatusCode, raw)
+	}
+	var urlBody struct {
+		URL       string `json:"url"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	_ = json.NewDecoder(urlResp.Body).Decode(&urlBody)
+	if urlBody.ExpiresIn != 300 || urlBody.URL == "" {
+		t.Errorf("url body = %+v, want a signed url + 300s expiry", urlBody)
 	}
 }
