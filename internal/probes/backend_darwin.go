@@ -5,6 +5,8 @@ package probes
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"os"
@@ -30,6 +32,10 @@ type fileStat struct {
 // file modes/owners without touching the real filesystem.
 type statFunc func(path string) (fileStat, error)
 
+// fileReadFunc abstracts os.ReadFile so unit tests can stage canned
+// file contents (used for config-integrity hashing).
+type fileReadFunc func(path string) ([]byte, error)
+
 const loginWindowPlist = "/Library/Preferences/com.apple.loginwindow"
 
 const kcpasswordPath = "/etc/kcpassword"
@@ -37,6 +43,7 @@ const kcpasswordPath = "/etc/kcpassword"
 type darwinBackend struct {
 	run               runner
 	stat              statFunc
+	readFile          fileReadFunc
 	expectedLoginUser string
 	logger            *slog.Logger
 }
@@ -51,6 +58,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 	return &darwinBackend{
 		run:               execRun,
 		stat:              statReal,
+		readFile:          os.ReadFile,
 		expectedLoginUser: expectedLoginUser,
 		logger:            logger,
 	}
@@ -84,7 +92,32 @@ func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 		b.probeAutoLogin(ctx),
 		b.probeGUISession(ctx),
 		b.probePlateRecognizerContainer(ctx),
+		b.probePlateRecognizerConfig(ctx),
 	}
+}
+
+const plateRecognizerConfigPath = "/usr/local/etc/plate-recognizer/stream/config.ini"
+
+// probePlateRecognizerConfig hashes the Plate Recognizer config.ini so
+// operators can spot accidental deletion or drift from intended config.
+// The PR service has no usable web UI — config.ini on disk is the source
+// of truth (see memory plate_recognizer_no_web_ui).
+func (b *darwinBackend) probePlateRecognizerConfig(_ context.Context) healthprobes.Result {
+	res := healthprobes.Result{Name: healthprobes.ProbePlateRecognizerConfig, Details: map[string]any{}}
+
+	data, err := b.readFile(plateRecognizerConfigPath)
+	if err != nil {
+		res.State = "missing"
+		res.Status = healthprobes.StatusRed
+		return res
+	}
+
+	sum := sha256.Sum256(data)
+	res.Details["sha256"] = hex.EncodeToString(sum[:])
+	res.Details["size_bytes"] = len(data)
+	res.State = "present"
+	res.Status = healthprobes.StatusGreen
+	return res
 }
 
 const plateRecognizerContainerName = "plate-recognizer-stream"

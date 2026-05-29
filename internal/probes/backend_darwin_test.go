@@ -112,6 +112,56 @@ func TestProbeAutoLoginMissing(t *testing.T) {
 	}
 }
 
+// fakeRead stages canned file contents per path.
+func fakeRead(files map[string][]byte) fileReadFunc {
+	return func(path string) ([]byte, error) {
+		b, ok := files[path]
+		if !ok {
+			return nil, os.ErrNotExist
+		}
+		return b, nil
+	}
+}
+
+func TestProbePlateRecognizerConfig(t *testing.T) {
+	t.Run("present reports sha256 and size", func(t *testing.T) {
+		content := []byte("[stream]\nurl = rtsp://cam\n")
+		b := &darwinBackend{
+			readFile: fakeRead(map[string][]byte{
+				"/usr/local/etc/plate-recognizer/stream/config.ini": content,
+			}),
+		}
+		res := b.probePlateRecognizerConfig(context.Background())
+		if res.Name != healthprobes.ProbePlateRecognizerConfig {
+			t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbePlateRecognizerConfig)
+		}
+		if res.State != "present" {
+			t.Errorf("State = %q, want present", res.State)
+		}
+		if res.Status != healthprobes.StatusGreen {
+			t.Errorf("Status = %q, want green", res.Status)
+		}
+		sha, _ := res.Details["sha256"].(string)
+		if len(sha) != 64 {
+			t.Errorf("Details[sha256] = %q, want 64-char hex digest", sha)
+		}
+		if got, _ := res.Details["size_bytes"].(int); got != len(content) {
+			t.Errorf("Details[size_bytes] = %v, want %d", res.Details["size_bytes"], len(content))
+		}
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		b := &darwinBackend{readFile: fakeRead(map[string][]byte{})}
+		res := b.probePlateRecognizerConfig(context.Background())
+		if res.State != "missing" {
+			t.Errorf("State = %q, want missing", res.State)
+		}
+		if res.Status != healthprobes.StatusRed {
+			t.Errorf("Status = %q, want red", res.Status)
+		}
+	})
+}
+
 func TestProbeGUISession(t *testing.T) {
 	cases := map[string]struct {
 		consoleUser string
