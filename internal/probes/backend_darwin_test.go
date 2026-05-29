@@ -69,3 +69,69 @@ func TestProbeAutoLoginConfigured(t *testing.T) {
 		t.Errorf("Status = %q, want %q", res.Status, healthprobes.StatusGreen)
 	}
 }
+
+func TestProbeAutoLoginMissing(t *testing.T) {
+	cases := map[string]struct {
+		runResults map[string]cmdResult
+		files      map[string]fileStat
+	}{
+		"autoLoginUser key absent": {
+			// `defaults read` exits non-zero when the key is unset.
+			runResults: map[string]cmdResult{},
+			files:      map[string]fileStat{"/etc/kcpassword": {Mode: 0o600}},
+		},
+		"autoLoginUser is a different user": {
+			runResults: map[string]cmdResult{
+				"defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser": {stdout: "admin\n"},
+			},
+			files: map[string]fileStat{"/etc/kcpassword": {Mode: 0o600}},
+		},
+		"kcpassword absent (the decay failure)": {
+			runResults: map[string]cmdResult{
+				"defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser": {stdout: "uknomi\n"},
+			},
+			files: map[string]fileStat{},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := &darwinBackend{
+				run:               fakeRunner{results: tc.runResults}.run,
+				stat:              fakeStat(tc.files),
+				expectedLoginUser: "uknomi",
+			}
+			res := b.probeAutoLogin(context.Background())
+			if res.State != "missing" {
+				t.Errorf("State = %q, want %q", res.State, "missing")
+			}
+			if res.Status != healthprobes.StatusRed {
+				t.Errorf("Status = %q, want red", res.Status)
+			}
+		})
+	}
+}
+
+func TestProbeAutoLoginCorrupted(t *testing.T) {
+	cases := map[string]fileStat{
+		"world-readable mode":  {Mode: 0o644, UID: 0, GID: 0},
+		"not owned by root":    {Mode: 0o600, UID: 501, GID: 20},
+	}
+	for name, fs := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := &darwinBackend{
+				run: fakeRunner{results: map[string]cmdResult{
+					"defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser": {stdout: "uknomi\n"},
+				}}.run,
+				stat:              fakeStat(map[string]fileStat{"/etc/kcpassword": fs}),
+				expectedLoginUser: "uknomi",
+			}
+			res := b.probeAutoLogin(context.Background())
+			if res.State != "corrupted" {
+				t.Errorf("State = %q, want %q", res.State, "corrupted")
+			}
+			if res.Status != healthprobes.StatusRed {
+				t.Errorf("Status = %q, want red", res.Status)
+			}
+		})
+	}
+}
