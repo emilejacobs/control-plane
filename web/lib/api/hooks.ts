@@ -11,6 +11,7 @@ import {
   type LoginInput,
 } from "./auth";
 import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
+import { getFleetAlerts } from "./fleet";
 import {
   getSitesTree,
   updateDeviceDeployment,
@@ -66,6 +67,17 @@ export function useDevices() {
   return useQuery({
     queryKey: ["devices"],
     queryFn: getDevices,
+    refetchInterval: devicePollInterval,
+  });
+}
+
+// useFleetAlerts loads the site-scoped fleet alerts roll-up (#21) for the
+// Overview dashboard, on the same 10s cadence as the fleet list it joins
+// against for drill-down hostnames.
+export function useFleetAlerts() {
+  return useQuery({
+    queryKey: ["fleet-alerts"],
+    queryFn: getFleetAlerts,
     refetchInterval: devicePollInterval,
   });
 }

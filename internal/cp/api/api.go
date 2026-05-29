@@ -16,6 +16,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/auth"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
+	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/fleet"
 	taxonomyhttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/taxonomy"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
@@ -174,6 +175,10 @@ func NewBuilderWith(d Deps) *Builder {
 		// snapshot. Read-only; same auth + TOTP + site scope as the
 		// other per-device reads.
 		b.Get("/devices/{id}/health-probes", requireAuth(requireEnrolled(requireScope(devices.NewHealthProbeList(d.Registry)))))
+		// GET /fleet/alerts — fleet-wide roll-up for the Overview alerts
+		// dashboard (#21). Site-scoped (not staff-gated): a scoped operator
+		// sees only their sites' alerts; staff see the whole fleet.
+		b.Get("/fleet/alerts", requireAuth(requireEnrolled(requireScope(fleet.NewAlerts(d.Registry)))))
 		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
 		// Read route (GET) requires only auth + TOTP + site scope.
 		// Mutating routes additionally need CmdPublisher to push the

@@ -126,6 +126,30 @@ type DeviceHealthProbe struct {
 	LastObservedAt time.Time
 }
 
+// FleetAlerts is the #21 fleet-wide roll-up of unhealthy signals, grouped
+// by type. It is alert-only: a ProbeAlert appears only for a probe with at
+// least one red or yellow device, and a ServiceAlert only for a service with
+// at least one stopped device. The device-id lists let the UI drill down to
+// the affected boxes without a second request.
+type FleetAlerts struct {
+	Probes   []ProbeAlert
+	Services []ServiceAlert
+}
+
+// ProbeAlert is the set of devices currently red and/or yellow on one probe.
+// Both lists carry device ids, sorted, so the result is deterministic.
+type ProbeAlert struct {
+	ProbeName string
+	Red       []string
+	Yellow    []string
+}
+
+// ServiceAlert is the set of devices currently reporting one service stopped.
+type ServiceAlert struct {
+	ServiceName string
+	Stopped     []string
+}
+
 type Device struct {
 	ID                string
 	Hostname          string
@@ -537,6 +561,87 @@ func (r *Registry) ListHealthProbes(ctx context.Context, deviceID string) ([]Dev
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// FleetAlerts returns the site-scoped fleet roll-up of unhealthy signals
+// (#21): devices currently red/yellow per probe and stopped per service,
+// grouped by type. It is alert-only — healthy probes and running services
+// contribute no entry. Both reads route through ScopedDeviceQuery so a
+// site-scoped operator only sees devices at their allowlisted sites; a read
+// with no resolved scope fails closed, returning an empty roll-up. The
+// ORDER BY makes each type's rows contiguous and its device-id list sorted,
+// so grouping in one pass yields a deterministic result.
+func (r *Registry) FleetAlerts(ctx context.Context) (FleetAlerts, error) {
+	out := FleetAlerts{Probes: []ProbeAlert{}, Services: []ServiceAlert{}}
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return out, nil
+	}
+
+	probeSQL, probeArgs := authz.ScopedDeviceQuery(filter, `
+		SELECT dhp.probe_name, dhp.status, dhp.device_id::text
+		FROM device_health_probes dhp
+		JOIN devices ON devices.id = dhp.device_id
+		WHERE dhp.status IN ('red', 'yellow')
+	`)
+	probeRows, err := r.pool.Query(ctx, probeSQL+" ORDER BY dhp.probe_name, dhp.device_id", probeArgs...)
+	if err != nil {
+		return out, fmt.Errorf("query probe alerts: %w", err)
+	}
+	defer probeRows.Close()
+	probeIdx := map[string]int{}
+	for probeRows.Next() {
+		var name, status, deviceID string
+		if err := probeRows.Scan(&name, &status, &deviceID); err != nil {
+			return out, fmt.Errorf("scan probe alert: %w", err)
+		}
+		i, seen := probeIdx[name]
+		if !seen {
+			i = len(out.Probes)
+			out.Probes = append(out.Probes, ProbeAlert{ProbeName: name})
+			probeIdx[name] = i
+		}
+		if status == "red" {
+			out.Probes[i].Red = append(out.Probes[i].Red, deviceID)
+		} else {
+			out.Probes[i].Yellow = append(out.Probes[i].Yellow, deviceID)
+		}
+	}
+	if err := probeRows.Err(); err != nil {
+		return out, fmt.Errorf("iterate probe alerts: %w", err)
+	}
+	probeRows.Close()
+
+	svcSQL, svcArgs := authz.ScopedDeviceQuery(filter, `
+		SELECT ds.service_name, ds.device_id::text
+		FROM device_services ds
+		JOIN devices ON devices.id = ds.device_id
+		WHERE ds.state = 'stopped'
+	`)
+	svcRows, err := r.pool.Query(ctx, svcSQL+" ORDER BY ds.service_name, ds.device_id", svcArgs...)
+	if err != nil {
+		return out, fmt.Errorf("query service alerts: %w", err)
+	}
+	defer svcRows.Close()
+	svcIdx := map[string]int{}
+	for svcRows.Next() {
+		var name, deviceID string
+		if err := svcRows.Scan(&name, &deviceID); err != nil {
+			return out, fmt.Errorf("scan service alert: %w", err)
+		}
+		i, seen := svcIdx[name]
+		if !seen {
+			i = len(out.Services)
+			out.Services = append(out.Services, ServiceAlert{ServiceName: name})
+			svcIdx[name] = i
+		}
+		out.Services[i].Stopped = append(out.Services[i].Stopped, deviceID)
+	}
+	if err := svcRows.Err(); err != nil {
+		return out, fmt.Errorf("iterate service alerts: %w", err)
+	}
+
+	return out, nil
 }
 
 // ServiceConfig is the per-device override of the agent's service
