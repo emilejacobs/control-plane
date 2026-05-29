@@ -9,7 +9,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Dot } from "./Dot";
 import { Logo } from "./Logo";
-import { clearTokens } from "../../lib/api/client";
+import { clearTokens, currentOperator, operatorInitials } from "../../lib/api/client";
 import { logout } from "../../lib/api/auth";
 
 interface NavItem {
@@ -41,13 +41,20 @@ interface Props {
   userInitials?: string;
 }
 
-export function Topbar({ userInitials = "EJ" }: Props) {
+export function Topbar({ userInitials }: Props) {
   // usePathname returns null when called outside a Next.js routing
   // context — notably in the vitest tests that render pages in
   // isolation. Treat null as the root path so the test environment
   // does not crash on the active-state calc.
   const pathname = usePathname() ?? "/";
   const router = useRouter();
+
+  // Avatar initials + tooltip reflect the logged-in operator (decoded from
+  // the JWT), falling back to "?" when logged out. An explicit userInitials
+  // prop still wins (tests / overrides).
+  const op = currentOperator();
+  const initials = userInitials ?? (op ? operatorInitials(op.email) : "?");
+  const accountLabel = op?.email ?? "Account";
 
   async function onSignOut() {
     // Revoke the refresh token server-side first (fire-and-forget — see
@@ -67,18 +74,6 @@ export function Topbar({ userInitials = "EJ" }: Props) {
         style={{ color: "inherit", textDecoration: "none" }}
       >
         <Logo height={26} />
-        <span>uknomi</span>
-        <span className="topbar-sub">
-          <span
-            style={{
-              color: "var(--ink-on-dark-2)",
-              paddingLeft: 6,
-              borderLeft: "1px solid oklch(30% 0.005 250)",
-            }}
-          >
-            Control&nbsp;Plane
-          </span>
-        </span>
       </Link>
       <span className="topbar-pill" aria-label="status">
         <Dot tone="green" />
@@ -98,8 +93,8 @@ export function Topbar({ userInitials = "EJ" }: Props) {
             </Link>
           );
         })}
-        <div className="topbar-user" title="Account">
-          {userInitials}
+        <div className="topbar-user" title={accountLabel} aria-label={accountLabel}>
+          {initials}
         </div>
         <button
           type="button"
