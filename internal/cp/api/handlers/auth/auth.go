@@ -187,6 +187,12 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case errors.Is(err, authn.ErrInvalidTotp):
 			h.writeAudit(r, "failure", "invalid_totp", req.Email, nil)
+			// The password verified but the second factor is missing or
+			// wrong. Signal the two-step login UI to advance to (or stay on)
+			// the 2FA step. Distinct from the opaque bad-credentials 401,
+			// which carries no Reason — this only reveals "password is
+			// valid", the inherent tradeoff of any password-then-2FA flow.
+			w.Header().Set("Reason", "totp-required")
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		case errors.Is(err, authn.ErrAccountLocked):
