@@ -171,6 +171,117 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (CreateResult, error
 	return CreateResult{Operator: op, TempPassword: temp}, nil
 }
 
+// UpdateInput is the staff-editable shape of an operator. Each field is
+// optional: a nil pointer leaves that attribute unchanged. SiteIDs is a full
+// replacement of the allowlist when non-nil (an empty slice clears it).
+// ResetTotp, when true, clears the TOTP secret + recovery codes so the
+// operator must re-enroll on next login.
+type UpdateInput struct {
+	IsStaff   *bool
+	SiteIDs   *[]string
+	ResetTotp bool
+}
+
+// Update applies an edit to an operator and returns the refreshed projection.
+// An id matching no row returns ErrNotFound.
+func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Operator, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return Operator{}, ErrNotFound
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Operator{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Touch the row first so a no-op edit still distinguishes existence.
+	tag, err := tx.Exec(ctx, `
+		UPDATE operators
+		SET is_staff = COALESCE($2, is_staff),
+		    totp_secret_encrypted = CASE WHEN $3 THEN NULL ELSE totp_secret_encrypted END,
+		    recovery_codes_hashed = CASE WHEN $3 THEN NULL ELSE recovery_codes_hashed END,
+		    updated_at = now()
+		WHERE id = $1
+	`, id, in.IsStaff, in.ResetTotp)
+	if err != nil {
+		return Operator{}, fmt.Errorf("update operator: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Operator{}, ErrNotFound
+	}
+
+	if in.SiteIDs != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM operator_sites WHERE operator_id = $1`, id); err != nil {
+			return Operator{}, fmt.Errorf("clear allowlist: %w", err)
+		}
+		for _, siteID := range *in.SiteIDs {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO operator_sites (operator_id, site_id) VALUES ($1, $2)`, id, siteID,
+			); err != nil {
+				return Operator{}, fmt.Errorf("grant site %s: %w", siteID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Operator{}, fmt.Errorf("commit: %w", err)
+	}
+	return s.Get(ctx, id)
+}
+
+// ResetPassword generates a fresh temp password, re-arms must_change_password,
+// and returns the plaintext once (never persisted/logged). ErrNotFound for an
+// unknown id.
+func (s *Store) ResetPassword(ctx context.Context, id string) (string, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return "", ErrNotFound
+	}
+	temp, err := generateTempPassword()
+	if err != nil {
+		return "", err
+	}
+	hash, err := authn.HashPassword(temp)
+	if err != nil {
+		return "", fmt.Errorf("hash temp password: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE operators
+		SET password_hash = $2, must_change_password = true, updated_at = now()
+		WHERE id = $1
+	`, id, hash)
+	if err != nil {
+		return "", fmt.Errorf("reset password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrNotFound
+	}
+	return temp, nil
+}
+
+// SetActive deactivates (soft delete) or reactivates an operator. Deactivation
+// stamps deactivated_at; reactivation clears it. ErrNotFound for an unknown id.
+func (s *Store) SetActive(ctx context.Context, id string, active bool) error {
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrNotFound
+	}
+	var tag pgconn.CommandTag
+	var err error
+	if active {
+		tag, err = s.pool.Exec(ctx,
+			`UPDATE operators SET deactivated_at = NULL, updated_at = now() WHERE id = $1`, id)
+	} else {
+		tag, err = s.pool.Exec(ctx,
+			`UPDATE operators SET deactivated_at = now(), updated_at = now() WHERE id = $1`, id)
+	}
+	if err != nil {
+		return fmt.Errorf("set active: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // generateTempPassword returns a CSPRNG temporary password — 18 random bytes
 // rendered as URL-safe base64 (~24 chars). High-entropy by construction;
 // it is single-use because the operator must change it on first login.
