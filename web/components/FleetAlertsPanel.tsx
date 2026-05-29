@@ -6,7 +6,7 @@
 // page) for hostname + site, with a link to each device's detail page.
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { FleetAlerts } from "../lib/api/fleet";
 import type { DeviceSummary } from "../lib/api/devices";
 import { Card } from "./ui/Card";
@@ -25,12 +25,14 @@ interface Affected {
 
 export function FleetAlertsPanel({ alerts, devices }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const byId = useMemo(
+    () => new Map(devices.map((d) => [d.deviceId, d])),
+    [devices],
+  );
 
   if (alerts.probes.length === 0 && alerts.services.length === 0) {
     return null;
   }
-
-  const byId = new Map(devices.map((d) => [d.deviceId, d]));
 
   function toggle(key: string) {
     setExpanded((prev) => {
