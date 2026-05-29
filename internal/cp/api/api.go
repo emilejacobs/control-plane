@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/auth"
+	captureshttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/fleet"
@@ -23,6 +24,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
+	"github.com/emilejacobs/control-plane/internal/cp/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/operators"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -39,6 +41,10 @@ type Deps struct {
 	// /operators endpoints. nil disables those routes (the rest of the API
 	// continues to serve; tests that don't exercise the surface omit it).
 	Operators *operators.Store
+
+	// CapturePresigner mints signed S3 URLs for the captures read surface
+	// (#8). nil disables GET /captures/{id}/url (the list route still serves).
+	CapturePresigner captures.Presigner
 
 	// TaxonomyStore is the clients/sites mirror store ADR-033 § 8's
 	// GET /taxonomy/status reads. nil disables the route — tests that
@@ -214,6 +220,12 @@ func NewBuilderWith(d Deps) *Builder {
 		// dashboard (#21). Site-scoped (not staff-gated): a scoped operator
 		// sees only their sites' alerts; staff see the whole fleet.
 		b.Get("/fleet/alerts", requireAuth(onboarded(requireScope(fleet.NewAlerts(d.Registry)))))
+		// Captures read surface (#8): per-device list + signed download URL.
+		// Site-scoped device reads. The URL route needs the presigner.
+		b.Get("/devices/{id}/captures", requireAuth(onboarded(requireScope(captureshttp.NewList(d.Registry)))))
+		if d.CapturePresigner != nil {
+			b.Get("/captures/{id}/url", requireAuth(onboarded(requireScope(captureshttp.NewURL(d.Registry, d.CapturePresigner)))))
+		}
 		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
 		// Read route (GET) requires only auth + TOTP + site scope.
 		// Mutating routes additionally need CmdPublisher to push the

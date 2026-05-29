@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/api"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
+	"github.com/emilejacobs/control-plane/internal/cp/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
@@ -149,7 +152,14 @@ func buildTestServerWith(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 		AuthZ:            authzSvc,
 		IdempotencyStore: idemStore,
 		Operators:        operators.New(pool),
-		TaxonomyStore:    taxonomy.NewStore(pool),
+		CapturePresigner: captures.NewS3Presigner(
+			s3.NewPresignClient(s3.New(s3.Options{
+				Region:      "us-east-1",
+				Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
+			})),
+			"uknomi-cp-captures-test",
+		),
+		TaxonomyStore: taxonomy.NewStore(pool),
 		Audit:            auditW,
 		Logger:           cplog.New(logs, "cp-api-test"),
 	}

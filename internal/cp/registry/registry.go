@@ -54,6 +54,10 @@ var ErrCameraNotFound = errors.New("camera not found")
 // matches the correlation_id. Handlers translate it to HTTP 404.
 var ErrNetworkScanNotFound = errors.New("network scan not found")
 
+// ErrCaptureNotFound is returned by GetCapture when no capture row matches
+// the id (or it's outside the operator's scope). Handlers translate to 404.
+var ErrCaptureNotFound = errors.New("capture not found")
+
 // ErrCameraLPRConflict is returned by InsertCamera / UpdateCamera when
 // the operation would create a second is_lpr=true row for the same
 // device. The DB's partial unique index enforces single-LPR-per-device
@@ -661,6 +665,136 @@ func (r *Registry) FleetAlerts(ctx context.Context) (FleetAlerts, error) {
 	}
 
 	return out, nil
+}
+
+// Capture is a row in device_captures (#8): one uploaded artifact's index
+// entry. The bytes live in S3 at S3Key; Metadata is the per-kind payload
+// (e.g. {"camera_id": "cam1"} for a snapshot).
+type Capture struct {
+	ID          string
+	DeviceID    string
+	Kind        string
+	S3Key       string
+	ContentType string
+	SizeBytes   int64
+	Metadata    map[string]any
+	CreatedAt   time.Time
+}
+
+// CaptureInput is the create-time shape; id + created_at are server-assigned.
+type CaptureInput struct {
+	DeviceID    string
+	Kind        string
+	S3Key       string
+	ContentType string
+	SizeBytes   int64
+	Metadata    map[string]any
+}
+
+// InsertCapture indexes a freshly-uploaded artifact and returns the stored
+// row (assigned id + created_at). Called by the cmd-result handler after the
+// agent confirms its S3 PUT — system context, not site-scoped.
+func (r *Registry) InsertCapture(ctx context.Context, in CaptureInput) (Capture, error) {
+	md := in.Metadata
+	if md == nil {
+		md = map[string]any{}
+	}
+	mdJSON, err := json.Marshal(md)
+	if err != nil {
+		return Capture{}, fmt.Errorf("marshal capture metadata: %w", err)
+	}
+	var c Capture
+	var outMD []byte
+	err = r.pool.QueryRow(ctx, `
+		INSERT INTO device_captures (device_id, kind, s3_key, content_type, size_bytes, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id::text, device_id::text, kind, s3_key, content_type, size_bytes, metadata, created_at
+	`, in.DeviceID, in.Kind, in.S3Key, in.ContentType, in.SizeBytes, mdJSON).
+		Scan(&c.ID, &c.DeviceID, &c.Kind, &c.S3Key, &c.ContentType, &c.SizeBytes, &outMD, &c.CreatedAt)
+	if err != nil {
+		return Capture{}, fmt.Errorf("insert device_capture: %w", err)
+	}
+	if err := json.Unmarshal(outMD, &c.Metadata); err != nil {
+		return Capture{}, fmt.Errorf("unmarshal capture metadata: %w", err)
+	}
+	return c, nil
+}
+
+// ListCaptures returns a device's captures newest-first, site-scoped. An
+// empty kind returns all kinds; otherwise it filters to that kind. A read
+// with no resolved scope fails closed (empty).
+func (r *Registry) ListCaptures(ctx context.Context, deviceID, kind string) ([]Capture, error) {
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return nil, nil
+	}
+	sql, args := authz.ScopedDeviceQuery(filter, `
+		SELECT dc.id::text, dc.device_id::text, dc.kind, dc.s3_key, dc.content_type,
+		       dc.size_bytes, dc.metadata, dc.created_at
+		FROM device_captures dc
+		JOIN devices ON devices.id = dc.device_id
+		WHERE dc.device_id = $1 AND ($2 = '' OR dc.kind = $2)
+	`, deviceID, kind)
+	rows, err := r.pool.Query(ctx, sql+" ORDER BY dc.created_at DESC", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list device_captures: %w", err)
+	}
+	defer rows.Close()
+	out := []Capture{}
+	for rows.Next() {
+		c, err := scanCapture(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// GetCapture returns one capture by id, site-scoped (so an operator can't
+// mint a signed URL for a device outside their allowlist). ErrCaptureNotFound
+// when missing or out of scope.
+func (r *Registry) GetCapture(ctx context.Context, id string) (Capture, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return Capture{}, ErrCaptureNotFound
+	}
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return Capture{}, ErrCaptureNotFound
+	}
+	sql, args := authz.ScopedDeviceQuery(filter, `
+		SELECT dc.id::text, dc.device_id::text, dc.kind, dc.s3_key, dc.content_type,
+		       dc.size_bytes, dc.metadata, dc.created_at
+		FROM device_captures dc
+		JOIN devices ON devices.id = dc.device_id
+		WHERE dc.id = $1
+	`, id)
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return Capture{}, fmt.Errorf("get device_capture: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return Capture{}, fmt.Errorf("get device_capture: %w", err)
+		}
+		return Capture{}, ErrCaptureNotFound
+	}
+	return scanCapture(rows)
+}
+
+func scanCapture(rows pgx.Rows) (Capture, error) {
+	var c Capture
+	var md []byte
+	if err := rows.Scan(&c.ID, &c.DeviceID, &c.Kind, &c.S3Key, &c.ContentType, &c.SizeBytes, &md, &c.CreatedAt); err != nil {
+		return Capture{}, fmt.Errorf("scan device_capture: %w", err)
+	}
+	if len(md) > 0 {
+		if err := json.Unmarshal(md, &c.Metadata); err != nil {
+			return Capture{}, fmt.Errorf("unmarshal capture metadata: %w", err)
+		}
+	}
+	return c, nil
 }
 
 // ServiceConfig is the per-device override of the agent's service
