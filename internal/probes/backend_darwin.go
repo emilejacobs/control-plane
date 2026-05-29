@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -247,19 +248,30 @@ func (b *darwinBackend) probeWhisperModel(_ context.Context) healthprobes.Result
 	}
 }
 
-// usbAudioDeviceName is the USB audio dongle the fleet records with.
-// macOS intermittently fails to enumerate it across reboots — the
-// recurring failure this probe catches.
-const usbAudioDeviceName = "Advanced USB Audio"
+// usbAudioTransport is the coreaudio transport value system_profiler
+// reports for USB-attached audio devices (built-in audio reports
+// coreaudio_device_type_builtin). We detect by transport rather than a
+// hard-coded product name: the capture dongle's _name varies by vendor
+// (e.g. "USB Audio Device" / C-Media), so matching a fixed name made the
+// probe report "missing" even with a working dongle present.
+const usbAudioTransport = "coreaudio_device_type_usb"
 
-// probeUSBAudio reports whether the USB audio capture device is
-// enumerated by the OS (the cause behind silent no-recording symptoms;
-// see #10 for the symptom-side check).
+// probeUSBAudio reports whether a USB audio capture device is enumerated
+// by the OS (the cause behind silent no-recording symptoms; see #10 for
+// the symptom-side check). Reports the detected device name + input
+// channel count in details so operators can confirm it's the right one.
 func (b *darwinBackend) probeUSBAudio(ctx context.Context) healthprobes.Result {
 	res := healthprobes.Result{Name: healthprobes.ProbeUSBAudio, Details: map[string]any{}}
 
-	stdout, _, err := b.run(ctx, "system_profiler", "SPAudioDataType")
-	if err == nil && strings.Contains(string(stdout), usbAudioDeviceName) {
+	stdout, _, err := b.run(ctx, "system_profiler", "SPAudioDataType", "-json")
+	if err != nil {
+		res.State = "missing"
+		res.Status = healthprobes.StatusRed
+		return res
+	}
+	if name, channels, ok := firstUSBAudioDevice(stdout); ok {
+		res.Details["device"] = name
+		res.Details["input_channels"] = channels
 		res.State = "detected"
 		res.Status = healthprobes.StatusGreen
 		return res
@@ -267,6 +279,31 @@ func (b *darwinBackend) probeUSBAudio(ctx context.Context) healthprobes.Result {
 	res.State = "missing"
 	res.Status = healthprobes.StatusRed
 	return res
+}
+
+// firstUSBAudioDevice parses `system_profiler SPAudioDataType -json` and
+// returns the first audio device whose transport is USB.
+func firstUSBAudioDevice(jsonOut []byte) (name string, inputChannels int, ok bool) {
+	var doc struct {
+		Audio []struct {
+			Items []struct {
+				Name      string `json:"_name"`
+				Transport string `json:"coreaudio_device_transport"`
+				Input     int    `json:"coreaudio_device_input"`
+			} `json:"_items"`
+		} `json:"SPAudioDataType"`
+	}
+	if err := json.Unmarshal(jsonOut, &doc); err != nil {
+		return "", 0, false
+	}
+	for _, section := range doc.Audio {
+		for _, d := range section.Items {
+			if d.Transport == usbAudioTransport {
+				return d.Name, d.Input, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 const plateRecognizerConfigPath = "/usr/local/etc/plate-recognizer/stream/config.ini"

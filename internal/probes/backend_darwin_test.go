@@ -345,30 +345,46 @@ func TestProbeBootSanity(t *testing.T) {
 }
 
 func TestProbeUSBAudio(t *testing.T) {
-	const cmd = "system_profiler SPAudioDataType"
-	t.Run("detected", func(t *testing.T) {
-		out := "Audio:\n\n    Devices:\n\n        Advanced USB Audio:\n          Input Channels: 2\n"
-		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {stdout: out}}}.run}
+	const cmd = "system_profiler SPAudioDataType -json"
+	// A USB capture dongle (any vendor) enumerates with transport
+	// coreaudio_device_type_usb; built-in audio is _builtin. We detect by
+	// transport, not by product name — the name varies across dongles.
+	usbPresent := `{"SPAudioDataType":[{"_items":[
+		{"_name":"USB Audio Device","coreaudio_device_input":1,"coreaudio_device_transport":"coreaudio_device_type_usb"},
+		{"_name":"Mac mini Speakers","coreaudio_device_transport":"coreaudio_device_type_builtin"}
+	]}]}`
+	builtinOnly := `{"SPAudioDataType":[{"_items":[
+		{"_name":"Mac mini Speakers","coreaudio_device_transport":"coreaudio_device_type_builtin"}
+	]}]}`
+
+	t.Run("detected by USB transport, reports device name + channels", func(t *testing.T) {
+		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {stdout: usbPresent}}}.run}
 		res := b.probeUSBAudio(context.Background())
 		if res.Name != healthprobes.ProbeUSBAudio {
 			t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbeUSBAudio)
 		}
-		if res.State != "detected" {
-			t.Errorf("State = %q, want detected", res.State)
+		if res.State != "detected" || res.Status != healthprobes.StatusGreen {
+			t.Fatalf("got state=%q status=%q, want detected/green", res.State, res.Status)
 		}
-		if res.Status != healthprobes.StatusGreen {
-			t.Errorf("Status = %q, want green", res.Status)
+		if res.Details["device"] != "USB Audio Device" {
+			t.Errorf("Details[device] = %v, want \"USB Audio Device\"", res.Details["device"])
+		}
+		if res.Details["input_channels"] != 1 {
+			t.Errorf("Details[input_channels] = %v, want 1", res.Details["input_channels"])
 		}
 	})
-	t.Run("missing", func(t *testing.T) {
-		out := "Audio:\n\n    Devices:\n\n        MacBook Pro Speakers:\n"
-		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {stdout: out}}}.run}
+	t.Run("missing when only built-in audio", func(t *testing.T) {
+		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {stdout: builtinOnly}}}.run}
 		res := b.probeUSBAudio(context.Background())
-		if res.State != "missing" {
-			t.Errorf("State = %q, want missing", res.State)
+		if res.State != "missing" || res.Status != healthprobes.StatusRed {
+			t.Errorf("got state=%q status=%q, want missing/red", res.State, res.Status)
 		}
-		if res.Status != healthprobes.StatusRed {
-			t.Errorf("Status = %q, want red", res.Status)
+	})
+	t.Run("missing when system_profiler errors", func(t *testing.T) {
+		b := &darwinBackend{run: fakeRunner{results: map[string]cmdResult{cmd: {err: errors.New("boom")}}}.run}
+		res := b.probeUSBAudio(context.Background())
+		if res.State != "missing" || res.Status != healthprobes.StatusRed {
+			t.Errorf("got state=%q status=%q, want missing/red", res.State, res.Status)
 		}
 	})
 }
