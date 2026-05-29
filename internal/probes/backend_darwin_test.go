@@ -162,6 +162,96 @@ func TestProbePlateRecognizerConfig(t *testing.T) {
 	})
 }
 
+func TestParseWhisperFilename(t *testing.T) {
+	cases := map[string]struct {
+		wantVariant string
+		wantQuant   string
+	}{
+		"ggml-medium.en-q5_0.bin": {"medium.en", "q5_0"},
+		"ggml-small.en.bin":       {"small.en", ""},
+		"ggml-large-v3-q8_0.bin":  {"large-v3", "q8_0"},
+		"ggml-large-v3.bin":       {"large-v3", ""},
+		"ggml-base.en-f16.bin":    {"base.en", "f16"},
+	}
+	for fname, want := range cases {
+		t.Run(fname, func(t *testing.T) {
+			variant, quant := parseWhisperFilename(fname)
+			if variant != want.wantVariant {
+				t.Errorf("variant = %q, want %q", variant, want.wantVariant)
+			}
+			if quant != want.wantQuant {
+				t.Errorf("quant = %q, want %q", quant, want.wantQuant)
+			}
+		})
+	}
+}
+
+func fakeGlob(matches map[string][]string) globFunc {
+	return func(pattern string) ([]string, error) { return matches[pattern], nil }
+}
+
+func TestProbeWhisperModel(t *testing.T) {
+	const dir = "/usr/local/etc/uknomi/whisper-models/*.bin"
+	const fileMedium = "/usr/local/etc/uknomi/whisper-models/ggml-medium.en-q5_0.bin"
+	const fileSmall = "/usr/local/etc/uknomi/whisper-models/ggml-small.en.bin"
+
+	t.Run("present reports variant, quantization, size", func(t *testing.T) {
+		b := &darwinBackend{
+			glob: fakeGlob(map[string][]string{dir: {fileMedium}}),
+			stat: fakeStat(map[string]fileStat{fileMedium: {Size: 539 * 1024 * 1024}}),
+		}
+		res := b.probeWhisperModel(context.Background())
+		if res.Name != healthprobes.ProbeWhisperModel {
+			t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbeWhisperModel)
+		}
+		if res.State != "present" || res.Status != healthprobes.StatusGreen {
+			t.Fatalf("got state=%q status=%q, want present/green", res.State, res.Status)
+		}
+		if res.Details["variant"] != "medium.en" {
+			t.Errorf("variant = %v, want medium.en", res.Details["variant"])
+		}
+		if res.Details["quantization"] != "q5_0" {
+			t.Errorf("quantization = %v, want q5_0", res.Details["quantization"])
+		}
+		if res.Details["size_mb"] != 539 {
+			t.Errorf("size_mb = %v, want 539", res.Details["size_mb"])
+		}
+	})
+
+	t.Run("missing when no files", func(t *testing.T) {
+		b := &darwinBackend{glob: fakeGlob(map[string][]string{dir: {}}), stat: fakeStat(nil)}
+		res := b.probeWhisperModel(context.Background())
+		if res.State != "missing" || res.Status != healthprobes.StatusRed {
+			t.Errorf("got state=%q status=%q, want missing/red", res.State, res.Status)
+		}
+	})
+
+	t.Run("multiple is yellow (mid-migration)", func(t *testing.T) {
+		b := &darwinBackend{
+			glob: fakeGlob(map[string][]string{dir: {fileMedium, fileSmall}}),
+			stat: fakeStat(map[string]fileStat{
+				fileMedium: {Size: 539 * 1024 * 1024},
+				fileSmall:  {Size: 466 * 1024 * 1024},
+			}),
+		}
+		res := b.probeWhisperModel(context.Background())
+		if res.State != "multiple" || res.Status != healthprobes.StatusYellow {
+			t.Errorf("got state=%q status=%q, want multiple/yellow", res.State, res.Status)
+		}
+	})
+
+	t.Run("zero-byte is red", func(t *testing.T) {
+		b := &darwinBackend{
+			glob: fakeGlob(map[string][]string{dir: {fileMedium}}),
+			stat: fakeStat(map[string]fileStat{fileMedium: {Size: 0}}),
+		}
+		res := b.probeWhisperModel(context.Background())
+		if res.State != "zero_byte" || res.Status != healthprobes.StatusRed {
+			t.Errorf("got state=%q status=%q, want zero_byte/red", res.State, res.Status)
+		}
+	})
+}
+
 func TestProbeUSBAudio(t *testing.T) {
 	const cmd = "system_profiler SPAudioDataType"
 	t.Run("detected", func(t *testing.T) {

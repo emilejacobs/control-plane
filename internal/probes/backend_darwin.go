@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -26,6 +28,7 @@ type fileStat struct {
 	Mode os.FileMode
 	UID  uint32
 	GID  uint32
+	Size int64
 }
 
 // statFunc abstracts os.Stat + Stat_t so unit tests can stage canned
@@ -36,6 +39,10 @@ type statFunc func(path string) (fileStat, error)
 // file contents (used for config-integrity hashing).
 type fileReadFunc func(path string) ([]byte, error)
 
+// globFunc abstracts filepath.Glob so unit tests can stage canned
+// directory listings.
+type globFunc func(pattern string) ([]string, error)
+
 const loginWindowPlist = "/Library/Preferences/com.apple.loginwindow"
 
 const kcpasswordPath = "/etc/kcpassword"
@@ -44,6 +51,7 @@ type darwinBackend struct {
 	run               runner
 	stat              statFunc
 	readFile          fileReadFunc
+	glob              globFunc
 	expectedLoginUser string
 	logger            *slog.Logger
 }
@@ -59,6 +67,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 		run:               execRun,
 		stat:              statReal,
 		readFile:          os.ReadFile,
+		glob:              filepath.Glob,
 		expectedLoginUser: expectedLoginUser,
 		logger:            logger,
 	}
@@ -78,7 +87,7 @@ func statReal(path string) (fileStat, error) {
 	if err != nil {
 		return fileStat{}, err
 	}
-	fs := fileStat{Mode: info.Mode().Perm()}
+	fs := fileStat{Mode: info.Mode().Perm(), Size: info.Size()}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		fs.UID = st.Uid
 		fs.GID = st.Gid
@@ -94,6 +103,82 @@ func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 		b.probePlateRecognizerContainer(ctx),
 		b.probePlateRecognizerConfig(ctx),
 		b.probeUSBAudio(ctx),
+		b.probeWhisperModel(ctx),
+	}
+}
+
+const whisperModelGlob = "/usr/local/etc/uknomi/whisper-models/*.bin"
+
+// quantPattern matches whisper.cpp quantization suffixes (q5_0, q8_0, f16, f32, ...).
+var quantPattern = regexp.MustCompile(`^(q\d_\d|f16|f32)$`)
+
+// parseWhisperFilename extracts the model variant and quantization from
+// a whisper.cpp model filename like "ggml-medium.en-q5_0.bin". The
+// variant itself may contain hyphens ("large-v3"), so quantization is
+// only the trailing segment when it matches a known quant suffix.
+func parseWhisperFilename(name string) (variant, quantization string) {
+	base := strings.TrimSuffix(filepath.Base(name), ".bin")
+	base = strings.TrimPrefix(base, "ggml-")
+	segs := strings.Split(base, "-")
+	if len(segs) > 1 && quantPattern.MatchString(segs[len(segs)-1]) {
+		quantization = segs[len(segs)-1]
+		segs = segs[:len(segs)-1]
+	}
+	return strings.Join(segs, "-"), quantization
+}
+
+// probeWhisperModel reports which whisper model(s) are installed. The
+// model is curl'd from HuggingFace during install with no verification,
+// so this catches silent download failure and gives fleet-wide
+// visibility on which variant is deployed where (for model migrations).
+func (b *darwinBackend) probeWhisperModel(_ context.Context) healthprobes.Result {
+	res := healthprobes.Result{Name: healthprobes.ProbeWhisperModel, Details: map[string]any{}}
+
+	matches, _ := b.glob(whisperModelGlob)
+	switch len(matches) {
+	case 0:
+		res.State = "missing"
+		res.Status = healthprobes.StatusRed
+		return res
+	case 1:
+		path := matches[0]
+		variant, quant := parseWhisperFilename(path)
+		var size int64
+		if fs, err := b.stat(path); err == nil {
+			size = fs.Size
+		}
+		if size == 0 {
+			res.State = "zero_byte"
+			res.Status = healthprobes.StatusRed
+			res.Details["file"] = filepath.Base(path)
+			return res
+		}
+		res.State = "present"
+		res.Status = healthprobes.StatusGreen
+		res.Details["variant"] = variant
+		res.Details["quantization"] = quant
+		res.Details["size_mb"] = int(size / (1024 * 1024))
+		res.Details["file"] = filepath.Base(path)
+		return res
+	default:
+		models := make([]map[string]any, 0, len(matches))
+		for _, path := range matches {
+			variant, quant := parseWhisperFilename(path)
+			var size int64
+			if fs, err := b.stat(path); err == nil {
+				size = fs.Size
+			}
+			models = append(models, map[string]any{
+				"file":         filepath.Base(path),
+				"variant":      variant,
+				"quantization": quant,
+				"size_mb":      int(size / (1024 * 1024)),
+			})
+		}
+		res.State = "multiple"
+		res.Status = healthprobes.StatusYellow
+		res.Details["models"] = models
+		return res
 	}
 }
 
