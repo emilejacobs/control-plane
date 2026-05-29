@@ -20,6 +20,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
+	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
@@ -400,6 +401,59 @@ func (r *Registry) RecordServiceStates(ctx context.Context, deviceID string, sta
 				last_reported = EXCLUDED.last_reported
 		`, deviceID, s.Name, string(s.State), s.StateSince, reportedAt); err != nil {
 			return fmt.Errorf("upsert device_service %s: %w", s.Name, err)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// RecordHealthProbes persists a fleet-health-probe report (#19): per-
+// (device, probe_name) UPSERT of the agent-decided colour (status), the
+// OS-agnostic signal token (state), the structured details payload, and
+// the cp-side ingest timestamp. An empty slice is a valid no-op. An id
+// matching no row — including a non-UUID — returns ErrDeviceNotFound so
+// the ingester can DLQ a late report from a decommissioned device.
+//
+// Per-probe UPSERTs run in one transaction so a partial failure leaves
+// storage unchanged. The probe set is small (seven in slice 1) so the
+// loop is cheap.
+func (r *Registry) RecordHealthProbes(ctx context.Context, deviceID string, results []healthprobes.Result, observedAt time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1)`, deviceID).Scan(&exists); err != nil {
+		return fmt.Errorf("device exists check: %w", err)
+	}
+	if !exists {
+		return ErrDeviceNotFound
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	for _, p := range results {
+		details := p.Details
+		if details == nil {
+			details = map[string]any{}
+		}
+		detailsJSON, err := json.Marshal(details)
+		if err != nil {
+			return fmt.Errorf("marshal details for probe %s: %w", p.Name, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO device_health_probes (device_id, probe_name, status, state, details, last_observed_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (device_id, probe_name) DO UPDATE SET
+				status           = EXCLUDED.status,
+				state            = EXCLUDED.state,
+				details          = EXCLUDED.details,
+				last_observed_at = EXCLUDED.last_observed_at
+		`, deviceID, p.Name, string(p.Status), p.State, detailsJSON, observedAt); err != nil {
+			return fmt.Errorf("upsert device_health_probe %s: %w", p.Name, err)
 		}
 	}
 	return tx.Commit(ctx)
