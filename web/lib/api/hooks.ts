@@ -8,8 +8,18 @@ import {
   getFirstRunStatus,
   login,
   enrollTotp,
+  setPassword,
   type LoginInput,
 } from "./auth";
+import {
+  getOperators,
+  createOperator,
+  updateOperator,
+  deactivateOperator,
+  reactivateOperator,
+  type CreateOperatorInput,
+  type UpdateOperatorInput,
+} from "./operators";
 import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
 import { getFleetAlerts } from "./fleet";
 import {
@@ -54,6 +64,49 @@ export function useLogin() {
 export function useEnrollTotp() {
   return useMutation({
     mutationFn: () => enrollTotp(),
+  });
+}
+
+// useSetPassword completes the set-new-password flow (#16) for an operator on
+// a system-generated temp password.
+export function useSetPassword() {
+  return useMutation({
+    mutationFn: (newPassword: string) => setPassword(newPassword),
+  });
+}
+
+// useOperators loads the staff-only operator list (#16). No polling — the
+// list only changes on explicit admin actions, which invalidate this query.
+export function useOperators() {
+  return useQuery({
+    queryKey: ["operators"],
+    queryFn: getOperators,
+  });
+}
+
+// useCreateOperator / useUpdateOperator / useSetOperatorActive are the
+// /operators page mutations; each invalidates the list on success.
+export function useCreateOperator() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateOperatorInput) => createOperator(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["operators"] }),
+  });
+}
+
+export function useUpdateOperator(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateOperatorInput) => updateOperator(id, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["operators"] }),
+  });
+}
+
+export function useSetOperatorActive(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (active: boolean) => (active ? reactivateOperator(id) : deactivateOperator(id)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["operators"] }),
   });
 }
 
