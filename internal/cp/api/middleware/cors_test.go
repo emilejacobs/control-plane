@@ -36,6 +36,12 @@ func TestCorsAllowsListedOriginOnSimpleRequest(t *testing.T) {
 	if vary := rec.Header().Get("Vary"); !strings.Contains(vary, "Origin") {
 		t.Errorf("Vary header must include Origin, got %q", vary)
 	}
+	// The two-step login + gate middleware signal via the custom "Reason"
+	// response header; a cross-origin browser can only read it when CORS
+	// exposes it. Without this, enrolled operators can't reach the 2FA step.
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(got, "Reason") {
+		t.Errorf("Access-Control-Expose-Headers = %q, want it to include Reason", got)
+	}
 }
 
 func TestCorsTerminatesPreflightWithoutCallingInner(t *testing.T) {
