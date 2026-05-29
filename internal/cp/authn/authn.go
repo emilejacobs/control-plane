@@ -163,6 +163,11 @@ type LoginInput struct {
 type LoginResult struct {
 	Tokens                 Tokens
 	RequiresTotpEnrollment bool
+	// MustChangePassword is set when the operator is still on a
+	// system-generated temp password (created or reset by a staff admin)
+	// and must set a new one before any normal action. Mirrors the
+	// RequiresTotpEnrollment signal; the client routes on it.
+	MustChangePassword bool
 }
 
 // Login verifies email + password — and, for an enrolled operator, a TOTP
@@ -177,18 +182,26 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 
 	var operatorID, hash string
-	var isStaff bool
-	var lockedUntil *time.Time
+	var isStaff, mustChangePassword bool
+	var lockedUntil, deactivatedAt *time.Time
 	var totpSecretEnc []byte
 	err := a.pool.QueryRow(ctx, `
-		SELECT id, password_hash, is_staff, locked_until, totp_secret_encrypted
+		SELECT id, password_hash, is_staff, locked_until, totp_secret_encrypted,
+		       deactivated_at, must_change_password
 		FROM operators WHERE email = $1
-	`, email).Scan(&operatorID, &hash, &isStaff, &lockedUntil, &totpSecretEnc)
+	`, email).Scan(&operatorID, &hash, &isStaff, &lockedUntil, &totpSecretEnc,
+		&deactivatedAt, &mustChangePassword)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return LoginResult{}, ErrInvalidCredentials
 	}
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("lookup operator: %w", err)
+	}
+
+	// A deactivated (soft-deleted) operator cannot authenticate. Reported as
+	// ErrInvalidCredentials so the deactivated state isn't probeable.
+	if deactivatedAt != nil {
+		return LoginResult{}, ErrInvalidCredentials
 	}
 
 	// A locked account is refused outright: the password is not checked
@@ -261,6 +274,7 @@ func (a *AuthN) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	return LoginResult{
 		Tokens:                 tokens,
 		RequiresTotpEnrollment: totpSecretEnc == nil,
+		MustChangePassword:     mustChangePassword,
 	}, nil
 }
 
