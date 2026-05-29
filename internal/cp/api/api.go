@@ -132,6 +132,17 @@ func (b *Builder) Delete(path string, h http.Handler) {
 	b.mutating = append(b.mutating, Route{Method: http.MethodDelete, Path: path})
 }
 
+// PostNoIdem registers a POST route that is audited but NOT behind the
+// idempotency middleware, and is NOT recorded as a mutating route for the
+// idempotency CI gate. Used for the /auth/* token-rotation endpoints: an
+// idempotency key on a single-use rotation (login/refresh/logout) is
+// semantically wrong — a replayed refresh must fail, not replay cached
+// tokens — and requiring the header would needlessly break non-browser
+// clients (mobile, curl). State-mutating resource endpoints keep Post.
+func (b *Builder) PostNoIdem(path string, h http.Handler) {
+	b.mux.Handle("POST "+path, b.auditMW(h))
+}
+
 // Handler returns the underlying mux for serving.
 func (b *Builder) Handler() http.Handler { return b.mux }
 
@@ -164,10 +175,13 @@ func NewBuilderWith(d Deps) *Builder {
 	b.Post("/enrollments", enrollLimiter.Middleware(enrollment.New(d.Registry, auditW)))
 	if d.AuthN != nil {
 		b.Get("/auth/first-run", auth.NewFirstRunStatus(d.AuthN))
-		b.Post("/auth/first-run", auth.NewFirstRun(d.AuthN, auditW))
-		b.Post("/auth/login", auth.NewLogin(d.AuthN, auditW))
-		b.Post("/auth/refresh", auth.NewRefresh(d.AuthN, auditW))
-		b.Post("/auth/logout", auth.NewLogout(d.AuthN, auditW))
+		// /auth/* are token-rotation endpoints, not idempotent resource
+		// mutations — they sit outside the idempotency gate (see PostNoIdem),
+		// so any client can authenticate without minting an Idempotency-Key.
+		b.PostNoIdem("/auth/first-run", auth.NewFirstRun(d.AuthN, auditW))
+		b.PostNoIdem("/auth/login", auth.NewLogin(d.AuthN, auditW))
+		b.PostNoIdem("/auth/refresh", auth.NewRefresh(d.AuthN, auditW))
+		b.PostNoIdem("/auth/logout", auth.NewLogout(d.AuthN, auditW))
 		// Authenticated routes require a valid operator bearer token.
 		// Every authenticated route except enrollment itself also sits
 		// behind the forced-TOTP-enrollment gate; device reads additionally
@@ -188,8 +202,8 @@ func NewBuilderWith(d Deps) *Builder {
 		// normal access until the operator rotates.
 		onboarded := func(h http.Handler) http.Handler { return requireEnrolled(requirePwChanged(h)) }
 		requireStaff := middleware.RequireStaff()
-		b.Post("/auth/password", requireAuth(auth.NewSetPassword(d.AuthN, auditW)))
-		b.Post("/auth/totp/enroll", requireAuth(requirePwChanged(auth.NewTotpEnroll(d.AuthN, auditW))))
+		b.PostNoIdem("/auth/password", requireAuth(auth.NewSetPassword(d.AuthN, auditW)))
+		b.PostNoIdem("/auth/totp/enroll", requireAuth(requirePwChanged(auth.NewTotpEnroll(d.AuthN, auditW))))
 		b.Get("/devices", requireAuth(onboarded(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(onboarded(requireScope(devices.NewGet(d.Registry)))))
 		// Phase 2 fleet health probes (issue #19): per-device probe
@@ -275,6 +289,11 @@ func NewBuilderWith(d Deps) *Builder {
 			b.Put("/devices/{id}/deployment",
 				requireAuth(onboarded(requireStaff(devices.NewDeploymentPut(d.Registry, auditW)))))
 		}
+		// DELETE /devices/{id} — staff-only device decommission (CP-side row
+		// removal; AWS IoT thing/cert teardown is out-of-band per the
+		// decommission runbook). Audited; child rows cascade.
+		b.Delete("/devices/{id}",
+			requireAuth(onboarded(requireStaff(devices.NewDelete(d.Registry, auditW)))))
 	}
 	return b
 }

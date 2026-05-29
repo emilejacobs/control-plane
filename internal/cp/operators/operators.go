@@ -175,22 +175,33 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (CreateResult, error
 // optional: a nil pointer leaves that attribute unchanged. SiteIDs is a full
 // replacement of the allowlist when non-nil (an empty slice clears it).
 // ResetTotp, when true, clears the TOTP secret + recovery codes so the
-// operator must re-enroll on next login.
+// operator must re-enroll on next login. ResetPassword, when true, generates
+// a fresh temp password and re-arms must_change_password.
 type UpdateInput struct {
-	IsStaff   *bool
-	SiteIDs   *[]string
-	ResetTotp bool
+	IsStaff       *bool
+	SiteIDs       *[]string
+	ResetTotp     bool
+	ResetPassword bool
 }
 
-// Update applies an edit to an operator and returns the refreshed projection.
+// UpdateResult is the refreshed operator plus, only when ResetPassword was
+// requested, the one-time generated temp password (never persisted/logged).
+type UpdateResult struct {
+	Operator     Operator
+	TempPassword string
+}
+
+// Update applies an edit to an operator atomically — role, site allowlist,
+// TOTP reset, and password reset all commit in one transaction, so a failure
+// can't leave a half-applied edit (e.g. TOTP cleared but password not reset).
 // An id matching no row returns ErrNotFound.
-func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Operator, error) {
+func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (UpdateResult, error) {
 	if _, err := uuid.Parse(id); err != nil {
-		return Operator{}, ErrNotFound
+		return UpdateResult{}, ErrNotFound
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return Operator{}, fmt.Errorf("begin tx: %w", err)
+		return UpdateResult{}, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -204,29 +215,51 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Operator
 		WHERE id = $1
 	`, id, in.IsStaff, in.ResetTotp)
 	if err != nil {
-		return Operator{}, fmt.Errorf("update operator: %w", err)
+		return UpdateResult{}, fmt.Errorf("update operator: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return Operator{}, ErrNotFound
+		return UpdateResult{}, ErrNotFound
 	}
 
 	if in.SiteIDs != nil {
 		if _, err := tx.Exec(ctx, `DELETE FROM operator_sites WHERE operator_id = $1`, id); err != nil {
-			return Operator{}, fmt.Errorf("clear allowlist: %w", err)
+			return UpdateResult{}, fmt.Errorf("clear allowlist: %w", err)
 		}
 		for _, siteID := range *in.SiteIDs {
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO operator_sites (operator_id, site_id) VALUES ($1, $2)`, id, siteID,
 			); err != nil {
-				return Operator{}, fmt.Errorf("grant site %s: %w", siteID, err)
+				return UpdateResult{}, fmt.Errorf("grant site %s: %w", siteID, err)
 			}
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return Operator{}, fmt.Errorf("commit: %w", err)
+	var tempPassword string
+	if in.ResetPassword {
+		tempPassword, err = generateTempPassword()
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		hash, err := authn.HashPassword(tempPassword)
+		if err != nil {
+			return UpdateResult{}, fmt.Errorf("hash temp password: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE operators SET password_hash = $2, must_change_password = true, updated_at = now()
+			WHERE id = $1
+		`, id, hash); err != nil {
+			return UpdateResult{}, fmt.Errorf("reset password: %w", err)
+		}
 	}
-	return s.Get(ctx, id)
+
+	if err := tx.Commit(ctx); err != nil {
+		return UpdateResult{}, fmt.Errorf("commit: %w", err)
+	}
+	op, err := s.Get(ctx, id)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	return UpdateResult{Operator: op, TempPassword: tempPassword}, nil
 }
 
 // ResetPassword generates a fresh temp password, re-arms must_change_password,

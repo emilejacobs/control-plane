@@ -285,6 +285,25 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 	return devices, nil
 }
 
+// DeleteDevice removes a device row — the CP-side half of decommissioning
+// (the AWS IoT thing + cert are deleted out-of-band per the decommission
+// runbook). Child rows (services, health probes, cameras, log tails, network
+// scans) cascade via their ON DELETE CASCADE FKs. A non-UUID or unknown id
+// returns ErrDeviceNotFound. Staff-only at the API layer.
+func (r *Registry) DeleteDevice(ctx context.Context, id string) error {
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `DELETE FROM devices WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete device: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
 // UpdateLastSeen records a heartbeat: it stamps last_seen and marks the
 // device online, moving presence_changed_at only when the device was
 // previously offline — a steady-state heartbeat does not disturb it. An id
