@@ -30,6 +30,15 @@ Every CloudWatch alarm in `infra/terraform-deploy/alarms.tf` carries an `alarm_d
 | `uknomi-cp-audit-mirror-failure` | Any `"audit-mirror failed"` log line in 5 min | [audit-mirror.md](audit-mirror.md) |
 | `uknomi-cp-audit-mirror-stale` | No `"audit-mirror completed"` line in 25 hours | [audit-mirror.md](audit-mirror.md) |
 
+## #19 fleet health probes
+
+| Alarm | Trigger | Runbook |
+|---|---|---|
+| `uknomi-cp-health-probe-<probe>` (×7) | A probe red on ≥1 device for ≥15 min | [health-probe-red.md](health-probe-red.md) |
+| `uknomi-cp-health-probes-dlq` | Health-probes ingest DLQ non-empty | [health-probes-dlq.md](health-probes-dlq.md) |
+
+The seven per-probe alarms (`auto_login`, `gui_session`, `plate_recognizer_container`, `plate_recognizer_config`, `usb_audio`, `whisper_model`, `boot_sanity`) share one runbook with a per-probe section.
+
 The #25-baseline runbooks are marked TODO — they were built before this directory existed and were never written up. File an issue or fold them into the next on-call shadow shift.
 
 ## Verification

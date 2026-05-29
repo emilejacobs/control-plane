@@ -347,7 +347,7 @@ resource "aws_cloudwatch_metric_alarm" "health_probe_red" {
   statistic           = "Sum"
   threshold           = 0
   treat_missing_data  = "notBreaching"
-  alarm_description   = "Health probe ${each.key} has been red on ≥1 device for ≥15 minutes. Runbook: docs/runbooks/alarms/health-probe-${each.key}.md"
+  alarm_description   = "Health probe ${each.key} has been red on ≥1 device for ≥15 minutes. Runbook: docs/runbooks/alarms/health-probe-red.md"
   alarm_actions       = [aws_sns_topic.alarms.arn]
   ok_actions          = [aws_sns_topic.alarms.arn]
 
