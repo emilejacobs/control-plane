@@ -4,12 +4,49 @@ import {
   setTokens,
   clearTokens,
   currentTokens,
+  currentOperator,
+  operatorInitials,
   TOKEN_STORAGE_KEY,
 } from "./client";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
+
+// fakeToken builds a JWT-shaped string with the given claims as its payload
+// (base64url). Signature is irrelevant — currentOperator only decodes.
+function fakeToken(claims: Record<string, unknown>): string {
+  const b64 = (o: unknown) =>
+    Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${b64({ alg: "HS256" })}.${b64(claims)}.sig`;
+}
+
+describe("currentOperator + operatorInitials", () => {
+  beforeEach(() => clearTokens());
+
+  it("derives 2-char initials from the email local part", () => {
+    expect(operatorInitials("ejacobs@uknomi.com")).toBe("EJ");
+    expect(operatorInitials("sguddati@uknomi.com")).toBe("SG");
+    expect(operatorInitials("x@y.com")).toBe("X");
+  });
+
+  it("returns null when logged out", () => {
+    expect(currentOperator()).toBeNull();
+  });
+
+  it("decodes email + is_staff from the access token", () => {
+    setTokens({
+      accessToken: fakeToken({ email: "ejacobs@uknomi.com", is_staff: true }),
+      refreshToken: "r",
+    });
+    expect(currentOperator()).toEqual({ email: "ejacobs@uknomi.com", isStaff: true });
+  });
+
+  it("returns null for a malformed token rather than throwing", () => {
+    setTokens({ accessToken: "not-a-jwt", refreshToken: "r" });
+    expect(currentOperator()).toBeNull();
+  });
+});
 
 describe("token persistence (ADR-024)", () => {
   beforeEach(() => {
