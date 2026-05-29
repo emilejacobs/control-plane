@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
@@ -72,5 +73,66 @@ func TestRegistryFleetAlertsGroupsByType(t *testing.T) {
 	}
 	if len(s.Stopped) != 1 || s.Stopped[0] != devA {
 		t.Errorf("stopped = %v, want [%s]", s.Stopped, devA)
+	}
+}
+
+// TestRegistryFleetAlertsSiteScoped — a non-staff operator's roll-up only
+// includes devices at their allowlisted sites: a red probe on a device at a
+// denied site never surfaces. Guards the security-critical scoping path.
+func TestRegistryFleetAlertsSiteScoped(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "AcmeCorp")
+	siteAllowed := insertSite(t, ctx, srv, clientID, "Allowed Site")
+	siteDenied := insertSite(t, ctx, srv, clientID, "Denied Site")
+	devAllowed := insertDeviceAtSite(t, ctx, srv, "mac-allowed", siteAllowed)
+	devDenied := insertDeviceAtSite(t, ctx, srv, "mac-denied", siteDenied)
+
+	observedAt := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	for _, dev := range []string{devAllowed, devDenied} {
+		if err := srv.Registry.RecordHealthProbes(ctx, dev, []healthprobes.Result{
+			{Name: "plate_recognizer_container", Status: healthprobes.StatusRed, State: "exited"},
+		}, observedAt); err != nil {
+			t.Fatalf("record probes %s: %v", dev, err)
+		}
+	}
+
+	scoped := authz.ContextWithScope(ctx, authz.SiteFilter{SiteIDs: []string{siteAllowed}})
+	alerts, err := srv.Registry.FleetAlerts(scoped)
+	if err != nil {
+		t.Fatalf("FleetAlerts: %v", err)
+	}
+
+	if len(alerts.Probes) != 1 {
+		t.Fatalf("probe groups = %d, want 1", len(alerts.Probes))
+	}
+	if got := alerts.Probes[0].Red; len(got) != 1 || got[0] != devAllowed {
+		t.Errorf("red = %v, want only allowed-site device [%s] (denied %s leaked?)", got, devAllowed, devDenied)
+	}
+}
+
+// TestRegistryFleetAlertsNoScopeFailsClosed — a read with no resolved scope
+// returns an empty roll-up rather than the whole fleet.
+func TestRegistryFleetAlertsNoScopeFailsClosed(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	dev := enrollForTest(t, srv, "mac-noscope", "cccccccc-0000-0000-0000-000000000003")
+	if err := srv.Registry.RecordHealthProbes(ctx, dev, []healthprobes.Result{
+		{Name: "plate_recognizer_container", Status: healthprobes.StatusRed, State: "exited"},
+	}, time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("record probes: %v", err)
+	}
+
+	alerts, err := srv.Registry.FleetAlerts(ctx) // no ContextWithScope
+	if err != nil {
+		t.Fatalf("FleetAlerts: %v", err)
+	}
+	if len(alerts.Probes) != 0 || len(alerts.Services) != 0 {
+		t.Errorf("unscoped read returned %d probe / %d service groups, want 0/0 (fail closed)",
+			len(alerts.Probes), len(alerts.Services))
 	}
 }
