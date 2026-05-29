@@ -306,6 +306,8 @@ export default function DevicePage() {
               <ServicesPanel services={d.services} now={now} />
             </Card>
 
+            <div style={{ height: 16 }} />
+
             <Card label="Health">
               <HealthPanel probes={healthProbes.data ?? []} now={now} />
             </Card>
