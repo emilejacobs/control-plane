@@ -85,6 +85,6 @@ func (i *ServiceStatusIngester) Handle(ctx context.Context, r servicestatus.Repo
 
 // Compile-time checks that the service-status plumbing fits the consumer.
 var (
-	_ sqsconsumer.Correlated                       = servicestatus.Report{}
+	_ sqsconsumer.Correlated                    = servicestatus.Report{}
 	_ sqsconsumer.Handler[servicestatus.Report] = (*ServiceStatusIngester)(nil).Handle
 )

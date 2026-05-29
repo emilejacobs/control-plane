@@ -17,19 +17,19 @@ import (
 )
 
 type recordingApplier struct {
-	mu                    sync.Mutex
-	calls                 []applyArgs
-	logTailCompletes      []registry.LogTailCompletion
-	logTailFailures       []registry.LogTailFailure
-	camerasCalls          []applyArgs
-	networkScanCompletes  []registry.NetworkScanCompletion
-	networkScanFailures   []registry.NetworkScanFailure
-	err                   error
-	logTailCompleteErr    error
-	logTailFailErr        error
-	camerasErr            error
+	mu                     sync.Mutex
+	calls                  []applyArgs
+	logTailCompletes       []registry.LogTailCompletion
+	logTailFailures        []registry.LogTailFailure
+	camerasCalls           []applyArgs
+	networkScanCompletes   []registry.NetworkScanCompletion
+	networkScanFailures    []registry.NetworkScanFailure
+	err                    error
+	logTailCompleteErr     error
+	logTailFailErr         error
+	camerasErr             error
 	networkScanCompleteErr error
-	networkScanFailErr    error
+	networkScanFailErr     error
 }
 type applyArgs struct {
 	deviceID, correlationID string

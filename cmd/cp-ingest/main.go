@@ -50,6 +50,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
+	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 )
 
@@ -150,6 +151,24 @@ func run(logger *slog.Logger) error {
 		)
 	}
 
+	// Optional health-probes consumer (Phase 2, issue #19). Skipped
+	// silently until Terraform provisions the queue, same posture as the
+	// service-status consumer.
+	var healthProbeConsumer *sqsconsumer.Consumer[healthprobes.Report]
+	healthProbesQueueURL := os.Getenv("HEALTH_PROBES_QUEUE_URL")
+	healthProbesDLQURL := os.Getenv("HEALTH_PROBES_DLQ_URL")
+	if healthProbesQueueURL != "" && healthProbesDLQURL != "" {
+		hpIngester := ingest.NewHealthProbeIngester(reg, nil)
+		// Surface red-probe log lines so the per-probe-type alarm's
+		// log-metric-filter can count them.
+		hpIngester.Logger = logger
+		healthProbeConsumer = sqsconsumer.NewConsumer[healthprobes.Report](
+			sqsClient,
+			hpIngester.Handle,
+			sqsconsumer.Config{QueueURL: healthProbesQueueURL, DLQURL: healthProbesDLQURL, Logger: logger, Audit: auditW},
+		)
+	}
+
 	// Optional cmd-result consumer (Phase 2 slice 2). Routes config.update
 	// ACKs to the registry's RecordServiceConfigApplied. Skipped silently
 	// while the queue / IoT Rule are being provisioned, same posture as
@@ -172,6 +191,8 @@ func run(logger *slog.Logger) error {
 		"lifecycle_queue", lifecycleQueueURL,
 		"service_status_queue", serviceStatusQueueURL,
 		"service_status_enabled", serviceStatusConsumer != nil,
+		"health_probes_queue", healthProbesQueueURL,
+		"health_probes_enabled", healthProbeConsumer != nil,
 		"cmd_result_queue", cmdResultQueueURL,
 		"cmd_result_enabled", cmdResultConsumer != nil)
 
@@ -181,6 +202,9 @@ func run(logger *slog.Logger) error {
 	var wg sync.WaitGroup
 	workers := 5 // heartbeat + lifecycle + presence sweeper + log-tail sweeper + device-services sweeper
 	if serviceStatusConsumer != nil {
+		workers++
+	}
+	if healthProbeConsumer != nil {
 		workers++
 	}
 	if cmdResultConsumer != nil {
@@ -195,6 +219,9 @@ func run(logger *slog.Logger) error {
 	go func() { defer wg.Done(); deviceServicesSweeper.Run(ctx) }()
 	if serviceStatusConsumer != nil {
 		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
+	}
+	if healthProbeConsumer != nil {
+		go func() { defer wg.Done(); errs <- healthProbeConsumer.Run(ctx) }()
 	}
 	if cmdResultConsumer != nil {
 		go func() { defer wg.Done(); errs <- cmdResultConsumer.Run(ctx) }()
