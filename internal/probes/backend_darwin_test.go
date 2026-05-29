@@ -5,8 +5,10 @@ package probes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 )
@@ -252,6 +254,96 @@ func TestProbeWhisperModel(t *testing.T) {
 	})
 }
 
+func TestCollectReturnsAllSevenProbes(t *testing.T) {
+	b := &darwinBackend{
+		run:      fakeRunner{results: map[string]cmdResult{}}.run,
+		stat:     fakeStat(nil),
+		readFile: fakeRead(nil),
+		glob:     fakeGlob(nil),
+		now:      func() time.Time { return time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC) },
+	}
+	results := b.Collect(context.Background())
+
+	want := []string{
+		healthprobes.ProbeAutoLogin,
+		healthprobes.ProbeGUISession,
+		healthprobes.ProbePlateRecognizerContainer,
+		healthprobes.ProbePlateRecognizerConfig,
+		healthprobes.ProbeUSBAudio,
+		healthprobes.ProbeWhisperModel,
+		healthprobes.ProbeBootSanity,
+	}
+	if len(results) != len(want) {
+		t.Fatalf("Collect returned %d probes, want %d", len(results), len(want))
+	}
+	got := map[string]healthprobes.Result{}
+	for _, r := range results {
+		got[r.Name] = r
+		if r.Status == "" {
+			t.Errorf("probe %q has empty status", r.Name)
+		}
+		if r.State == "" {
+			t.Errorf("probe %q has empty state", r.Name)
+		}
+	}
+	for _, name := range want {
+		if _, ok := got[name]; !ok {
+			t.Errorf("Collect missing probe %q", name)
+		}
+	}
+}
+
+func TestProbeBootSanity(t *testing.T) {
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	boot := now.Add(-2 * time.Hour).Unix()
+	bootOut := fmt.Sprintf("{ sec = %d, usec = 0 } Wed May 28 10:00:00 2026\n", boot)
+
+	t.Run("stable", func(t *testing.T) {
+		// May 28 reboot is within 7d; May 18 is 10d ago → outside.
+		lastOut := "reboot    ~                         Wed May 28 10:00\n" +
+			"reboot    ~                         Mon May 18 09:00\n"
+		b := &darwinBackend{
+			run: fakeRunner{results: map[string]cmdResult{
+				"sysctl -n kern.boottime": {stdout: bootOut},
+				"last reboot":             {stdout: lastOut},
+			}}.run,
+			now: func() time.Time { return now },
+		}
+		res := b.probeBootSanity(context.Background())
+		if res.Name != healthprobes.ProbeBootSanity {
+			t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbeBootSanity)
+		}
+		if res.Details["boots_last_7d"] != 1 {
+			t.Errorf("boots_last_7d = %v, want 1", res.Details["boots_last_7d"])
+		}
+		if res.Details["uptime_s"] != int64(7200) {
+			t.Errorf("uptime_s = %v, want 7200", res.Details["uptime_s"])
+		}
+		if res.Status != healthprobes.StatusGreen {
+			t.Errorf("Status = %q, want green", res.Status)
+		}
+	})
+
+	t.Run("flapping is red", func(t *testing.T) {
+		lastOut := "reboot ~ Wed May 28 10:00\nreboot ~ Tue May 27 10:00\nreboot ~ Mon May 26 10:00\n" +
+			"reboot ~ Sun May 25 10:00\nreboot ~ Sat May 24 10:00\nreboot ~ Fri May 23 10:00\n"
+		b := &darwinBackend{
+			run: fakeRunner{results: map[string]cmdResult{
+				"sysctl -n kern.boottime": {stdout: bootOut},
+				"last reboot":             {stdout: lastOut},
+			}}.run,
+			now: func() time.Time { return now },
+		}
+		res := b.probeBootSanity(context.Background())
+		if res.Details["boots_last_7d"] != 6 {
+			t.Errorf("boots_last_7d = %v, want 6", res.Details["boots_last_7d"])
+		}
+		if res.Status != healthprobes.StatusRed {
+			t.Errorf("Status = %q, want red", res.Status)
+		}
+	})
+}
+
 func TestProbeUSBAudio(t *testing.T) {
 	const cmd = "system_profiler SPAudioDataType"
 	t.Run("detected", func(t *testing.T) {
@@ -287,9 +379,9 @@ func TestProbeGUISession(t *testing.T) {
 		wantState   string
 		wantStatus  healthprobes.Status
 	}{
-		"expected user active":       {"uknomi", "active", healthprobes.StatusGreen},
-		"login window (root owns)":   {"root", "login_window", healthprobes.StatusRed},
-		"different user lingering":   {"admin", "different_user", healthprobes.StatusYellow},
+		"expected user active":     {"uknomi", "active", healthprobes.StatusGreen},
+		"login window (root owns)": {"root", "login_window", healthprobes.StatusRed},
+		"different user lingering": {"admin", "different_user", healthprobes.StatusYellow},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -352,8 +444,8 @@ func TestProbePlateRecognizerContainer(t *testing.T) {
 
 func TestProbeAutoLoginCorrupted(t *testing.T) {
 	cases := map[string]fileStat{
-		"world-readable mode":  {Mode: 0o644, UID: 0, GID: 0},
-		"not owned by root":    {Mode: 0o600, UID: 501, GID: 20},
+		"world-readable mode": {Mode: 0o644, UID: 0, GID: 0},
+		"not owned by root":   {Mode: 0o600, UID: 501, GID: 20},
 	}
 	for name, fs := range cases {
 		t.Run(name, func(t *testing.T) {

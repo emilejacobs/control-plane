@@ -13,8 +13,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 )
@@ -52,6 +54,7 @@ type darwinBackend struct {
 	stat              statFunc
 	readFile          fileReadFunc
 	glob              globFunc
+	now               func() time.Time
 	expectedLoginUser string
 	logger            *slog.Logger
 }
@@ -68,6 +71,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 		stat:              statReal,
 		readFile:          os.ReadFile,
 		glob:              filepath.Glob,
+		now:               time.Now,
 		expectedLoginUser: expectedLoginUser,
 		logger:            logger,
 	}
@@ -104,7 +108,68 @@ func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 		b.probePlateRecognizerConfig(ctx),
 		b.probeUSBAudio(ctx),
 		b.probeWhisperModel(ctx),
+		b.probeBootSanity(ctx),
 	}
+}
+
+const bootFlappingThreshold = 5
+
+var bootSecPattern = regexp.MustCompile(`sec\s*=\s*(\d+)`)
+
+// probeBootSanity reports uptime and how often the device rebooted in
+// the last 7 days. A device cycling every few hours is sick even if it
+// is currently up — boots_last_7d > 5 is red.
+func (b *darwinBackend) probeBootSanity(ctx context.Context) healthprobes.Result {
+	res := healthprobes.Result{Name: healthprobes.ProbeBootSanity, Details: map[string]any{}}
+	now := b.now()
+
+	if stdout, _, err := b.run(ctx, "sysctl", "-n", "kern.boottime"); err == nil {
+		if m := bootSecPattern.FindSubmatch(stdout); m != nil {
+			if sec, perr := strconv.ParseInt(string(m[1]), 10, 64); perr == nil {
+				res.Details["uptime_s"] = now.Unix() - sec
+			}
+		}
+	}
+
+	stdout, _, _ := b.run(ctx, "last", "reboot")
+	boots := parseRebootCount(string(stdout), now)
+	res.Details["boots_last_7d"] = boots
+
+	if boots > bootFlappingThreshold {
+		res.State = "flapping"
+		res.Status = healthprobes.StatusRed
+	} else {
+		res.State = "stable"
+		res.Status = healthprobes.StatusGreen
+	}
+	return res
+}
+
+// parseRebootCount counts `last reboot` entries within 7 days of now.
+// `last` omits the year, so we assume now's year and roll back one year
+// for dates that would otherwise be in the future.
+func parseRebootCount(out string, now time.Time) int {
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		// reboot  ~  <Weekday> <Month> <Day> <HH:MM>
+		if len(fields) < 6 || fields[0] != "reboot" {
+			continue
+		}
+		stamp := fields[len(fields)-3] + " " + fields[len(fields)-2] + " " + fields[len(fields)-1]
+		t, err := time.ParseInLocation("Jan 2 15:04", stamp, now.Location())
+		if err != nil {
+			continue
+		}
+		t = t.AddDate(now.Year(), 0, 0)
+		if t.After(now) {
+			t = t.AddDate(-1, 0, 0)
+		}
+		if d := now.Sub(t); d >= 0 && d <= 7*24*time.Hour {
+			count++
+		}
+	}
+	return count
 }
 
 const whisperModelGlob = "/usr/local/etc/uknomi/whisper-models/*.bin"
