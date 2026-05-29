@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import { useEnrollTotp } from "../../lib/api/hooks";
 import { RequireAuth } from "../../components/RequireAuth";
+import { Logo } from "../../components/ui/Logo";
 
 // TotpEnrollPage runs the mandatory one-time TOTP enrollment: it mints the
 // secret, renders it as a QR code, and shows the recovery codes once. The
@@ -148,16 +149,7 @@ function TotpEnrollBody() {
 function Brand() {
   return (
     <div className="auth-brand">
-      <span className="topbar-logo" aria-hidden>
-        <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
-          <path
-            d="M3.5 6.5c.7 1.6 2 2.6 3.5 2.6s2.8-1 3.5-2.6"
-            stroke="currentColor"
-            strokeWidth={1.6}
-            strokeLinecap="round"
-          />
-        </svg>
-      </span>
+      <Logo />
       <span>uknomi</span>
       <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>Control Plane</span>
     </div>
