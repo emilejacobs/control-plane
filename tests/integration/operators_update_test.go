@@ -36,7 +36,7 @@ func TestOperatorsStoreUpdate(t *testing.T) {
 		t.Fatalf("seed totp: %v", err)
 	}
 
-	updated, err := store.Update(ctx, id, operators.UpdateInput{
+	upd, err := store.Update(ctx, id, operators.UpdateInput{
 		IsStaff:   ptr(true),
 		SiteIDs:   ptr([]string{siteB}),
 		ResetTotp: true,
@@ -44,6 +44,7 @@ func TestOperatorsStoreUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
+	updated := upd.Operator
 	if !updated.IsStaff {
 		t.Error("IsStaff = false, want true after promote")
 	}
@@ -52,6 +53,18 @@ func TestOperatorsStoreUpdate(t *testing.T) {
 	}
 	if len(updated.SiteIDs) != 1 || updated.SiteIDs[0] != siteB {
 		t.Errorf("allowlist = %v, want [%s]", updated.SiteIDs, siteB)
+	}
+	if upd.TempPassword != "" {
+		t.Error("TempPassword set without ResetPassword")
+	}
+
+	// ResetPassword within Update returns a one-time temp password.
+	withPw, err := store.Update(ctx, id, operators.UpdateInput{ResetPassword: true})
+	if err != nil {
+		t.Fatalf("Update(reset pw): %v", err)
+	}
+	if withPw.TempPassword == "" {
+		t.Error("ResetPassword via Update returned no temp password")
 	}
 
 	if _, err := store.Update(ctx, "00000000-0000-0000-0000-0000000000ff", operators.UpdateInput{IsStaff: ptr(false)}); !errors.Is(err, operators.ErrNotFound) {

@@ -18,10 +18,8 @@ type fakeStore struct {
 	getErr      error
 	createRes   ops.CreateResult
 	createErr   error
-	updateRes   ops.Operator
+	updateRes   ops.UpdateResult
 	updateErr   error
-	resetPw     string
-	resetErr    error
 	setActiveErr error
 
 	lastCreate   ops.CreateInput
@@ -38,12 +36,9 @@ func (f *fakeStore) Create(_ context.Context, in ops.CreateInput) (ops.CreateRes
 	f.lastCreate = in
 	return f.createRes, f.createErr
 }
-func (f *fakeStore) Update(_ context.Context, _ string, in ops.UpdateInput) (ops.Operator, error) {
+func (f *fakeStore) Update(_ context.Context, _ string, in ops.UpdateInput) (ops.UpdateResult, error) {
 	f.lastUpdate = in
 	return f.updateRes, f.updateErr
-}
-func (f *fakeStore) ResetPassword(context.Context, string) (string, error) {
-	return f.resetPw, f.resetErr
 }
 func (f *fakeStore) SetActive(_ context.Context, id string, active bool) error {
 	f.lastActiveID, f.lastActive = id, active
@@ -136,7 +131,9 @@ func TestCreateHandlerEmailTaken(t *testing.T) {
 }
 
 func TestUpdateHandlerResetPasswordReturnsTemp(t *testing.T) {
-	store := &fakeStore{updateRes: ops.Operator{ID: "op-3", Email: "e@x.test"}, resetPw: "fresh-temp"}
+	store := &fakeStore{updateRes: ops.UpdateResult{
+		Operator: ops.Operator{ID: "op-3", Email: "e@x.test"}, TempPassword: "fresh-temp",
+	}}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/operators/op-3",
 		strings.NewReader(`{"is_staff":true,"reset_password":true}`))
