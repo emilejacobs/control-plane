@@ -1,6 +1,6 @@
 // Auth API calls against cp-api: first-run admin claim, login, TOTP
 // enrollment. Each stores the returned token pair on success.
-import { apiRequest, currentTokens, setTokens } from "./client";
+import { apiRequest, currentTokens, setTokens, clearTokens } from "./client";
 
 // ApiError carries cp-api's HTTP status so callers can branch on it.
 export class ApiError extends Error {
@@ -54,19 +54,25 @@ export interface LoginInput {
   recoveryCode?: string;
 }
 
-export interface LoginResult {
-  // requiresTotpEnrollment is true for an operator who has not yet enrolled
-  // TOTP — the dashboard routes them into enrollment before anything else.
-  requiresTotpEnrollment: boolean;
-  // mustChangePassword is true for an operator still on a system-generated
-  // temp password (#16) — they must set a new one before anything else,
-  // ahead of TOTP enrollment.
-  mustChangePassword: boolean;
-}
+// LoginOutcome is the result of a login attempt for the two-step UI.
+//  - "authenticated": password (and, for enrolled operators, the 2FA code)
+//    accepted; tokens are stored. The flags drive onboarding routing.
+//  - "totpRequired": the password verified but a valid TOTP code is still
+//    needed — the UI shows (or stays on) the 2FA step. New operators (no TOTP
+//    yet) never hit this: they authenticate on password alone.
+export type LoginOutcome =
+  | { kind: "authenticated"; requiresTotpEnrollment: boolean; mustChangePassword: boolean }
+  | { kind: "totpRequired" };
 
-// login authenticates an operator. A TOTP code or, in its place, a recovery
-// code may accompany the password. On success the token pair is stored.
-export async function login(input: LoginInput): Promise<LoginResult> {
+// login authenticates an operator. Step one sends email + password (no code);
+// for an enrolled operator that returns "totpRequired", and a second call adds
+// the TOTP (or recovery) code. On full success the token pair is stored. A
+// bad email/password throws ApiError(401) with no Reason header.
+export async function login(input: LoginInput): Promise<LoginOutcome> {
+  // A login starts a fresh session: drop any stale tokens so apiRequest's
+  // 401-refresh path can't fire on the login call (it would otherwise try to
+  // rotate a dead token instead of surfacing the 401 + Reason header).
+  clearTokens();
   const res = await apiRequest("/auth/login", {
     method: "POST",
     body: JSON.stringify({
@@ -76,6 +82,11 @@ export async function login(input: LoginInput): Promise<LoginResult> {
       recovery_code: input.recoveryCode ?? "",
     }),
   });
+  // Password OK, second factor missing/invalid → cp-api flags it so we can
+  // advance to the 2FA step instead of reporting bad credentials.
+  if (res.status === 401 && res.headers.get("Reason") === "totp-required") {
+    return { kind: "totpRequired" };
+  }
   if (!res.ok) {
     throw new ApiError(res.status, "login failed");
   }
@@ -85,6 +96,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   };
   setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
   return {
+    kind: "authenticated",
     requiresTotpEnrollment: body.requires_totp_enrollment,
     mustChangePassword: body.must_change_password ?? false,
   };
