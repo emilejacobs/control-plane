@@ -2,6 +2,9 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -134,5 +137,61 @@ func TestRegistryFleetAlertsNoScopeFailsClosed(t *testing.T) {
 	if len(alerts.Probes) != 0 || len(alerts.Services) != 0 {
 		t.Errorf("unscoped read returned %d probe / %d service groups, want 0/0 (fail closed)",
 			len(alerts.Probes), len(alerts.Services))
+	}
+}
+
+// TestFleetAlertsEndpoint — GET /fleet/alerts round-trips the roll-up
+// through the real router + auth + scope + DB under a {probes, services}
+// envelope with device ids inline.
+func TestFleetAlertsEndpoint(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	dev := enrollForTest(t, srv, "mac-alerts-api", "dddddddd-0000-0000-0000-000000000004")
+	observedAt := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	if err := srv.Registry.RecordHealthProbes(ctx, dev, []healthprobes.Result{
+		{Name: "plate_recognizer_container", Status: healthprobes.StatusRed, State: "exited"},
+	}, observedAt); err != nil {
+		t.Fatalf("record probes: %v", err)
+	}
+	if err := srv.Registry.RecordServiceStates(ctx, dev, []servicestatus.ServiceState{
+		{Name: "usb_audio", State: service.StateStopped, StateSince: observedAt},
+	}, observedAt); err != nil {
+		t.Fatalf("record services: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/fleet/alerts", nil)
+	req.Header.Set("Authorization", "Bearer "+mintAccessToken(t, ctx, srv))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /fleet/alerts: status %d; body=%s", resp.StatusCode, raw)
+	}
+
+	var body struct {
+		Probes []struct {
+			ProbeName string   `json:"probe_name"`
+			Red       []string `json:"red"`
+		} `json:"probes"`
+		Services []struct {
+			ServiceName string   `json:"service_name"`
+			Stopped     []string `json:"stopped"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Probes) != 1 || body.Probes[0].ProbeName != "plate_recognizer_container" ||
+		len(body.Probes[0].Red) != 1 || body.Probes[0].Red[0] != dev {
+		t.Errorf("probes = %+v, want one red plate_recognizer_container with [%s]", body.Probes, dev)
+	}
+	if len(body.Services) != 1 || body.Services[0].ServiceName != "usb_audio" ||
+		len(body.Services[0].Stopped) != 1 || body.Services[0].Stopped[0] != dev {
+		t.Errorf("services = %+v, want one stopped usb_audio with [%s]", body.Services, dev)
 	}
 }
