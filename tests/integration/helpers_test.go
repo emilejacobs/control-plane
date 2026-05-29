@@ -23,6 +23,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
+	"github.com/emilejacobs/control-plane/internal/cp/operators"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
 	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
@@ -147,6 +148,7 @@ func buildTestServerWith(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 		AuthN:            authnSvc,
 		AuthZ:            authzSvc,
 		IdempotencyStore: idemStore,
+		Operators:        operators.New(pool),
 		TaxonomyStore:    taxonomy.NewStore(pool),
 		Audit:            auditW,
 		Logger:           cplog.New(logs, "cp-api-test"),

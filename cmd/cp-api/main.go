@@ -52,6 +52,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
+	"github.com/emilejacobs/control-plane/internal/cp/operators"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
 	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
@@ -176,6 +177,7 @@ func run(logger *slog.Logger) error {
 			Registry:           reg,
 			AuthN:              authnSvc,
 			AuthZ:              authzSvc,
+			Operators:          operators.New(pool),
 			IdempotencyStore:   idemStore,
 			TaxonomyStore:      taxonomyStore,
 			TaxonomyRunTask:    taxonomyRunTask,

@@ -17,12 +17,14 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/fleet"
+	operatorshttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/operators"
 	taxonomyhttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/taxonomy"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
+	"github.com/emilejacobs/control-plane/internal/cp/operators"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
 )
@@ -32,6 +34,11 @@ type Deps struct {
 	AuthN            *authn.AuthN
 	AuthZ            *authz.AuthZ
 	IdempotencyStore middleware.IdempotencyStore
+
+	// Operators is the #16 operator-management store backing the staff-only
+	// /operators endpoints. nil disables those routes (the rest of the API
+	// continues to serve; tests that don't exercise the surface omit it).
+	Operators *operators.Store
 
 	// TaxonomyStore is the clients/sites mirror store ADR-033 § 8's
 	// GET /taxonomy/status reads. nil disables the route — tests that
@@ -168,29 +175,43 @@ func NewBuilderWith(d Deps) *Builder {
 		requireAuth := middleware.Auth(d.AuthN)
 		requireEnrolled := middleware.RequireTotpEnrolled(d.AuthN)
 		requireScope := middleware.Scope(d.AuthZ)
-		b.Post("/auth/totp/enroll", requireAuth(auth.NewTotpEnroll(d.AuthN, auditW)))
-		b.Get("/devices", requireAuth(requireEnrolled(requireScope(devices.NewList(d.Registry)))))
-		b.Get("/devices/{id}", requireAuth(requireEnrolled(requireScope(devices.NewGet(d.Registry)))))
+		// #16: an operator on a system-generated temp password must set a new
+		// one before any normal action. The gate wraps every protected route
+		// — including TOTP enrollment, so the order is set-password → enroll
+		// → access — except POST /auth/password itself (below), which sits
+		// behind Auth only so a must-change operator can reach it.
+		requirePwChanged := middleware.RequirePasswordChanged(d.AuthN)
+		// onboarded composes the two first-login gates every fully-onboarded
+		// route shares: TOTP enrolled AND temp password rotated. Used in
+		// place of the bare TOTP gate so an admin password-reset (which
+		// re-arms must-change on an already-enrolled operator) also blocks
+		// normal access until the operator rotates.
+		onboarded := func(h http.Handler) http.Handler { return requireEnrolled(requirePwChanged(h)) }
+		requireStaff := middleware.RequireStaff()
+		b.Post("/auth/password", requireAuth(auth.NewSetPassword(d.AuthN, auditW)))
+		b.Post("/auth/totp/enroll", requireAuth(requirePwChanged(auth.NewTotpEnroll(d.AuthN, auditW))))
+		b.Get("/devices", requireAuth(onboarded(requireScope(devices.NewList(d.Registry)))))
+		b.Get("/devices/{id}", requireAuth(onboarded(requireScope(devices.NewGet(d.Registry)))))
 		// Phase 2 fleet health probes (issue #19): per-device probe
 		// snapshot. Read-only; same auth + TOTP + site scope as the
 		// other per-device reads.
-		b.Get("/devices/{id}/health-probes", requireAuth(requireEnrolled(requireScope(devices.NewHealthProbeList(d.Registry)))))
+		b.Get("/devices/{id}/health-probes", requireAuth(onboarded(requireScope(devices.NewHealthProbeList(d.Registry)))))
 		// GET /fleet/alerts — fleet-wide roll-up for the Overview alerts
 		// dashboard (#21). Site-scoped (not staff-gated): a scoped operator
 		// sees only their sites' alerts; staff see the whole fleet.
-		b.Get("/fleet/alerts", requireAuth(requireEnrolled(requireScope(fleet.NewAlerts(d.Registry)))))
+		b.Get("/fleet/alerts", requireAuth(onboarded(requireScope(fleet.NewAlerts(d.Registry)))))
 		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
 		// Read route (GET) requires only auth + TOTP + site scope.
 		// Mutating routes additionally need CmdPublisher to push the
 		// cameras.update cmd down to the agent after each change.
-		b.Get("/devices/{id}/cameras", requireAuth(requireEnrolled(requireScope(devices.NewCameraList(d.Registry)))))
+		b.Get("/devices/{id}/cameras", requireAuth(onboarded(requireScope(devices.NewCameraList(d.Registry)))))
 		if d.CmdPublisher != nil {
 			b.Post("/devices/{id}/cameras",
-				requireAuth(requireEnrolled(requireScope(devices.NewCameraPost(d.Registry, d.CmdPublisher)))))
+				requireAuth(onboarded(requireScope(devices.NewCameraPost(d.Registry, d.CmdPublisher)))))
 			b.Put("/devices/{id}/cameras/{camera_id}",
-				requireAuth(requireEnrolled(requireScope(devices.NewCameraPut(d.Registry, d.CmdPublisher)))))
+				requireAuth(onboarded(requireScope(devices.NewCameraPut(d.Registry, d.CmdPublisher)))))
 			b.Delete("/devices/{id}/cameras/{camera_id}",
-				requireAuth(requireEnrolled(requireScope(devices.NewCameraDelete(d.Registry, d.CmdPublisher)))))
+				requireAuth(onboarded(requireScope(devices.NewCameraDelete(d.Registry, d.CmdPublisher)))))
 		}
 		// Phase 2 slice 2: PUT /devices/{id}/service-config. Requires
 		// auth + TOTP + site scope (same gates as the read surface).
@@ -198,35 +219,48 @@ func NewBuilderWith(d Deps) *Builder {
 		// don't exercise the downward channel running unchanged.
 		if d.CmdPublisher != nil {
 			b.Put("/devices/{id}/service-config",
-				requireAuth(requireEnrolled(requireScope(devices.NewServiceConfigPut(d.Registry, d.CmdPublisher)))))
+				requireAuth(onboarded(requireScope(devices.NewServiceConfigPut(d.Registry, d.CmdPublisher)))))
 			// Phase 2 slice 3: log-tail. POST initiates a tail request,
 			// publishes the log.tail cmd; GET polls the per-request row
 			// until status flips to done|error. Same CmdPublisher gate
 			// as service-config (no publisher → no downward surfaces).
 			b.Post("/devices/{id}/logs/tail",
-				requireAuth(requireEnrolled(requireScope(devices.NewLogTailPost(d.Registry, d.CmdPublisher)))))
+				requireAuth(onboarded(requireScope(devices.NewLogTailPost(d.Registry, d.CmdPublisher)))))
 			b.Get("/devices/{id}/logs/tail/{correlation_id}",
-				requireAuth(requireEnrolled(requireScope(devices.NewLogTailGet(d.Registry)))))
+				requireAuth(onboarded(requireScope(devices.NewLogTailGet(d.Registry)))))
 			// Phase 2 Edge UI rework (issue #3): network scan. POST
 			// triggers a LAN scan via the network.scan cmd; GET polls
 			// the per-request row for the agent's hosts list. Same
 			// CmdPublisher gate as the surfaces above.
 			b.Post("/devices/{id}/network-scan",
-				requireAuth(requireEnrolled(requireScope(devices.NewNetworkScanPost(d.Registry, d.CmdPublisher)))))
+				requireAuth(onboarded(requireScope(devices.NewNetworkScanPost(d.Registry, d.CmdPublisher)))))
 			b.Get("/devices/{id}/network-scan/{correlation_id}",
-				requireAuth(requireEnrolled(requireScope(devices.NewNetworkScanGet(d.Registry)))))
+				requireAuth(onboarded(requireScope(devices.NewNetworkScanGet(d.Registry)))))
 		}
 		// ADR-033 § 8 / Issue #18 — clients/sites taxonomy sync.
 		// Staff-only: the manual button is admin-only (non-zero ECS
 		// cost) and the status surface mirrors that scope. Read-only
 		// status here; the RunTask trigger lands in the next slice.
+		// #16 — staff-only operator management. Create/edit/deactivate are
+		// mutating; deactivate/reactivate are POST sub-routes (not DELETE) so
+		// the soft-delete semantics read clearly and stay auditable.
+		if d.Operators != nil {
+			b.Get("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewList(d.Operators)))))
+			b.Get("/operators/{id}", requireAuth(onboarded(requireStaff(operatorshttp.NewGet(d.Operators)))))
+			b.Post("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewCreate(d.Operators, auditW)))))
+			b.Put("/operators/{id}", requireAuth(onboarded(requireStaff(operatorshttp.NewUpdate(d.Operators, auditW)))))
+			b.Post("/operators/{id}/deactivate",
+				requireAuth(onboarded(requireStaff(operatorshttp.NewSetActive(d.Operators, auditW, false)))))
+			b.Post("/operators/{id}/reactivate",
+				requireAuth(onboarded(requireStaff(operatorshttp.NewSetActive(d.Operators, auditW, true)))))
+		}
+		// ADR-033 § 8 / Issue #18 — clients/sites taxonomy sync.
 		if d.TaxonomyStore != nil {
-			requireStaff := middleware.RequireStaff()
 			b.Get("/taxonomy/status",
-				requireAuth(requireEnrolled(requireStaff(taxonomyhttp.NewStatus(d.TaxonomyStore)))))
+				requireAuth(onboarded(requireStaff(taxonomyhttp.NewStatus(d.TaxonomyStore)))))
 			if d.TaxonomyRunTask != nil {
 				b.Post("/taxonomy/sync",
-					requireAuth(requireEnrolled(requireStaff(taxonomyhttp.NewSync(d.TaxonomyRunTask, auditW)))))
+					requireAuth(onboarded(requireStaff(taxonomyhttp.NewSync(d.TaxonomyRunTask, auditW)))))
 			}
 			// GET /sites is the picker surface for the
 			// device-deployment edit modal: auth + TOTP, but not
@@ -234,12 +268,12 @@ func NewBuilderWith(d Deps) *Builder {
 			// list can render real client/site names. Edit endpoints
 			// stay staff-only (PUT /devices/{id}/deployment below).
 			b.Get("/sites",
-				requireAuth(requireEnrolled(taxonomyhttp.NewSites(d.TaxonomyStore))))
+				requireAuth(onboarded(taxonomyhttp.NewSites(d.TaxonomyStore))))
 			// PUT /devices/{id}/deployment — staff-only edit of a
 			// device's site assignment + asset_number. The picker
 			// (GET /sites) is the read counterpart.
 			b.Put("/devices/{id}/deployment",
-				requireAuth(requireEnrolled(requireStaff(devices.NewDeploymentPut(d.Registry, auditW)))))
+				requireAuth(onboarded(requireStaff(devices.NewDeploymentPut(d.Registry, auditW)))))
 		}
 	}
 	return b
