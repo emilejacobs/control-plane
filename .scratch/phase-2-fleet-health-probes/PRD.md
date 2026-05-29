@@ -2,7 +2,7 @@
 
 **Phase:** 2
 **Started:** 2026-05-27
-**Status:** in design
+**Status:** slice 1 implemented (2026-05-28, #19) — agent probes → MQTT → SQS → cp-ingest → Postgres → API → dashboard Health panel + per-probe-type CloudWatch alarms, all landed. Fleet aggregate + Linux backend deferred to later slices.
 
 ## Why
 
