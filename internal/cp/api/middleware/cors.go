@@ -56,6 +56,12 @@ func Cors(allowedOrigins []string) func(http.Handler) http.Handler {
 			}
 
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			// Expose the custom "Reason" header so cross-origin dashboard JS
+			// can read it. The two-step login reads Reason: totp-required to
+			// advance to the 2FA step, and the onboarding gates use it too;
+			// without this the browser hides the header and enrolled
+			// operators are wrongly told "invalid email or password".
+			w.Header().Set("Access-Control-Expose-Headers", "Reason")
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
