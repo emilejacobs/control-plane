@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Dot } from "./Dot";
+import { Logo } from "./Logo";
 import { clearTokens } from "../../lib/api/client";
 import { logout } from "../../lib/api/auth";
 
@@ -65,16 +66,7 @@ export function Topbar({ userInitials = "EJ" }: Props) {
         className="topbar-brand"
         style={{ color: "inherit", textDecoration: "none" }}
       >
-        <span className="topbar-logo" aria-hidden>
-          <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
-            <path
-              d="M3.5 6.5c.7 1.6 2 2.6 3.5 2.6s2.8-1 3.5-2.6"
-              stroke="currentColor"
-              strokeWidth={1.6}
-              strokeLinecap="round"
-            />
-          </svg>
-        </span>
+        <Logo height={26} />
         <span>uknomi</span>
         <span className="topbar-sub">
           <span
