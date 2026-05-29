@@ -189,6 +189,29 @@ resource "aws_cloudwatch_metric_alarm" "cmd_result_dlq" {
   tags = { Name = "uknomi-cp-cmd-result-dlq" }
 }
 
+# Phase 2 issue #19 health-probes DLQ. Non-empty means the ingester
+# rejected a probe report (unknown device, schema drift). Same posture
+# as the service-status DLQ alarm.
+resource "aws_cloudwatch_metric_alarm" "health_probes_dlq" {
+  alarm_name          = "uknomi-cp-health-probes-dlq"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  alarm_description   = "Health-probes ingest DLQ is non-empty (Phase 2 issue #19 pipeline). Runbook: docs/runbooks/alarms/health-probes-dlq.md"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+
+  dimensions = {
+    QueueName = "uknomi-cp-health-probes-dlq"
+  }
+
+  tags = { Name = "uknomi-cp-health-probes-dlq" }
+}
+
 # ── Log-derived alarms (Issue 21) ───────────────────────────────────────────
 # Each pairs an aws_cloudwatch_log_metric_filter (JSON-pattern over the
 # service's structured slog stream) with an aws_cloudwatch_metric_alarm.
@@ -277,6 +300,58 @@ resource "aws_cloudwatch_metric_alarm" "service_status_stopped" {
   ok_actions          = [aws_sns_topic.alarms.arn]
 
   tags = { Name = "uknomi-cp-service-stopped" }
+}
+
+# Health-probe red — Phase 2 (Issue #19), per-probe-type. The triage
+# decision is one alarm per probe type rather than a single roll-up, so
+# the page tells the operator which signal is red. cp-ingest's
+# HealthProbeIngester emits one "health-probe.red" line per red probe
+# per report, stamped with the probe name in $.probe; one filter+alarm
+# pair per probe type counts the matching lines. ≥3 consecutive 5-min
+# windows = the probe has been red on ≥1 device for ≥15 min.
+locals {
+  health_probe_names = [
+    "auto_login",
+    "gui_session",
+    "plate_recognizer_container",
+    "plate_recognizer_config",
+    "usb_audio",
+    "whisper_model",
+    "boot_sanity",
+  ]
+}
+
+resource "aws_cloudwatch_log_metric_filter" "health_probe_red" {
+  for_each       = toset(local.health_probe_names)
+  name           = "uknomi-cp-health-probe-red-${each.key}"
+  log_group_name = module.cp_ingest.log_group_name
+  pattern        = "{ $.msg = \"health-probe.red\" && $.probe = \"${each.key}\" }"
+
+  metric_transformation {
+    name          = "HealthProbeRed_${each.key}"
+    namespace     = local.cp_audit_namespace
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "health_probe_red" {
+  for_each            = toset(local.health_probe_names)
+  alarm_name          = "uknomi-cp-health-probe-${each.key}"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3 # ≥3 consecutive 5-min windows = 15 min
+  metric_name         = aws_cloudwatch_log_metric_filter.health_probe_red[each.key].metric_transformation[0].name
+  namespace           = local.cp_audit_namespace
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_description   = "Health probe ${each.key} has been red on ≥1 device for ≥15 minutes. Runbook: docs/runbooks/alarms/health-probe-${each.key}.md"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+
+  tags = { Name = "uknomi-cp-health-probe-${each.key}" }
 }
 
 # Login failure spike — paged when /auth/login failure lines breach 100

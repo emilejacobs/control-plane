@@ -45,6 +45,10 @@ resource "aws_ecs_task_definition" "this" {
         # sqs-ingest instantiation lands.
         { name = "SERVICE_STATUS_QUEUE_URL", value = var.service_status_queue_url },
         { name = "SERVICE_STATUS_DLQ_URL", value = var.service_status_dlq_url },
+        # Phase 2 issue #19: health-probes. Empty disables the consumer;
+        # populating both turns it on.
+        { name = "HEALTH_PROBES_QUEUE_URL", value = var.health_probes_queue_url },
+        { name = "HEALTH_PROBES_DLQ_URL", value = var.health_probes_dlq_url },
         # Phase 2 slice 2: cmd-result feedback. Same posture — empty
         # disables the consumer; populating both turns it on.
         { name = "CMD_RESULT_QUEUE_URL", value = var.cmd_result_queue_url },

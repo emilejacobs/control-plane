@@ -104,6 +104,21 @@ variable "service_status_dlq_url" {
   default     = ""
 }
 
+# Phase 2 fleet health probes (Issue #19). Empty defaults so the module
+# stays applyable before the health-probes SQS queue is provisioned —
+# cp-ingest's main.go skips the consumer when these are unset.
+variable "health_probes_queue_url" {
+  description = "SQS URL of the health-probes queue (sqs-ingest module output queue_url). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "health_probes_dlq_url" {
+  description = "SQS URL of the health-probes dead-letter queue (sqs-ingest module output dlq_url). Optional."
+  type        = string
+  default     = ""
+}
+
 # Phase 2 slice 2 cmd-result feedback (per-device allow-list overrides).
 # Empty defaults keep cp-ingest's cmd-result consumer disabled until the
 # deploy root wires the new sqs-ingest module + IoT Rule.

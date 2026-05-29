@@ -80,6 +80,23 @@ module "sqs_cmd_result" {
   tags = var.tags
 }
 
+# ── Health-probes pipeline (Phase 2, Issue #19) ────────────────────────────
+
+module "sqs_health_probes" {
+  source = "../terraform/modules/sqs-ingest"
+
+  name          = "uknomi-cp-health-probes"
+  iot_rule_name = "uknomi_cp_health_probes"
+  # Agent publishes its healthprobes.Report payload on
+  # devices/{device_id}/health-probes. The body already carries a
+  # correlation_id and device_id, so no topic-derived columns are needed.
+  # Cadence is 5 minutes (one report per device), same throughput class as
+  # service-status; module defaults are fine.
+  iot_sql = "SELECT * FROM 'devices/+/health-probes'"
+
+  tags = var.tags
+}
+
 # ── cp-ingest Fargate service ───────────────────────────────────────────────
 
 module "cp_ingest" {
@@ -101,6 +118,9 @@ module "cp_ingest" {
 
   service_status_queue_url = module.sqs_service_status.queue_url
   service_status_dlq_url   = module.sqs_service_status.dlq_url
+
+  health_probes_queue_url = module.sqs_health_probes.queue_url
+  health_probes_dlq_url   = module.sqs_health_probes.dlq_url
 
   cmd_result_queue_url = module.sqs_cmd_result.queue_url
   cmd_result_dlq_url   = module.sqs_cmd_result.dlq_url
