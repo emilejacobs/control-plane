@@ -19,10 +19,60 @@ import (
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
+	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	protonetworkscan "github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
+
+// stubProbeBackend implements probes.Backend with a fixed result set.
+type stubProbeBackend struct{ results []healthprobes.Result }
+
+func (s stubProbeBackend) Collect(_ context.Context) []healthprobes.Result { return s.results }
+
+func TestAgentPublishesHealthProbes(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newFakeTransport()
+
+	backend := stubProbeBackend{results: []healthprobes.Result{
+		{Name: healthprobes.ProbeAutoLogin, Status: healthprobes.StatusGreen, State: "configured"},
+	}}
+	a, err := agent.New(agent.Config{
+		CertPath:      cert,
+		DeviceID:      "dev-001",
+		Version:       "0.1.0",
+		ProbeInterval: 5 * time.Millisecond,
+	}, tr, agent.WithProbeBackend(backend))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	topic := "devices/dev-001/health-probes"
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(tr.publishedOn(topic)) > 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	publishes := tr.publishedOn(topic)
+	if len(publishes) == 0 {
+		t.Fatalf("no health-probes publish within 1s on %s", topic)
+	}
+	var report healthprobes.Report
+	if err := json.Unmarshal(publishes[0], &report); err != nil {
+		t.Fatalf("payload not a valid Report: %v", err)
+	}
+	if report.DeviceID != "dev-001" || len(report.Probes) != 1 ||
+		report.Probes[0].Name != healthprobes.ProbeAutoLogin {
+		t.Errorf("unexpected report: %+v", report)
+	}
+}
 
 type fakeTransport struct {
 	mu        sync.Mutex

@@ -19,6 +19,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
+	"github.com/emilejacobs/control-plane/internal/probes"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	"github.com/emilejacobs/control-plane/internal/service"
 	"github.com/emilejacobs/control-plane/internal/telemetry"
@@ -51,6 +52,7 @@ func (defaultLogTailReader) Tail(entry protologtail.Entry, lines int) (protologt
 const (
 	defaultTelemetryInterval     = 30 * time.Second
 	defaultServiceStatusInterval = 5 * time.Minute
+	defaultProbeInterval         = 5 * time.Minute
 )
 
 type Config struct {
@@ -64,6 +66,11 @@ type Config struct {
 	// on Linux. ServiceStatusInterval defaults to 5 minutes when unset.
 	ServiceAllowList      []string
 	ServiceStatusInterval time.Duration
+
+	// ProbeInterval is the cadence for the Phase 2 fleet-health-probes
+	// reporter (issue #19); it runs whenever a probe backend is supplied
+	// via WithProbeBackend. Defaults to 5 minutes when unset.
+	ProbeInterval time.Duration
 
 	// ConfigPath is the absolute path to the agent's JSON config file
 	// (the same file that produced this Config via config.Load). When
@@ -108,6 +115,13 @@ type Agent struct {
 	serviceStatus          *telemetry.ServiceStatusPublisher
 	serviceStatusDone      chan struct{}
 
+	// probeBackend + probePublisher are set whenever a probe backend was
+	// supplied via WithProbeBackend (Phase 2 fleet health probes, #19).
+	// Both stay nil otherwise.
+	probeBackend   probes.Backend
+	probePublisher *telemetry.ProbePublisher
+	probeDone      chan struct{}
+
 	pubCancel context.CancelFunc
 	pubDone   chan struct{}
 }
@@ -116,6 +130,10 @@ type Option func(*Agent)
 
 func WithLogger(l *slog.Logger) Option {
 	return func(a *Agent) { a.logger = l }
+}
+
+func WithProbeBackend(b probes.Backend) Option {
+	return func(a *Agent) { a.probeBackend = b }
 }
 
 func WithServiceBackend(b service.Backend) Option {
@@ -235,6 +253,29 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		}
 	}
 
+	// Phase 2 fleet health probes (issue #19). Constructed whenever a
+	// probe backend was supplied; the darwin backend ships in slice 1,
+	// the linux backend returns an empty result set (ADR-007).
+	if a.probeBackend != nil {
+		probeInterval := cfg.ProbeInterval
+		if probeInterval <= 0 {
+			probeInterval = defaultProbeInterval
+		}
+		collector := &telemetry.ProbeCollector{
+			Backend:  a.probeBackend,
+			DeviceID: cfg.DeviceID,
+			Now:      time.Now,
+			Logger:   a.logger,
+		}
+		a.probePublisher = &telemetry.ProbePublisher{
+			Interval:  probeInterval,
+			DeviceID:  cfg.DeviceID,
+			Collect:   collector.Collect,
+			Transport: transport,
+			Logger:    a.logger,
+		}
+	}
+
 	return a, nil
 }
 
@@ -297,6 +338,13 @@ func (a *Agent) Start() error {
 			a.serviceStatus.Run(pubCtx)
 		}()
 	}
+	if a.probePublisher != nil {
+		a.probeDone = make(chan struct{})
+		go func() {
+			defer close(a.probeDone)
+			a.probePublisher.Run(pubCtx)
+		}()
+	}
 	return nil
 }
 
@@ -306,6 +354,9 @@ func (a *Agent) Stop() error {
 		<-a.pubDone
 		if a.serviceStatusDone != nil {
 			<-a.serviceStatusDone
+		}
+		if a.probeDone != nil {
+			<-a.probeDone
 		}
 	}
 	return a.transport.Close()

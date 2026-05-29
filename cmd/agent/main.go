@@ -10,6 +10,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/config"
+	"github.com/emilejacobs/control-plane/internal/probes"
 	"github.com/emilejacobs/control-plane/internal/service"
 	"github.com/emilejacobs/control-plane/internal/transport"
 )
@@ -83,6 +84,16 @@ func main() {
 		serviceStatusInterval = d
 	}
 
+	var probeInterval time.Duration
+	if cfg.ProbeInterval != "" {
+		d, err := time.ParseDuration(cfg.ProbeInterval)
+		if err != nil {
+			logger.Error("parse probe_interval", "value", cfg.ProbeInterval, "error", err)
+			os.Exit(1)
+		}
+		probeInterval = d
+	}
+
 	a, err := agent.New(agent.Config{
 		CertPath:              cfg.CertPath,
 		DeviceID:              cfg.DeviceID,
@@ -90,9 +101,14 @@ func main() {
 		TelemetryInterval:     telemetryInterval,
 		ServiceAllowList:      cfg.ServiceAllowList,
 		ServiceStatusInterval: serviceStatusInterval,
+		ProbeInterval:         probeInterval,
 		ConfigPath:            *configPath,
 		CamerasPath:           cfg.CamerasPath,
-	}, tr, agent.WithLogger(logger), agent.WithServiceBackend(service.NewSystemBackend(logger)))
+	}, tr,
+		agent.WithLogger(logger),
+		agent.WithServiceBackend(service.NewSystemBackend(logger)),
+		agent.WithProbeBackend(probes.NewSystemBackend(cfg.AutoLoginUser, logger)),
+	)
 	if err != nil {
 		logger.Error("agent", "error", err)
 		os.Exit(1)

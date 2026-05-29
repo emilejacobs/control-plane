@@ -36,6 +36,16 @@ type Config struct {
 	// field is unset, so devices not yet provisioned by the new install
 	// module retain the pre-Phase-2-Edge-UI shape.
 	CamerasPath string `json:"cameras_path,omitempty"`
+
+	// ProbeInterval is parsed with time.ParseDuration (e.g. "5m"). It
+	// sets the cadence of the Phase 2 fleet-health-probes reporter
+	// (issue #19). Empty defaults to 5 minutes.
+	ProbeInterval string `json:"probe_interval,omitempty"`
+
+	// AutoLoginUser is the user the device is expected to auto-login as
+	// (e.g. "uknomi"); the auto_login / gui_session probes compare the
+	// observed state against it. Empty disables those probes' user match.
+	AutoLoginUser string `json:"auto_login_user,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
