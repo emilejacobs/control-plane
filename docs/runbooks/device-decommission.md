@@ -51,15 +51,24 @@ aws iot describe-certificate --certificate-id "$CERTID" # does not exist
 aws iot get-policy --policy-name UknomiAgentPolicy      # still present (sanity — fleet unaffected)
 ```
 
-## Layer 3 — CP device record (Postgres `devices` table) — **currently a gap**
+## Layer 3 — CP device record (Postgres `devices` table)
 
-Layers 1–2 leave the device's row in CP's `devices` table, so it **still shows in the CP device list, permanently offline** (it can't reconnect — cert is gone). There is **no `DELETE /devices/{id}` endpoint** in Phase 1, and the DB is in a private subnet, so there's no clean CLI removal today.
+Layers 1–2 leave the device's row in CP's `devices` table. Remove it with the
+staff-only decommission endpoint:
 
-Options until that lands:
-- **Leave it** as an offline record (acceptable short-term; it's clearly dead).
-- **Direct DB delete** via a bastion/SSM session into RDS (last resort; not routine).
+```
+DELETE /devices/{device_id}
+```
 
-**TODO / known gap:** add a `DELETE /devices/{id}` (staff-only) decommission endpoint — pairs naturally with the Phase 3 cert-rotation/revocation work (ADR-013). Until then, layer 3 is manual/deferred. Track as a follow-up issue.
+It deletes the device row (child rows — services, health probes, cameras, log
+tails, network scans — cascade), is audited (`audit.device_decommission`), and
+returns `204` on success / `404` if the device is already gone. Do this **after**
+layers 1–2 so the record isn't removed while the device could still reconnect.
+
+> Earlier deployments had no such endpoint (the row had to be left as a
+> permanently-offline record or deleted directly in RDS); that gap is closed.
+> Cert revocation remains layer 2's manual step until the Phase 3
+> rotation/revocation work (ADR-013).
 
 ---
 
@@ -68,4 +77,4 @@ Options until that lands:
 - [ ] Captured `device_id`
 - [ ] Layer 1: daemon unloaded, plist + binary + `/var/uknomi` removed
 - [ ] Layer 2: cert detached from policy + thing, deactivated, deleted; thing deleted; both verified 404; shared policy intact
-- [ ] Layer 3: noted the offline CP record (no delete endpoint yet)
+- [ ] Layer 3: `DELETE /devices/{id}` (staff) — CP record removed (204)
