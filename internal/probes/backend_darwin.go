@@ -82,7 +82,33 @@ func statReal(path string) (fileStat, error) {
 func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 	return []healthprobes.Result{
 		b.probeAutoLogin(ctx),
+		b.probeGUISession(ctx),
 	}
+}
+
+// probeGUISession reports who owns /dev/console — the macOS convention
+// for "the user logged into the GUI". When auto-login fails the Mac
+// sits at the login window with /dev/console owned by root; this probe
+// is what distinguishes "auto-login attempted but failed" from healthy.
+func (b *darwinBackend) probeGUISession(ctx context.Context) healthprobes.Result {
+	res := healthprobes.Result{Name: healthprobes.ProbeGUISession, Details: map[string]any{}}
+
+	stdout, _, err := b.run(ctx, "stat", "-f", "%Su", "/dev/console")
+	user := strings.TrimSpace(string(stdout))
+	res.Details["console_user"] = user
+
+	switch {
+	case err == nil && user == b.expectedLoginUser:
+		res.State = "active"
+		res.Status = healthprobes.StatusGreen
+	case user == "root" || user == "":
+		res.State = "login_window"
+		res.Status = healthprobes.StatusRed
+	default:
+		res.State = "different_user"
+		res.Status = healthprobes.StatusYellow
+	}
+	return res
 }
 
 // probeAutoLogin reports whether passwordless auto-login is wired:

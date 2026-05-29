@@ -111,6 +111,41 @@ func TestProbeAutoLoginMissing(t *testing.T) {
 	}
 }
 
+func TestProbeGUISession(t *testing.T) {
+	cases := map[string]struct {
+		consoleUser string
+		wantState   string
+		wantStatus  healthprobes.Status
+	}{
+		"expected user active":       {"uknomi", "active", healthprobes.StatusGreen},
+		"login window (root owns)":   {"root", "login_window", healthprobes.StatusRed},
+		"different user lingering":   {"admin", "different_user", healthprobes.StatusYellow},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := &darwinBackend{
+				run: fakeRunner{results: map[string]cmdResult{
+					"stat -f %Su /dev/console": {stdout: tc.consoleUser + "\n"},
+				}}.run,
+				expectedLoginUser: "uknomi",
+			}
+			res := b.probeGUISession(context.Background())
+			if res.Name != healthprobes.ProbeGUISession {
+				t.Errorf("Name = %q, want %q", res.Name, healthprobes.ProbeGUISession)
+			}
+			if res.State != tc.wantState {
+				t.Errorf("State = %q, want %q", res.State, tc.wantState)
+			}
+			if res.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", res.Status, tc.wantStatus)
+			}
+			if res.Details["console_user"] != tc.consoleUser {
+				t.Errorf("Details[console_user] = %v, want %q", res.Details["console_user"], tc.consoleUser)
+			}
+		})
+	}
+}
+
 func TestProbeAutoLoginCorrupted(t *testing.T) {
 	cases := map[string]fileStat{
 		"world-readable mode":  {Mode: 0o644, UID: 0, GID: 0},
