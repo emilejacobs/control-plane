@@ -11,6 +11,16 @@ One ingest topic: a main SQS queue, its dead-letter queue (with redrive
 policy), and the IoT topic rule that feeds the queue. Reused per ingest
 topic — presence heartbeats and lifecycle events.
 
+> ⚠️ **When you add a new agent→CP publish topic** (`devices/{id}/<topic>`),
+> you must ALSO add that topic to the device IoT policy's `iot:Publish`
+> resource list in [`../policy.tf`](../policy.tf) (`UknomiAgentPolicy`).
+> AWS IoT **silently drops** publishes to topics the cert isn't authorized
+> for — the broker still PUBACKs, so the agent looks perfectly healthy
+> (heartbeats on `/telemetry` keep flowing) while cp-ingest sees *nothing*.
+> This trap bit the service-status rollout and again the health-probes
+> rollout (#19). A new `sqs-ingest` module instance is only half the wiring;
+> the policy line is the other half.
+
 The presence-heartbeat wiring (issue 07):
 
 ```hcl

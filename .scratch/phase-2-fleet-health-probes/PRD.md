@@ -92,6 +92,10 @@ Mac-Mini-focused for the implementation; OS-agnostic in name and signal vocabula
 - **End-to-end audio capture test** — that's issue [#10](https://github.com/emilejacobs/control-plane/issues/10) (Audio test + S3 upload + CP playback). Complementary to the USB-audio probe here: this catches the *cause* (device missing); #10 catches the *symptom* (no recording). Both surfaces matter.
 - **Push-on-change cadence** — phase 4 optimisation.
 
+## Deploy gotcha (learned the hard way)
+
+A new publish topic needs **two** changes, not one: the `sqs-ingest` module instance (IoT rule + queue) **and** the `iot:Publish` allow-list in `infra/terraform/policy.tf` (`UknomiAgentPolicy`). AWS IoT silently drops publishes to unauthorized topics — the agent looks healthy (heartbeats on `/telemetry` keep flowing) while CP receives nothing. This bit both the service-status and health-probes rollouts. The policy lives in a **separate Terraform root** (`infra/terraform/`, state key `iot-core/`), not `infra/terraform-deploy/`; update it with `terraform apply -target=aws_iot_policy.agent` (a full apply there would try to create the untracked `device.tf` resources). See the warning in [`infra/terraform/modules/README.md`](../../infra/terraform/modules/README.md).
+
 ## Constraints / honoured ADRs
 
 - **ADR-007 (pi-radxa-minimal-agent)**: Linux fleet gets a minimal agent. The `probes.Backend` interface lands OS-agnostic from day one so the Linux backend (when added) doesn't force CP-side changes.
