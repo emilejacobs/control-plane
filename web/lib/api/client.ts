@@ -75,9 +75,17 @@ async function rawRequest(path: string, init: RequestInit): Promise<Response> {
 // — and clears the now-useless tokens — when the refresh token is rejected.
 async function tryRefresh(): Promise<boolean> {
   if (!tokens) return false;
+  // /auth/refresh is a mutating POST behind cp-api's idempotency gate, which
+  // 400s any mutating request with no Idempotency-Key. tryRefresh bypasses
+  // apiRequest (to avoid recursing on its own 401 handling), so it must set
+  // the key itself — otherwise every refresh 400s and the session can never
+  // rotate past the access-token TTL, silently 401ing the whole dashboard.
   const res = await fetch(`${API_BASE}/auth/refresh`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ refresh_token: tokens.refreshToken }),
   });
   if (!res.ok) {
