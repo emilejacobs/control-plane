@@ -7,17 +7,27 @@ package operators
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/emilejacobs/control-plane/internal/cp/authn"
 )
 
 // ErrNotFound is returned by Get for an operator id that matches no row
 // (including a non-UUID id). Handlers translate it to HTTP 404.
 var ErrNotFound = errors.New("operator not found")
+
+// ErrEmailTaken is returned by Create when the email is already in use
+// (the operators.email UNIQUE constraint). Handlers translate it to HTTP 409.
+var ErrEmailTaken = errors.New("email already in use")
 
 // Operator is the read-side projection of one operators row for the
 // management UI. SiteIDs is the explicit operator_sites allowlist; it is
@@ -87,6 +97,96 @@ func (s *Store) Get(ctx context.Context, id string) (Operator, error) {
 		return Operator{}, ErrNotFound
 	}
 	return scanOperator(rows)
+}
+
+// CreateInput is the staff-supplied shape for a new operator. The initial
+// password is system-generated, not supplied here. SiteIDs is ignored for a
+// staff operator (whose access is the full fleet).
+type CreateInput struct {
+	Email   string
+	IsStaff bool
+	SiteIDs []string
+}
+
+// CreateResult carries the new operator plus the one-time generated temporary
+// password. The plaintext is returned exactly once for the admin to relay
+// out-of-band; it is never persisted (only its hash) or logged.
+type CreateResult struct {
+	Operator     Operator
+	TempPassword string
+}
+
+// Create inserts a new operator with a generated temp password and
+// must_change_password armed, plus its site-allowlist grants, in one
+// transaction. A duplicate email returns ErrEmailTaken.
+func (s *Store) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+
+	temp, err := generateTempPassword()
+	if err != nil {
+		return CreateResult{}, err
+	}
+	hash, err := authn.HashPassword(temp)
+	if err != nil {
+		return CreateResult{}, fmt.Errorf("hash temp password: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CreateResult{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var id string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO operators (email, password_hash, is_staff, must_change_password)
+		VALUES ($1, $2, $3, true)
+		RETURNING id::text
+	`, email, hash, in.IsStaff).Scan(&id)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return CreateResult{}, ErrEmailTaken
+		}
+		return CreateResult{}, fmt.Errorf("insert operator: %w", err)
+	}
+
+	if !in.IsStaff {
+		for _, siteID := range in.SiteIDs {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO operator_sites (operator_id, site_id) VALUES ($1, $2)`, id, siteID,
+			); err != nil {
+				return CreateResult{}, fmt.Errorf("grant site %s: %w", siteID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return CreateResult{}, fmt.Errorf("commit: %w", err)
+	}
+
+	op, err := s.Get(ctx, id)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	return CreateResult{Operator: op, TempPassword: temp}, nil
+}
+
+// generateTempPassword returns a CSPRNG temporary password — 18 random bytes
+// rendered as URL-safe base64 (~24 chars). High-entropy by construction;
+// it is single-use because the operator must change it on first login.
+func generateTempPassword() (string, error) {
+	var b [18]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate temp password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func scanOperator(rows pgx.Rows) (Operator, error) {
