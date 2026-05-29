@@ -33,13 +33,20 @@ describe("auth flow: first-run → TOTP enroll → login → devices", () => {
           recovery_codes: Array.from({ length: 10 }, (_, i) => `rc-${i + 1}`),
         }),
       ),
-      http.post(`${API_BASE}/auth/login`, () =>
-        HttpResponse.json({
+      // Two-step login: password alone (no code) is bounced with
+      // Reason: totp-required for this enrolled operator; the call carrying
+      // the TOTP code succeeds.
+      http.post(`${API_BASE}/auth/login`, async ({ request }) => {
+        const body = (await request.json()) as { totp_code?: string };
+        if (!body.totp_code) {
+          return new HttpResponse(null, { status: 401, headers: { Reason: "totp-required" } });
+        }
+        return HttpResponse.json({
           access_token: "a2",
           refresh_token: "r2",
           requires_totp_enrollment: false,
-        }),
-      ),
+        });
+      }),
       http.get(`${API_BASE}/devices`, () => HttpResponse.json({ devices: [] })),
     );
     const user = userEvent.setup();
@@ -61,11 +68,13 @@ describe("auth flow: first-run → TOTP enroll → login → devices", () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/login"));
     cleanup();
 
-    // 3. Log in with the freshly enrolled second factor.
+    // 3. Log in — step 1 (email + password), then step 2 (2FA code).
     renderWithClient(<LoginPage />);
     await user.type(screen.getByLabelText(/email/i), "admin@acmecorp.test");
     await user.type(screen.getByLabelText(/password/i), "correct-horse-battery-staple");
-    await user.type(screen.getByLabelText(/authenticator code/i), "123456");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    // The 2FA step appears once the password is accepted.
+    await user.type(await screen.findByLabelText(/authenticator code/i), "123456");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/devices"));
     cleanup();

@@ -181,6 +181,36 @@ func TestLoginRequiresTotpAfterEnrollment(t *testing.T) {
 	}
 }
 
+// TestLoginMissingTotpSignalsTotpRequired — for an enrolled operator, a
+// correct password with no TOTP code returns 401 carrying a
+// "Reason: totp-required" header, so the two-step login UI knows to advance
+// to the 2FA step rather than report bad credentials. A wrong password
+// carries no such header (the bad-credentials case stays opaque).
+func TestLoginMissingTotpSignalsTotpRequired(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	email, password, _ := enrollAndSecret(t, srv)
+
+	missing := doLoginTotp(t, srv.URL, email, password, "", "", "00000000-0000-4000-8000-0000000079a1")
+	defer missing.Body.Close()
+	if missing.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing TOTP: got %d want 401", missing.StatusCode)
+	}
+	if got := missing.Header.Get("Reason"); got != "totp-required" {
+		t.Errorf("missing TOTP Reason = %q, want totp-required", got)
+	}
+
+	wrongPw := doLoginTotp(t, srv.URL, email, "wrong-password", "", "", "00000000-0000-4000-8000-0000000079a2")
+	defer wrongPw.Body.Close()
+	if wrongPw.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong password: got %d want 401", wrongPw.StatusCode)
+	}
+	if got := wrongPw.Header.Get("Reason"); got == "totp-required" {
+		t.Error("wrong password leaked Reason: totp-required (should be opaque)")
+	}
+}
+
 func TestLoginFlagsTotpEnrollmentRequired(t *testing.T) {
 	requireDocker(t)
 	ctx := context.Background()
