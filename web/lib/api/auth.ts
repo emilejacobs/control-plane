@@ -58,6 +58,10 @@ export interface LoginResult {
   // requiresTotpEnrollment is true for an operator who has not yet enrolled
   // TOTP — the dashboard routes them into enrollment before anything else.
   requiresTotpEnrollment: boolean;
+  // mustChangePassword is true for an operator still on a system-generated
+  // temp password (#16) — they must set a new one before anything else,
+  // ahead of TOTP enrollment.
+  mustChangePassword: boolean;
 }
 
 // login authenticates an operator. A TOTP code or, in its place, a recovery
@@ -75,9 +79,28 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   if (!res.ok) {
     throw new ApiError(res.status, "login failed");
   }
-  const body = (await res.json()) as TokenPair & { requires_totp_enrollment: boolean };
+  const body = (await res.json()) as TokenPair & {
+    requires_totp_enrollment: boolean;
+    must_change_password?: boolean;
+  };
   setTokens({ accessToken: body.access_token, refreshToken: body.refresh_token });
-  return { requiresTotpEnrollment: body.requires_totp_enrollment };
+  return {
+    requiresTotpEnrollment: body.requires_totp_enrollment,
+    mustChangePassword: body.must_change_password ?? false,
+  };
+}
+
+// setPassword completes the constrained set-new-password flow (#16) for an
+// operator on a system-generated temp password. Reachable while must-change
+// is armed; the server reads the operator id from the bearer token.
+export async function setPassword(newPassword: string): Promise<void> {
+  const res = await apiRequest("/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ new_password: newPassword }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to set password");
+  }
 }
 
 // logout asks cp-api to revoke the operator's refresh token so a stolen

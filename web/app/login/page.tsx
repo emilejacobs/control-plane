@@ -25,8 +25,13 @@ export default function LoginPage() {
       ? { email, password, recoveryCode: code }
       : { email, password, totpCode: code };
     loginMut.mutate(input, {
-      onSuccess: (result) =>
-        router.push(result.requiresTotpEnrollment ? "/totp-enroll" : "/devices"),
+      onSuccess: (result) => {
+        // Onboarding order (#16): set new password (if on a temp one) →
+        // enroll TOTP → fleet.
+        if (result.mustChangePassword) router.push("/set-password");
+        else if (result.requiresTotpEnrollment) router.push("/totp-enroll");
+        else router.push("/devices");
+      },
     });
   }
 
