@@ -2,7 +2,7 @@
 
 **Phase:** 2
 **Started:** 2026-05-27
-**Status:** slice 1 implemented (2026-05-28, #19) — agent probes → MQTT → SQS → cp-ingest → Postgres → API → dashboard Health panel + per-probe-type CloudWatch alarms, all landed. Fleet aggregate + Linux backend deferred to later slices.
+**Status:** slice 1 implemented (2026-05-28, #19) — agent probes → MQTT → SQS → cp-ingest → Postgres → API → dashboard Health panel + per-probe-type CloudWatch alarms, all landed. Slice 2 fleet aggregate implemented (2026-05-29, #21) — `GET /fleet/alerts` + Overview alert-only roll-up (red/yellow probes + stopped services, grouped by type with drill-down). Linux backend still deferred.
 
 ## Why
 
