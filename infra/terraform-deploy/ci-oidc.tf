@@ -141,6 +141,14 @@ data "aws_iam_policy_document" "gha_deploy" {
       aws_cloudwatch_event_rule.taxonomy_sync_daily.arn,
     ]
   }
+
+  # Agent release (#38): the agent-release workflow uploads cross-built agent
+  # binaries + the signed manifest under the agent-dist bucket's agent/ prefix.
+  statement {
+    sid       = "PublishAgentReleaseArtifacts"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.main["agent-dist"].arn}/agent/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "gha_deploy" {
