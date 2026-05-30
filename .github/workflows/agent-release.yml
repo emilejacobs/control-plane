@@ -1,0 +1,117 @@
+name: Agent release
+
+# Cuts an agent release: cross-builds the agent for the fleet's platforms,
+# uploads the binaries to the agent-dist bucket, and publishes a SIGNED
+# manifest (issue #38, ADR-035 §2) that the agent verifies before installing.
+#
+# Deliberate, tag-driven — not every main push. Tag `agent-vX.Y.Z` (or run
+# manually with a version input). The manifest is the signed catalog of
+# available versions; CP presigns the binary fetch at update time (#40), so
+# agent-dist stays private and the manifest stores S3 keys, not public URLs.
+#
+# Prerequisites (one-time ops):
+#   - Secret AGENT_MANIFEST_SIGNING_KEY = base64 ed25519 private key whose
+#     public half is committed at internal/protocol/agentmanifest/release_pubkey.b64
+#     (generate with `go run ./cmd/agent-manifest-keygen`; rotate the committed
+#     DEV key first).
+#   - The OIDC role uknomi-gha-image-publish needs s3:PutObject on the
+#     agent-dist bucket (see infra/terraform-deploy/ci-oidc.tf).
+
+on:
+  push:
+    tags: ['agent-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 1.4.0'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  OIDC_ROLE_ARN: arn:aws:iam::523612763411:role/uknomi-gha-image-publish
+  AGENT_DIST_BUCKET: uknomi-cp-agent-dist-523612763411
+
+jobs:
+  release:
+    name: Build, sign, publish agent ${{ github.event.inputs.version || github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: ver
+        # Tag `agent-v1.4.0` → 1.4.0; manual dispatch uses the input verbatim.
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#agent-v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "agent version: $v"
+
+      - name: Cross-build agent + assemble unsigned manifest
+        id: build
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # The manifest's `version` is the catalog's source of truth. How the
+          # running agent self-reports its version post-update (build-time
+          # embedding vs. the updater rewriting the version file) is wired in
+          # #39 alongside the updater — out of scope here.
+          artifacts='{}'
+          for target in darwin/arm64 darwin/amd64 linux/arm64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="dist/uknomi-agent-${goos}-${goarch}"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -o "$out" ./cmd/agent
+            sha="$(sha256sum "$out" | awk '{print $1}')"
+            key="agent/${VERSION}/uknomi-agent-${goos}-${goarch}"
+            artifacts="$(jq -cn --argjson a "$artifacts" \
+              --arg k "$target" --arg url "$key" --arg sha "$sha" \
+              '$a + {($k): {url: $url, sha256: $sha}}')"
+          done
+          jq -cn --arg v "$VERSION" --argjson art "$artifacts" \
+            '{version: $v, artifacts: $art}' > dist/manifest.unsigned.json
+          echo "assembled manifest:"; cat dist/manifest.unsigned.json
+
+      - name: Sign manifest
+        env:
+          AGENT_MANIFEST_SIGNING_KEY: ${{ secrets.AGENT_MANIFEST_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$AGENT_MANIFEST_SIGNING_KEY" || { echo "AGENT_MANIFEST_SIGNING_KEY secret not set"; exit 1; }
+          go run ./cmd/agent-manifest-sign < dist/manifest.unsigned.json > dist/manifest.json
+          echo "signed manifest:"; cat dist/manifest.json
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload binaries + signed manifest to agent-dist
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          for target in darwin/arm64 darwin/amd64 linux/arm64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            aws s3 cp "dist/uknomi-agent-${goos}-${goarch}" \
+              "s3://${AGENT_DIST_BUCKET}/agent/${VERSION}/uknomi-agent-${goos}-${goarch}"
+          done
+          # Per-version manifest + a stable latest pointer.
+          aws s3 cp dist/manifest.json "s3://${AGENT_DIST_BUCKET}/agent/${VERSION}/manifest.json"
+          aws s3 cp dist/manifest.json "s3://${AGENT_DIST_BUCKET}/agent/latest/manifest.json"
+          echo "::notice::Published signed agent manifest ${VERSION} to ${AGENT_DIST_BUCKET}"
