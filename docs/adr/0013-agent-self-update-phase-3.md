@@ -1,6 +1,6 @@
 # ADR-013: Agent self-update in Phase 3 with auto-rollback; Phase 1 cert TTL = 1 year
 
-**Status:** Accepted (2026-05-18)
+**Status:** Accepted (2026-05-18) — amended by ADR-026 (cert TTL); the self-update *mechanism* is refined by [ADR-035](./0035-agent-fleet-update-mechanism.md) (which also corrects the "Ed25519 in KMS" detail below).
 
 **Context.** The original roadmap placed both agent self-update and cert rotation in Phase 4 ("ongoing, 4–8 weeks spread over a quarter"). Two problems:
 
