@@ -125,3 +125,65 @@ func TestApplyUnsupportedPlatform(t *testing.T) {
 		t.Errorf("code = %q, want %q", codeOf(t, err), protoupdate.CodeUnsupportedPlatform)
 	}
 }
+
+// TestApplyPrefersPresignedURL — issue #40: CP sends {manifest, urls} where
+// urls carries presigned GET URLs per platform (the manifest's own artifact
+// URLs are private S3 keys, covered by the signature, so CP can't rewrite
+// them). The handler fetches from its platform's presigned URL; integrity is
+// still anchored to the signed sha256.
+func TestApplyPrefersPresignedURL(t *testing.T) {
+	bin := []byte("presigned-agent-bytes")
+	rawManifest, pub := signedManifestFor(t, bin)
+
+	var fetched string
+	h, _ := newHandler(t, pub, func(_ context.Context, url string) ([]byte, error) {
+		fetched = url
+		return bin, nil
+	})
+
+	var m agentmanifest.Manifest
+	_ = json.Unmarshal(rawManifest, &m)
+	args, _ := json.Marshal(protoupdate.Args{
+		Manifest: m,
+		URLs:     map[string]string{"linux/amd64": "https://s3.presigned/agent?sig=abc"},
+	})
+
+	res, err := h.Handle(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := res.(protoupdate.Result); !got.Staged || got.Version != "1.4.0" {
+		t.Fatalf("result = %+v, want staged 1.4.0", got)
+	}
+	if fetched != "https://s3.presigned/agent?sig=abc" {
+		t.Errorf("fetched %q, want the presigned URL", fetched)
+	}
+}
+
+// TestApplyFallsBackToArtifactURL — a {manifest, urls} payload with no entry
+// for the running platform falls back to the artifact's own URL (dev/bench
+// pushes where the URL is directly fetchable).
+func TestApplyFallsBackToArtifactURL(t *testing.T) {
+	bin := []byte("fallback-bytes")
+	rawManifest, pub := signedManifestFor(t, bin)
+
+	var fetched string
+	h, _ := newHandler(t, pub, func(_ context.Context, url string) ([]byte, error) {
+		fetched = url
+		return bin, nil
+	})
+
+	var m agentmanifest.Manifest
+	_ = json.Unmarshal(rawManifest, &m)
+	args, _ := json.Marshal(protoupdate.Args{
+		Manifest: m,
+		URLs:     map[string]string{"darwin/arm64": "https://s3.presigned/other"},
+	})
+
+	if _, err := h.Handle(context.Background(), args); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if fetched != "https://dist/agent/1.4.0/linux-amd64" {
+		t.Errorf("fetched %q, want the artifact URL fallback", fetched)
+	}
+}

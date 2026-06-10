@@ -58,8 +58,23 @@ func New(dir string, fetch Fetcher, onStaged func()) *Handler {
 }
 
 func (h *Handler) Handle(ctx context.Context, args json.RawMessage) (any, error) {
+	// CP sends protoupdate.Args ({manifest, urls}); a bare manifest (no
+	// "manifest" key) is also accepted for bench pushes from the console.
+	var probe struct {
+		Manifest json.RawMessage `json:"manifest"`
+	}
+	if err := json.Unmarshal(args, &probe); err != nil {
+		return nil, envelope.NewCodedError(protoupdate.CodeBadPayload, "args is not valid JSON")
+	}
 	var m agentmanifest.Manifest
-	if err := json.Unmarshal(args, &m); err != nil {
+	var urls map[string]string
+	if probe.Manifest != nil {
+		var a protoupdate.Args
+		if err := json.Unmarshal(args, &a); err != nil {
+			return nil, envelope.NewCodedError(protoupdate.CodeBadPayload, "manifest is not valid JSON")
+		}
+		m, urls = a.Manifest, a.URLs
+	} else if err := json.Unmarshal(args, &m); err != nil {
 		return nil, envelope.NewCodedError(protoupdate.CodeBadPayload, "manifest is not valid JSON")
 	}
 
@@ -76,7 +91,11 @@ func (h *Handler) Handle(ctx context.Context, args json.RawMessage) (any, error)
 			fmt.Sprintf("manifest %s has no %s/%s artifact", m.Version, h.GOOS, h.GOARCH))
 	}
 
-	bin, err := h.Fetch(ctx, art.URL)
+	fetchURL := art.URL
+	if u, ok := urls[h.GOOS+"/"+h.GOARCH]; ok {
+		fetchURL = u
+	}
+	bin, err := h.Fetch(ctx, fetchURL)
 	if err != nil {
 		return nil, envelope.NewCodedError(protoupdate.CodeDownloadFailed, err.Error())
 	}
