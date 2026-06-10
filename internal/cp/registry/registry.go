@@ -874,6 +874,32 @@ func (r *Registry) GetServiceConfig(ctx context.Context, deviceID string) (Servi
 	return cfg, nil
 }
 
+// RecordReportedAgentVersion persists the heartbeat-reported agent version
+// (issue #40) — after enrollment seeds agent_version, this is what keeps the
+// reported side of desired-vs-reported fresh as updates land. It returns the
+// device's desired version (nil = untargeted) so the heartbeat ingester can
+// make the reconcile decision without a second round trip.
+func (r *Registry) RecordReportedAgentVersion(ctx context.Context, deviceID, version string) (*string, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return nil, ErrDeviceNotFound
+	}
+	var desired *string
+	err := r.pool.QueryRow(ctx, `
+		UPDATE devices
+		SET agent_version = $2,
+		    updated_at    = now()
+		WHERE id = $1
+		RETURNING desired_agent_version
+	`, deviceID, version).Scan(&desired)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrDeviceNotFound
+		}
+		return nil, fmt.Errorf("record reported agent version: %w", err)
+	}
+	return desired, nil
+}
+
 // SetDesiredAgentVersion stamps the fleet-update rollout target on a set of
 // devices (issue #40, ADR-035 §1). Non-UUID or unknown ids in the set are
 // skipped, not an error — the returned count of stamped rows is the caller's
