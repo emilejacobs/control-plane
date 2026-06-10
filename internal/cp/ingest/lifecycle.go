@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/presence"
@@ -30,6 +32,13 @@ type PresenceWriter interface {
 	SetPresence(ctx context.Context, deviceID string, online bool, at time.Time) error
 }
 
+// AgentVersionReader looks up a device's reported + desired agent version
+// for the reconnect reconcile check (issue #40). *registry.Registry
+// satisfies it.
+type AgentVersionReader interface {
+	AgentVersionState(ctx context.Context, deviceID string) (reported string, desired *string, err error)
+}
+
 // LifecycleIngester is the SQSConsumer handler for the IoT lifecycle queue:
 // it maps connected/disconnected events to a stored presence flip and to the
 // in-memory Presence model — the fast-path online↔offline edge that does not
@@ -38,6 +47,17 @@ type LifecycleIngester struct {
 	presence *presence.Presence
 	writer   PresenceWriter
 	now      func() time.Time
+
+	// Versions + Updates, when both non-nil, enable the issue-#40
+	// reconnect reconcile: a device that comes back online still on the
+	// wrong version gets agent.update re-pushed — this is how an offline
+	// device converges on a rollout it missed. Reconcile failures are
+	// logged, never returned: the presence flip already persisted, and
+	// the device's own heartbeats retry the reconcile path.
+	Versions AgentVersionReader
+	Updates  UpdatePusher
+	// Logger receives reconcile failures. nil discards.
+	Logger *slog.Logger
 }
 
 // NewLifecycleIngester builds the ingester. now defaults to time.Now.
@@ -78,10 +98,40 @@ func (i *LifecycleIngester) Handle(ctx context.Context, ev Lifecycle) error {
 
 	if online {
 		i.presence.OnConnect(ev.ClientID, at)
+		i.reconcile(ctx, ev)
 	} else {
 		i.presence.OnDisconnect(ev.ClientID, at)
 	}
 	return nil
+}
+
+// reconcile re-pushes agent.update to a freshly-connected device whose
+// reported version drifted from desired (issue #40, ADR-035 §1).
+func (i *LifecycleIngester) reconcile(ctx context.Context, ev Lifecycle) {
+	if i.Versions == nil || i.Updates == nil {
+		return
+	}
+	reported, desired, err := i.Versions.AgentVersionState(ctx, ev.ClientID)
+	if err != nil {
+		i.logger().Warn("reconcile version lookup failed",
+			"device_id", ev.ClientID, "err", err)
+		return
+	}
+	if desired == nil || *desired == reported {
+		return
+	}
+	if err := i.Updates.Push(ctx, ev.ClientID, *desired, ev.CorrelationID); err != nil {
+		i.logger().Warn("reconcile push on reconnect failed; heartbeats retry",
+			"device_id", ev.ClientID, "desired", *desired,
+			"reported", reported, "err", err)
+	}
+}
+
+func (i *LifecycleIngester) logger() *slog.Logger {
+	if i.Logger != nil {
+		return i.Logger
+	}
+	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
 // Compile-time checks that the lifecycle plumbing fits the consumer.

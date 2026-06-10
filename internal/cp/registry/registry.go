@@ -874,6 +874,28 @@ func (r *Registry) GetServiceConfig(ctx context.Context, deviceID string) (Servi
 	return cfg, nil
 }
 
+// AgentVersionState returns a device's reported + desired agent version for
+// the reconnect reconcile check (issue #40). Unlike GetByID it is not
+// site-scoped: cp-ingest workers run without an operator scope, same as the
+// other ingest-side reads.
+func (r *Registry) AgentVersionState(ctx context.Context, deviceID string) (string, *string, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return "", nil, ErrDeviceNotFound
+	}
+	var reported string
+	var desired *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT agent_version, desired_agent_version FROM devices WHERE id = $1
+	`, deviceID).Scan(&reported, &desired)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, ErrDeviceNotFound
+		}
+		return "", nil, fmt.Errorf("agent version state: %w", err)
+	}
+	return reported, desired, nil
+}
+
 // RecordReportedAgentVersion persists the heartbeat-reported agent version
 // (issue #40) — after enrollment seeds agent_version, this is what keeps the
 // reported side of desired-vs-reported fresh as updates land. It returns the
