@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/envelope"
@@ -51,7 +53,7 @@ type CmdPublisher interface {
 const DefaultURLTTL = 15 * time.Minute
 
 // Pusher publishes agent.update commands. Zero-value fields fall back to
-// DefaultURLTTL / crypto-random command ids / time.Now.
+// DefaultURLTTL / crypto-random command ids / time.Now / a discard logger.
 type Pusher struct {
 	Manifests ManifestSource
 	Presigner Presigner
@@ -59,6 +61,7 @@ type Pusher struct {
 	URLTTL    time.Duration
 	NewCmdID  func() string
 	Now       func() time.Time
+	Logger    *slog.Logger
 }
 
 // Push publishes one agent.update {manifest, urls} command on
@@ -67,9 +70,41 @@ type Pusher struct {
 // without publishing — a half-presigned urls map would strand some platforms
 // on an unfetchable update.
 func (p *Pusher) Push(ctx context.Context, deviceID, version, correlationID string) error {
+	args, err := p.prepareArgs(ctx, version)
+	if err != nil {
+		return err
+	}
+	return p.publish(ctx, deviceID, args, correlationID)
+}
+
+// PushMany fans the same agent.update out to a target set, fetching the
+// manifest and presigning once. A per-device publish failure does not abort
+// the rest — the reconcile path re-pushes that device on its next
+// heartbeat/reconnect — it just isn't counted in pushed. The returned error
+// is non-nil only for up-front failures (catalog miss, presign).
+func (p *Pusher) PushMany(ctx context.Context, deviceIDs []string, version, correlationID string) (int, error) {
+	args, err := p.prepareArgs(ctx, version)
+	if err != nil {
+		return 0, err
+	}
+	pushed := 0
+	for _, id := range deviceIDs {
+		if err := p.publish(ctx, id, args, correlationID); err != nil {
+			p.logger().Warn("agent.update push failed; reconcile will retry",
+				"device_id", id, "version", version, "err", err)
+			continue
+		}
+		pushed++
+	}
+	return pushed, nil
+}
+
+// prepareArgs fetches the signed manifest for version and presigns every
+// artifact, returning the marshalled protoupdate.Args.
+func (p *Pusher) prepareArgs(ctx context.Context, version string) (json.RawMessage, error) {
 	m, err := p.Manifests.Manifest(ctx, version)
 	if err != nil {
-		return fmt.Errorf("manifest %s: %w", version, err)
+		return nil, fmt.Errorf("manifest %s: %w", version, err)
 	}
 
 	ttl := p.URLTTL
@@ -80,16 +115,19 @@ func (p *Pusher) Push(ctx context.Context, deviceID, version, correlationID stri
 	for platform, art := range m.Artifacts {
 		u, err := p.Presigner.GetURL(ctx, art.URL, ttl)
 		if err != nil {
-			return fmt.Errorf("presign %s artifact: %w", platform, err)
+			return nil, fmt.Errorf("presign %s artifact: %w", platform, err)
 		}
 		urls[platform] = u
 	}
 
 	args, err := json.Marshal(protoupdate.Args{Manifest: m, URLs: urls})
 	if err != nil {
-		return fmt.Errorf("encode agent.update args: %w", err)
+		return nil, fmt.Errorf("encode agent.update args: %w", err)
 	}
+	return args, nil
+}
 
+func (p *Pusher) publish(ctx context.Context, deviceID string, args json.RawMessage, correlationID string) error {
 	newID := p.NewCmdID
 	if newID == nil {
 		newID = randomID
@@ -113,6 +151,13 @@ func (p *Pusher) Push(ctx context.Context, deviceID, version, correlationID stri
 		return fmt.Errorf("publish agent.update to %s: %w", deviceID, err)
 	}
 	return nil
+}
+
+func (p *Pusher) logger() *slog.Logger {
+	if p.Logger != nil {
+		return p.Logger
+	}
+	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
 func randomID() string {

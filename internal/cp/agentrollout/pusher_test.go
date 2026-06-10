@@ -161,3 +161,57 @@ func TestPushPresignFailurePublishesNothing(t *testing.T) {
 		t.Errorf("published despite presign failure: %d calls", len(pub.calls))
 	}
 }
+
+// errOnTopic fails Publish for one specific topic, succeeding otherwise.
+type errOnTopic struct {
+	fakePublisher
+	failTopic string
+}
+
+func (f *errOnTopic) Publish(ctx context.Context, topic string, payload []byte) error {
+	if topic == f.failTopic {
+		return errors.New("device topic unreachable")
+	}
+	return f.fakePublisher.Publish(ctx, topic, payload)
+}
+
+// PushMany fans the same command out to a target set, fetching + presigning
+// once. A per-device publish failure doesn't abort the rest — the reconcile
+// path re-pushes that device on its next heartbeat/reconnect — it just isn't
+// counted as pushed.
+func TestPushManyBestEffortPerDevice(t *testing.T) {
+	pub := &errOnTopic{failTopic: "devices/dev-2/cmd"}
+	pusher := newPusher(
+		&fakeManifests{manifests: map[string]agentmanifest.Manifest{"v1.4.0": testManifest()}},
+		&fakePresigner{},
+		nil,
+	)
+	pusher.Publisher = pub
+
+	pushed, err := pusher.PushMany(context.Background(), []string{"dev-1", "dev-2", "dev-3"}, "v1.4.0", "corr-7")
+	if err != nil {
+		t.Fatalf("PushMany: %v", err)
+	}
+	if pushed != 2 {
+		t.Errorf("pushed: got %d want 2", pushed)
+	}
+	if len(pub.calls) != 2 {
+		t.Fatalf("publish calls: got %d want 2", len(pub.calls))
+	}
+	if pub.calls[0].topic != "devices/dev-1/cmd" || pub.calls[1].topic != "devices/dev-3/cmd" {
+		t.Errorf("topics = %q, %q", pub.calls[0].topic, pub.calls[1].topic)
+	}
+}
+
+// A catalog miss fails PushMany up front — nothing is published.
+func TestPushManyUnknownVersion(t *testing.T) {
+	pub := &fakePublisher{}
+	pusher := newPusher(&fakeManifests{manifests: map[string]agentmanifest.Manifest{}}, &fakePresigner{}, pub)
+
+	if _, err := pusher.PushMany(context.Background(), []string{"dev-1"}, "v9.9.9", "corr-1"); !errors.Is(err, ErrVersionNotFound) {
+		t.Fatalf("err = %v, want ErrVersionNotFound", err)
+	}
+	if len(pub.calls) != 0 {
+		t.Errorf("published despite missing manifest: %d calls", len(pub.calls))
+	}
+}
