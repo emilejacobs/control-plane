@@ -22,6 +22,7 @@ import (
 	taxonomyhttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/taxonomy"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
+	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/captures"
@@ -62,6 +63,13 @@ type Deps struct {
 	// the cmd channel. nil disables the route (the rest of the API
 	// continues to serve; tests that don't need the surface omit it).
 	CmdPublisher devices.CmdPublisher
+
+	// AgentRolloutCatalog reads signed release manifests from agent-dist
+	// and AgentRolloutPusher fans agent.update out to a device set
+	// (issue #40). Both nil disables POST /agent-rollouts — deploys that
+	// land before AGENT_DIST_BUCKET is configured keep serving.
+	AgentRolloutCatalog agentrollout.ManifestSource
+	AgentRolloutPusher  devices.UpdatePusher
 
 	// Audit is the sink every state-mutating handler writes audit entries
 	// through. nil falls back to a discard Writer so tests that do not
@@ -306,6 +314,17 @@ func NewBuilderWith(d Deps) *Builder {
 		// decommission runbook). Audited; child rows cascade.
 		b.Delete("/devices/{id}",
 			requireAuth(onboarded(requireStaff(devices.NewDelete(d.Registry, auditW)))))
+		// POST /agent-rollouts — staff-only agent fleet-update (#40):
+		// stamp desired_agent_version on a target set + best-effort
+		// initial agent.update push to the online targets. Scope is
+		// required because target resolution reads the device list
+		// (fail-closed without a SiteFilter in context). Skipped when
+		// the agent-dist catalog/pusher aren't configured.
+		if d.AgentRolloutCatalog != nil && d.AgentRolloutPusher != nil {
+			b.Post("/agent-rollouts",
+				requireAuth(onboarded(requireScope(requireStaff(
+					devices.NewAgentRolloutPost(d.Registry, d.AgentRolloutCatalog, d.AgentRolloutPusher, auditW))))))
+		}
 	}
 	return b
 }
