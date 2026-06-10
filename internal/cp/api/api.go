@@ -228,6 +228,11 @@ func NewBuilderWith(d Deps) *Builder {
 		// dashboard (#21). Site-scoped (not staff-gated): a scoped operator
 		// sees only their sites' alerts; staff see the whole fleet.
 		b.Get("/fleet/alerts", requireAuth(onboarded(requireScope(fleet.NewAlerts(d.Registry)))))
+		// GET /fleet/agent-rollout — issue #40 desired-vs-reported rollout
+		// view. Site-scoped like /fleet/alerts: scoped operators see their
+		// slice, staff see the fleet; the mutating counterpart
+		// (POST /agent-rollouts, below) stays staff-only.
+		b.Get("/fleet/agent-rollout", requireAuth(onboarded(requireScope(fleet.NewAgentRollout(d.Registry)))))
 		// Captures read surface (#8): per-device list + signed download URL.
 		// Site-scoped device reads. The URL route needs the presigner.
 		b.Get("/devices/{id}/captures", requireAuth(onboarded(requireScope(captureshttp.NewList(d.Registry)))))
