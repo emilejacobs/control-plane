@@ -21,6 +21,8 @@
 //	TAXONOMY_ECS_TASK_DEF   ECS task definition ARN/family for cp-taxonomy-sync.
 //	TAXONOMY_ECS_SUBNETS    comma-separated private subnet ids.
 //	TAXONOMY_ECS_SGS        comma-separated security group ids.
+//	AGENT_DIST_BUCKET       S3 bucket holding the signed agent release catalog
+//	                        (issue #40). Unset disables POST /agent-rollouts.
 package main
 
 import (
@@ -45,7 +47,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/api"
+	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
@@ -184,6 +188,25 @@ func run(logger *slog.Logger) error {
 		logger.Info("captures presigner disabled — CAPTURES_BUCKET unset")
 	}
 
+	// Agent fleet-update (#40). Gated on AGENT_DIST_BUCKET — until
+	// Terraform grants cp-api read access to the release catalog,
+	// POST /agent-rollouts stays disabled.
+	var rolloutCatalog agentrollout.ManifestSource
+	var rolloutPusher devices.UpdatePusher
+	if bucket := os.Getenv("AGENT_DIST_BUCKET"); bucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		rolloutCatalog = agentrollout.NewS3ManifestSource(s3Client, bucket)
+		rolloutPusher = &agentrollout.Pusher{
+			Manifests: rolloutCatalog,
+			Presigner: agentrollout.NewS3Presigner(s3.NewPresignClient(s3Client), bucket),
+			Publisher: cmdPublisher,
+			Logger:    logger,
+		}
+		logger.Info("agent rollout surface wired", "bucket", bucket)
+	} else {
+		logger.Info("agent rollout surface disabled — AGENT_DIST_BUCKET unset")
+	}
+
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
@@ -199,6 +222,8 @@ func run(logger *slog.Logger) error {
 			Logger:             logger,
 			CORSAllowedOrigins: csvEnv("CORS_ALLOWED_ORIGINS"),
 			CmdPublisher:       cmdPublisher,
+			AgentRolloutCatalog: rolloutCatalog,
+			AgentRolloutPusher:  rolloutPusher,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
