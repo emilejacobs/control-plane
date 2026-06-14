@@ -15,6 +15,14 @@ import (
 	"github.com/emilejacobs/control-plane/internal/transport"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=<v>"
+// (agent-release.yml). It is the agent's source of truth for its running
+// version, which MUST survive a self-update: the config file's version is
+// static, so a self-updated binary that read it would report the old version
+// forever and CP would re-push the update in a loop (issue #39, ADR-035 §1).
+// Empty in dev/local builds, where the config file's version is the fallback.
+var version string
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
@@ -35,6 +43,14 @@ func main() {
 	if err != nil {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
+	}
+
+	// The build-stamped version wins over the (static) config version so a
+	// self-updated binary reports its true version; config is the fallback
+	// for dev/local builds with no ldflags stamp.
+	agentVersion := version
+	if agentVersion == "" {
+		agentVersion = cfg.Version
 	}
 
 	caPEM, err := os.ReadFile(cfg.CACertPath)
@@ -97,7 +113,7 @@ func main() {
 	a, err := agent.New(agent.Config{
 		CertPath:              cfg.CertPath,
 		DeviceID:              cfg.DeviceID,
-		Version:               cfg.Version,
+		Version:               agentVersion,
 		TelemetryInterval:     telemetryInterval,
 		ServiceAllowList:      cfg.ServiceAllowList,
 		ServiceStatusInterval: serviceStatusInterval,
@@ -123,7 +139,7 @@ func main() {
 		logger.Error("start", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("agent started", "device_id", cfg.DeviceID, "version", cfg.Version, "broker_url", cfg.BrokerURL)
+	logger.Info("agent started", "device_id", cfg.DeviceID, "version", agentVersion, "broker_url", cfg.BrokerURL)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
