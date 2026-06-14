@@ -42,18 +42,24 @@ type Handler struct {
 	GOOS     string
 	GOARCH   string
 	OnStaged func()
+	// CurrentVersion is the agent's running version, used for the
+	// no-downgrade rule (issue #41). Empty disables the check — the guard
+	// never blocks when the agent's own version is unknown.
+	CurrentVersion string
 }
 
 // New builds a Handler with production defaults: VerifyRelease + the build's
-// platform. The caller supplies the fetcher, update dir, and restart trigger.
-func New(dir string, fetch Fetcher, onStaged func()) *Handler {
+// platform. The caller supplies the fetcher, update dir, restart trigger, and
+// the agent's current version for the no-downgrade rule.
+func New(dir string, fetch Fetcher, onStaged func(), currentVersion string) *Handler {
 	return &Handler{
-		Verify:   agentmanifest.VerifyRelease,
-		Fetch:    fetch,
-		Dir:      dir,
-		GOOS:     runtime.GOOS,
-		GOARCH:   runtime.GOARCH,
-		OnStaged: onStaged,
+		Verify:         agentmanifest.VerifyRelease,
+		Fetch:          fetch,
+		Dir:            dir,
+		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
+		OnStaged:       onStaged,
+		CurrentVersion: currentVersion,
 	}
 }
 
@@ -83,6 +89,15 @@ func (h *Handler) Handle(ctx context.Context, args json.RawMessage) (any, error)
 			return nil, envelope.NewCodedError(protoupdate.CodeBadSignature, "manifest signature did not verify")
 		}
 		return nil, envelope.NewCodedError(protoupdate.CodeBadSignature, err.Error())
+	}
+
+	// No-downgrade rule (issue #41, ADR-035 §2): refuse a target older than
+	// the running version even though the manifest signature verified —
+	// closes the residual forged-command downgrade risk. Checked before the
+	// fetch so a rejected downgrade costs nothing.
+	if h.CurrentVersion != "" && protoupdate.IsDowngrade(h.CurrentVersion, m.Version) {
+		return nil, envelope.NewCodedError(protoupdate.CodeDowngradeRejected,
+			fmt.Sprintf("refusing downgrade from %s to %s", h.CurrentVersion, m.Version))
 	}
 
 	art, ok := m.ArtifactFor(h.GOOS, h.GOARCH)

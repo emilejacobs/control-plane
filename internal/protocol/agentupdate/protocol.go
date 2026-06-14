@@ -34,6 +34,11 @@ const (
 	CodeDownloadFailed      = "agent_update.download_failed"
 	CodeSHA256Mismatch      = "agent_update.sha256_mismatch"
 	CodeStageFailed         = "agent_update.stage_failed"
+	// CodeDowngradeRejected means the manifest's version is older than the
+	// agent's current version (issue #41, ADR-035 §2). The no-downgrade
+	// rule closes the residual forged-command risk: even a validly-signed
+	// older release is refused.
+	CodeDowngradeRejected = "agent_update.downgrade_rejected"
 )
 
 // Result is the agent's ACK on the cmd-result topic: the version staged and
