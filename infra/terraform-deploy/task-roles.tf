@@ -93,6 +93,21 @@ data "aws_iam_policy_document" "cp_api" {
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.task_execution.arn, aws_iam_role.taxonomy_sync.arn]
   }
+  # Agent fleet-update (#40/#41): the rollout Pusher reads the signed release
+  # manifest + presigns the binary from agent-dist, and reads the
+  # command-signing key to sign the agent.update envelope. iot:Publish (above)
+  # already covers pushing the command; kms:Decrypt (above, ViaService
+  # secretsmanager) already covers decrypting the command-signing secret.
+  statement {
+    sid       = "AgentDistRead"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.main["agent-dist"].arn}/agent/*"]
+  }
+  statement {
+    sid       = "CommandSigningKeyRead"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:uknomi/cp/command-signing-key*"]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_api" {
@@ -123,6 +138,35 @@ data "aws_iam_policy_document" "cp_ingest" {
       "sqs:SendMessage", # for DLQ writes from the consumer
     ]
     resources = ["arn:aws:sqs:${var.region}:${data.aws_caller_identity.current.account_id}:uknomi-cp-*"]
+  }
+  # Agent fleet-update reconcile (#40/#41): on reconnect/heartbeat drift,
+  # cp-ingest re-pushes a signed agent.update. It reads the release manifest +
+  # presigns from agent-dist, reads + decrypts the command-signing key, and
+  # publishes the signed command on the device cmd topic.
+  statement {
+    sid       = "AgentDistRead"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.main["agent-dist"].arn}/agent/*"]
+  }
+  statement {
+    sid       = "CommandSigningKeyRead"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:uknomi/cp/command-signing-key*"]
+  }
+  statement {
+    sid       = "DecryptCommandSigningKey"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.main.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.region}.amazonaws.com"]
+    }
+  }
+  statement {
+    sid       = "IoTPublishCmd"
+    actions   = ["iot:Publish"]
+    resources = ["arn:aws:iot:${var.region}:${data.aws_caller_identity.current.account_id}:topic/devices/*/cmd"]
   }
 }
 

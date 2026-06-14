@@ -61,6 +61,11 @@ resource "aws_ecs_task_definition" "this" {
         { name = "DB_NAME", value = var.db_name },
         { name = "DB_USER", value = var.db_user },
         { name = "DB_SSLMODE", value = var.db_sslmode },
+        # Agent fleet-update reconcile (#40/#41). Empty disables the re-push
+        # (reported versions still persist); empty signing id publishes
+        # unsigned (a verifying agent then rejects, so set them together).
+        { name = "AGENT_DIST_BUCKET", value = var.agent_dist_bucket },
+        { name = "CP_COMMAND_SIGNING_SECRET_ID", value = var.command_signing_secret_id },
       ]
 
       # The DB password is injected from the RDS-managed master secret's
