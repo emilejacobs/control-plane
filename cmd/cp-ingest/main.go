@@ -21,6 +21,12 @@
 //	CMD_RESULT_QUEUE_URL       SQS URL of the cmd-result queue (Phase 2 slice 2)
 //	CMD_RESULT_DLQ_URL         SQS URL of the cmd-result DLQ (Phase 2 slice 2)
 //	SERVICE_STATUS_DLQ_URL     dead-letter queue for service-status (Phase 2)
+//	AGENT_DIST_BUCKET          S3 bucket holding the signed agent release
+//	                           catalog (issue #40). When set, the heartbeat +
+//	                           lifecycle consumers re-push agent.update to
+//	                           devices whose reported version drifted from
+//	                           desired_agent_version. Unset disables the
+//	                           reconcile (reported versions still persist).
 //
 // SERVICE_STATUS_* are optional so a deploy that lands the code before
 // Terraform provisions the queue does not crash. When both are set, the
@@ -40,12 +46,16 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
+	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
 	"github.com/emilejacobs/control-plane/internal/cp/presence"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
@@ -108,14 +118,46 @@ func run(logger *slog.Logger) error {
 
 	auditW := audit.NewPostgresWriter(pool)
 
+	heartbeatIngester := ingest.NewPresenceIngester(pres, reg, nil)
+	lifecycleIngester := ingest.NewLifecycleIngester(pres, reg, nil)
+
+	// Agent fleet-update reconcile (#40): when the agent-dist bucket is
+	// configured, a heartbeat or reconnect from a device whose reported
+	// version drifted from desired_agent_version re-pushes agent.update.
+	// Unset = reconcile disabled (the reported version still persists);
+	// keeps deploys that land before Terraform grants the access serving.
+	if bucket := os.Getenv("AGENT_DIST_BUCKET"); bucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		var iotDataOpts []func(*iotdataplane.Options)
+		if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
+			iotDataOpts = append(iotDataOpts, func(o *iotdataplane.Options) {
+				o.BaseEndpoint = aws.String(endpoint)
+			})
+		}
+		pusher := &agentrollout.Pusher{
+			Manifests: agentrollout.NewS3ManifestSource(s3Client, bucket),
+			Presigner: agentrollout.NewS3Presigner(s3.NewPresignClient(s3Client), bucket),
+			Publisher: iotpublisher.NewAWS(iotdataplane.NewFromConfig(awsCfg, iotDataOpts...)),
+			Logger:    logger,
+		}
+		heartbeatIngester.Updates = pusher
+		heartbeatIngester.Logger = logger
+		lifecycleIngester.Versions = reg
+		lifecycleIngester.Updates = pusher
+		lifecycleIngester.Logger = logger
+		logger.Info("agent-update reconcile wired", "bucket", bucket)
+	} else {
+		logger.Info("agent-update reconcile disabled — AGENT_DIST_BUCKET unset")
+	}
+
 	heartbeatConsumer := sqsconsumer.NewConsumer[ingest.Heartbeat](
 		sqsClient,
-		ingest.NewPresenceIngester(pres, reg, nil).Handle,
+		heartbeatIngester.Handle,
 		sqsconsumer.Config{QueueURL: heartbeatQueueURL, DLQURL: heartbeatDLQURL, Logger: logger, Audit: auditW},
 	)
 	lifecycleConsumer := sqsconsumer.NewConsumer[ingest.Lifecycle](
 		sqsClient,
-		ingest.NewLifecycleIngester(pres, reg, nil).Handle,
+		lifecycleIngester.Handle,
 		sqsconsumer.Config{QueueURL: lifecycleQueueURL, DLQURL: lifecycleDLQURL, Logger: logger, Audit: auditW},
 	)
 	sweeper := ingest.NewPresenceSweeper(pres, reg, ingest.SweeperConfig{Logger: logger})
