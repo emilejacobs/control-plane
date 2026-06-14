@@ -104,6 +104,11 @@ func main() {
 		ProbeInterval:         probeInterval,
 		ConfigPath:            *configPath,
 		CamerasPath:           cfg.CamerasPath,
+		// AGENT_DIR is exported by the resident wrapper
+		// (scripts/uknomi-agent-supervisor.sh). When present, the agent
+		// enables the signature-gated agent.update handler and writes the
+		// health marker the wrapper gates a candidate on (issue #39).
+		UpdateDir: os.Getenv("AGENT_DIR"),
 	}, tr,
 		agent.WithLogger(logger),
 		agent.WithServiceBackend(service.NewSystemBackend(logger)),
@@ -122,8 +127,15 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	sig := <-sigCh
-	logger.Info("shutting down", "signal", sig.String())
+	select {
+	case sig := <-sigCh:
+		logger.Info("shutting down", "signal", sig.String())
+	case <-a.RestartRequested():
+		// A staged update asked us to exit so the resident wrapper restarts
+		// and health-gates the candidate (issue #39, ADR-035 §3). Exit 0 —
+		// this is an orderly hand-off, not a crash.
+		logger.Info("shutting down to let the wrapper gate a staged update")
+	}
 
 	if err := a.Stop(); err != nil {
 		logger.Error("stop", "error", err)
