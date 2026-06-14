@@ -2,6 +2,7 @@ package agentrollout
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/agentmanifest"
 	protoupdate "github.com/emilejacobs/control-plane/internal/protocol/agentupdate"
+	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
 )
 
 type fakeManifests struct {
@@ -213,5 +215,51 @@ func TestPushManyUnknownVersion(t *testing.T) {
 	}
 	if len(pub.calls) != 0 {
 		t.Errorf("published despite missing manifest: %d calls", len(pub.calls))
+	}
+}
+
+// --- issue #41: command-envelope signing ---
+
+// When a Signer is set, the published agent.update command carries a valid
+// envelope signature; without one it stays unsigned (forward-compat).
+func TestPushSignsCommandWhenSignerSet(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	publisher := &fakePublisher{}
+	pusher := newPusher(
+		&fakeManifests{manifests: map[string]agentmanifest.Manifest{"v1.4.0": testManifest()}},
+		&fakePresigner{},
+		publisher,
+	)
+	pusher.Signer = cmdsign.NewSigner(priv)
+
+	if err := pusher.Push(context.Background(), "dev-1", "v1.4.0", "corr-9"); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	var cmd envelope.Command
+	if err := json.Unmarshal(publisher.calls[0].payload, &cmd); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if cmd.Signature == nil {
+		t.Fatal("published command is unsigned despite a Signer")
+	}
+	if err := cmdsign.Verify(pub, cmd); err != nil {
+		t.Errorf("published signature does not verify: %v", err)
+	}
+}
+
+func TestPushUnsignedWhenNoSigner(t *testing.T) {
+	publisher := &fakePublisher{}
+	pusher := newPusher(
+		&fakeManifests{manifests: map[string]agentmanifest.Manifest{"v1.4.0": testManifest()}},
+		&fakePresigner{},
+		publisher,
+	)
+	if err := pusher.Push(context.Background(), "dev-1", "v1.4.0", "corr-9"); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	var cmd envelope.Command
+	_ = json.Unmarshal(publisher.calls[0].payload, &cmd)
+	if cmd.Signature != nil {
+		t.Errorf("command signed without a Signer: %q", *cmd.Signature)
 	}
 }

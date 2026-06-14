@@ -46,6 +46,13 @@ type CmdPublisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
 }
 
+// CommandSigner signs the agent.update envelope before it is published
+// (issue #41). *cmdsign.Signer satisfies it. nil leaves the command unsigned
+// — the ADR-028 forward-compat path.
+type CommandSigner interface {
+	Sign(cmd envelope.Command) (envelope.Command, error)
+}
+
 // DefaultURLTTL bounds the presigned artifact URLs. A pushed device fetches
 // immediately; an offline device gets a fresh push (fresh URLs) from the
 // reconcile path when it reconnects, so the TTL only needs to cover one
@@ -62,6 +69,9 @@ type Pusher struct {
 	NewCmdID  func() string
 	Now       func() time.Time
 	Logger    *slog.Logger
+	// Signer, when set, signs the agent.update command envelope so a
+	// verifying agent accepts it (issue #41). nil publishes unsigned.
+	Signer CommandSigner
 }
 
 // Push publishes one agent.update {manifest, urls} command on
@@ -142,6 +152,13 @@ func (p *Pusher) publish(ctx context.Context, deviceID string, args json.RawMess
 		CommandID:     newID(),
 		Args:          args,
 		IssuedAt:      now().UTC(),
+	}
+	if p.Signer != nil {
+		signed, err := p.Signer.Sign(cmd)
+		if err != nil {
+			return fmt.Errorf("sign agent.update command: %w", err)
+		}
+		cmd = signed
 	}
 	payload, err := json.Marshal(cmd)
 	if err != nil {

@@ -23,6 +23,9 @@
 //	TAXONOMY_ECS_SGS        comma-separated security group ids.
 //	AGENT_DIST_BUCKET       S3 bucket holding the signed agent release catalog
 //	                        (issue #40). Unset disables POST /agent-rollouts.
+//	CP_COMMAND_SIGNING_SECRET_ID  Secrets Manager id of the base64 Ed25519
+//	                        command-signing private key (issue #41). Unset =
+//	                        agent.update published unsigned (forward-compat).
 package main
 
 import (
@@ -62,6 +65,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
 	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
+	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
 )
 
 func main() {
@@ -196,11 +200,20 @@ func run(logger *slog.Logger) error {
 	if bucket := os.Getenv("AGENT_DIST_BUCKET"); bucket != "" {
 		s3Client := s3.NewFromConfig(awsCfg)
 		rolloutCatalog = agentrollout.NewS3ManifestSource(s3Client, bucket)
+		// Command-envelope signing (#41). Gated on CP_COMMAND_SIGNING_SECRET_ID
+		// so a deploy before the secret exists still serves the rollout API
+		// (unsigned, ADR-028 forward-compat); a verifying agent rejects an
+		// unsigned agent.update, so production sets both together.
+		cmdSigner, err := loadCommandSigner(ctx, smClient, logger)
+		if err != nil {
+			return err
+		}
 		rolloutPusher = &agentrollout.Pusher{
 			Manifests: rolloutCatalog,
 			Presigner: agentrollout.NewS3Presigner(s3.NewPresignClient(s3Client), bucket),
 			Publisher: cmdPublisher,
 			Logger:    logger,
+			Signer:    cmdSigner,
 		}
 		logger.Info("agent rollout surface wired", "bucket", bucket)
 	} else {
@@ -260,6 +273,26 @@ func mustEnv(name string) string {
 		os.Exit(2)
 	}
 	return v
+}
+
+// loadCommandSigner builds the agent.update command signer from the Ed25519
+// private key in Secrets Manager (issue #41). Returns a nil signer (unsigned,
+// ADR-028 forward-compat) when CP_COMMAND_SIGNING_SECRET_ID is unset; a
+// configured-but-unloadable key fails startup rather than silently signing
+// nothing. Returns the interface type so an unset key is a true nil (not a
+// typed-nil that would trip the Pusher's signer check).
+func loadCommandSigner(ctx context.Context, smClient *secretsmanager.Client, logger *slog.Logger) (agentrollout.CommandSigner, error) {
+	secretID := os.Getenv("CP_COMMAND_SIGNING_SECRET_ID")
+	if secretID == "" {
+		logger.Info("command signing disabled — CP_COMMAND_SIGNING_SECRET_ID unset")
+		return nil, nil
+	}
+	signer, err := cmdsign.LoadSigner(ctx, bootstrap.NewSecretsManagerLoader(smClient, secretID))
+	if err != nil {
+		return nil, fmt.Errorf("command signing key: %w", err)
+	}
+	logger.Info("command signing wired", "secret_id", secretID)
+	return signer, nil
 }
 
 func envOr(name, fallback string) string {

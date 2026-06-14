@@ -187,3 +187,53 @@ func TestApplyFallsBackToArtifactURL(t *testing.T) {
 		t.Errorf("fetched %q, want the artifact URL fallback", fetched)
 	}
 }
+
+// TestApplyRejectsDowngrade — issue #41: even a validly-signed manifest whose
+// version is older than the agent's current version is refused, and nothing is
+// staged. Closes the forged-command downgrade risk (ADR-035 §2).
+func TestApplyRejectsDowngrade(t *testing.T) {
+	bin := []byte("older-binary")
+	raw, pub := signedManifestFor(t, bin) // manifest version is 1.4.0
+	h, dir := newHandler(t, pub, func(context.Context, string) ([]byte, error) { return bin, nil })
+	h.CurrentVersion = "1.5.0"
+
+	_, err := h.Handle(context.Background(), raw)
+	if codeOf(t, err) != protoupdate.CodeDowngradeRejected {
+		t.Errorf("code = %q, want %q", codeOf(t, err), protoupdate.CodeDowngradeRejected)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "candidate")); !os.IsNotExist(err) {
+		t.Error("candidate staged despite downgrade")
+	}
+}
+
+// TestApplyAllowsSameAndNewerVersion — an equal or newer target stages
+// normally; the no-downgrade rule only blocks strictly-older targets.
+func TestApplyAllowsSameAndNewerVersion(t *testing.T) {
+	for _, current := range []string{"1.4.0", "1.3.0", "0.1.0"} {
+		bin := []byte("candidate-" + current)
+		raw, pub := signedManifestFor(t, bin) // version 1.4.0
+		h, _ := newHandler(t, pub, func(context.Context, string) ([]byte, error) { return bin, nil })
+		h.CurrentVersion = current
+
+		res, err := h.Handle(context.Background(), raw)
+		if err != nil {
+			t.Fatalf("current=%s: Handle: %v", current, err)
+		}
+		if got := res.(protoupdate.Result); !got.Staged {
+			t.Errorf("current=%s: not staged", current)
+		}
+	}
+}
+
+// An empty CurrentVersion (handler built without it) skips the rule — the
+// no-downgrade guard never blocks when the agent's version is unknown.
+func TestApplyNoDowngradeCheckWhenCurrentUnset(t *testing.T) {
+	bin := []byte("x")
+	raw, pub := signedManifestFor(t, bin)
+	h, _ := newHandler(t, pub, func(context.Context, string) ([]byte, error) { return bin, nil })
+	// h.CurrentVersion left empty
+
+	if _, err := h.Handle(context.Background(), raw); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
