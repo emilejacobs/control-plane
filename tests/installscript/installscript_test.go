@@ -117,6 +117,12 @@ func sandboxRoot(t *testing.T, cp string) (root string, env []string) {
 	if err := os.WriteFile(agentBin, []byte("#!/bin/sh\necho fake agent\n"), 0o755); err != nil {
 		t.Fatalf("write agent bin: %v", err)
 	}
+	// Fake resident-wrapper script the install lays down as the systemd Program.
+	supervisorSrc := filepath.Join(root, "uknomi-agent-supervisor.sh")
+	if err := os.WriteFile(supervisorSrc,
+		[]byte("#!/bin/sh\nexec \"$AGENT_DIR/current\" $AGENT_ARGS\n"), 0o755); err != nil {
+		t.Fatalf("write supervisor: %v", err)
+	}
 	// Bootstrap key file.
 	keyFile := filepath.Join(root, "bootstrap.key")
 	if err := os.WriteFile(keyFile, []byte("test-bootstrap-key-do-not-log\n"), 0o600); err != nil {
@@ -138,6 +144,7 @@ func sandboxRoot(t *testing.T, cp string) (root string, env []string) {
 		"CP_BROKER_URL=tls://iot.test:8883",
 		"CP_BOOTSTRAP_KEY_FILE="+keyFile,
 		"CP_AGENT_BIN_SRC="+agentBin,
+		"CP_SUPERVISOR_SRC="+supervisorSrc,
 		"CP_AGENT_VERSION=test-0.0.1",
 		"CP_ROOT="+root,
 		"CP_HARDWARE_KIND=pi",
@@ -259,11 +266,19 @@ func TestInstallScriptInstallsSystemdUnit(t *testing.T) {
 		t.Fatalf("script exited %v\nout:\n%s", err, out)
 	}
 
-	binPath := filepath.Join(root, "usr/local/bin/uknomi-agent")
-	if st, err := os.Stat(binPath); err != nil {
-		t.Errorf("agent binary not installed at %s: %v", binPath, err)
+	// The agent binary lands at AGENT_DIR/current (the wrapper runs it); the
+	// resident wrapper is the systemd Program at /usr/local/bin.
+	currentPath := filepath.Join(root, "var/lib/uknomi/agent-update/current")
+	if st, err := os.Stat(currentPath); err != nil {
+		t.Errorf("agent binary not installed at %s: %v", currentPath, err)
 	} else if st.Mode().Perm()&0o111 == 0 {
-		t.Errorf("agent binary at %s is not executable; mode=%o", binPath, st.Mode().Perm())
+		t.Errorf("agent binary at %s is not executable; mode=%o", currentPath, st.Mode().Perm())
+	}
+	supPath := filepath.Join(root, "usr/local/bin/uknomi-agent-supervisor")
+	if st, err := os.Stat(supPath); err != nil {
+		t.Errorf("supervisor not installed at %s: %v", supPath, err)
+	} else if st.Mode().Perm()&0o111 == 0 {
+		t.Errorf("supervisor at %s is not executable; mode=%o", supPath, st.Mode().Perm())
 	}
 
 	unitPath := filepath.Join(root, "etc/systemd/system/uknomi-agent.service")
@@ -275,7 +290,9 @@ func TestInstallScriptInstallsSystemdUnit(t *testing.T) {
 		"[Unit]",
 		"[Service]",
 		"[Install]",
-		"ExecStart=/usr/local/bin/uknomi-agent --config /etc/uknomi/agent-config.json",
+		"ExecStart=/usr/local/bin/uknomi-agent-supervisor",
+		"Environment=AGENT_DIR=/var/lib/uknomi/agent-update",
+		`Environment="AGENT_ARGS=--config /etc/uknomi/agent-config.json"`,
 		"Restart=always",
 		"WantedBy=multi-user.target",
 	}

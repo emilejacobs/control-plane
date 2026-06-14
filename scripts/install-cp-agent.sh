@@ -8,7 +8,12 @@
 #   CP_BOOTSTRAP_KEY_FILE    Path to a 0600 file with the bootstrap key
 #                            (the production script is rebuilt with the key
 #                            baked under /etc/uknomi/bootstrap.key per ADR-017)
-#   CP_AGENT_BIN_SRC         Path to the uknomi-agent binary to install
+#   CP_AGENT_BIN_SRC         Path to the uknomi-agent binary to install. Use a
+#                            release build (version stamped via -ldflags, i.e.
+#                            an agent-dist artifact) so it self-reports its
+#                            version correctly through self-updates (issue #39).
+#   CP_SUPERVISOR_SRC        Path to uknomi-agent-supervisor.sh — the resident
+#                            update wrapper (scripts/uknomi-agent-supervisor.sh).
 #
 # Optional env (mostly test hooks):
 #   CP_AGENT_VERSION   Version string sent in the enrollment body (default "unknown")
@@ -20,6 +25,7 @@ set -euo pipefail
 : "${CP_BROKER_URL:?CP_BROKER_URL is required}"
 : "${CP_BOOTSTRAP_KEY_FILE:?CP_BOOTSTRAP_KEY_FILE is required}"
 : "${CP_AGENT_BIN_SRC:?CP_AGENT_BIN_SRC is required}"
+: "${CP_SUPERVISOR_SRC:?CP_SUPERVISOR_SRC is required}"
 
 CP_BASE_URL="${CP_BASE_URL%/}"
 ROOT="${CP_ROOT:-}"
@@ -125,25 +131,38 @@ cat > "${runtime_dir}/agent-config.json" <<JSON
 JSON
 chmod 644 "${runtime_dir}/agent-config.json"
 
-# Install the agent binary at /usr/local/bin (755).
+# Lay out the resident-wrapper update root (ADR-035 §3, issue #39). The agent
+# binary lives at AGENT_DIR/current; the supervisor (the systemd Program)
+# health-gates any staged candidate before promoting it, and the agent writes
+# AGENT_DIR/healthy once it is alive + controllable.
+agent_dir="${ROOT}/var/lib/uknomi/agent-update"
+mkdir -p "$agent_dir"
+install -m 0755 "$CP_AGENT_BIN_SRC" "${agent_dir}/current"
+
+# Install the supervisor wrapper at /usr/local/bin (755).
 bin_dir="${ROOT}/usr/local/bin"
 mkdir -p "$bin_dir"
-install -m 0755 "$CP_AGENT_BIN_SRC" "${bin_dir}/uknomi-agent"
+install -m 0755 "$CP_SUPERVISOR_SRC" "${bin_dir}/uknomi-agent-supervisor"
 
-# Write the systemd unit. KeepAlive maps to Restart=always; the agent
-# reads its full config from the JSON file, so ExecStart carries only
-# the binary path + --config.
+# Write the systemd unit. systemd supervises the WRAPPER, not the agent
+# directly: on launch the wrapper gates any staged candidate, then exec's
+# AGENT_DIR/current. When a staged update makes the agent exit, Restart=always
+# brings the wrapper back to gate the candidate. AGENT_DIR + AGENT_ARGS are the
+# wrapper's contract (it word-splits AGENT_ARGS into the agent's argv);
+# AGENT_ARGS is quoted so its embedded space survives systemd parsing.
 unit_dir="${ROOT}/etc/systemd/system"
 mkdir -p "$unit_dir"
 cat > "${unit_dir}/uknomi-agent.service" <<UNIT
 [Unit]
-Description=uKnomi Control Plane agent
+Description=uKnomi Control Plane agent (resident update wrapper)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/uknomi-agent --config /etc/uknomi/agent-config.json
+Environment=AGENT_DIR=/var/lib/uknomi/agent-update
+Environment="AGENT_ARGS=--config /etc/uknomi/agent-config.json"
+ExecStart=/usr/local/bin/uknomi-agent-supervisor
 Restart=always
 RestartSec=5
 User=root
