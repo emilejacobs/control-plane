@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
+	"github.com/emilejacobs/control-plane/internal/handlers/agentupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/cameras"
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
@@ -20,6 +24,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/probes"
+	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	"github.com/emilejacobs/control-plane/internal/service"
 	"github.com/emilejacobs/control-plane/internal/telemetry"
@@ -86,6 +91,14 @@ type Config struct {
 	// it. Suggested default in the install module:
 	// /var/uknomi/agent-state/cameras.json.
 	CamerasPath string
+
+	// UpdateDir is the resident wrapper's on-disk update root (the
+	// wrapper exports it as AGENT_DIR; see scripts/uknomi-agent-supervisor.sh
+	// and ADR-035 §3/§5). When non-empty the agent registers the
+	// signature-gated agent.update handler and, once alive + controllable,
+	// writes the `healthy` marker the wrapper promotes a candidate on.
+	// Empty (most tests, non-wrapper runs) disables both.
+	UpdateDir string
 }
 
 type Transport interface {
@@ -124,6 +137,19 @@ type Agent struct {
 
 	pubCancel context.CancelFunc
 	pubDone   chan struct{}
+
+	// updateDir / updateFetch back the agent.update handler (issue #39).
+	// updateDir is empty unless the agent runs under the resident wrapper;
+	// updateFetch defaults to an HTTP GET of the presigned URL (tests
+	// override via WithUpdateFetcher).
+	updateDir   string
+	updateFetch agentupdate.Fetcher
+
+	// restart is closed once when a staged update asks the agent to exit so
+	// the wrapper can health-gate the candidate. main selects on it.
+	restart     chan struct{}
+	restartOnce sync.Once
+	healthDone  chan struct{}
 }
 
 type Option func(*Agent)
@@ -156,6 +182,13 @@ func WithNetworkScanner(s networkscan.Scanner) Option {
 	return func(a *Agent) { a.networkScanner = s }
 }
 
+// WithUpdateFetcher overrides how the agent.update handler downloads a staged
+// binary. Production wires an HTTP GET of CP's presigned URL; tests inject a
+// stub so they can exercise staging without a real download.
+func WithUpdateFetcher(f agentupdate.Fetcher) Option {
+	return func(a *Agent) { a.updateFetch = f }
+}
+
 func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	if err := validateCertFile(cfg.CertPath); err != nil {
 		return nil, err
@@ -167,12 +200,22 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		version:   cfg.Version,
 		logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		startTime: time.Now(),
+		updateDir: cfg.UpdateDir,
+		restart:   make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(a)
 	}
 
-	a.dispatcher = dispatcher.New(dispatcher.WithLogger(a.logger))
+	// The agent.update command is signature-gated (issue #41): when the
+	// update surface is active, an agent.update must carry a valid command
+	// signature or the dispatcher rejects it before the handler runs. Other
+	// command types stay unsigned per ADR-028 forward-compat.
+	dopts := []dispatcher.Option{dispatcher.WithLogger(a.logger)}
+	if a.updateDir != "" {
+		dopts = append(dopts, dispatcher.WithSignatureVerification(cmdsign.VerifyCommand, "agent.update"))
+	}
+	a.dispatcher = dispatcher.New(dopts...)
 	a.dispatcher.Register("heartbeat", heartbeat.New(cfg.DeviceID, cfg.Version, a.startTime))
 	if a.serviceBackend != nil {
 		a.dispatcher.Register("service.status", servicestatus.New(a.serviceBackend))
@@ -204,6 +247,20 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		a.networkScanner = newNmapScanner()
 	}
 	a.dispatcher.Register("network.scan", networkscan.New(a.networkScanner))
+
+	// Agent fleet-update handler (issue #39, ADR-035 §3). Registered only
+	// when running under the resident wrapper (UpdateDir set): it verifies
+	// the signed manifest, refuses downgrades (cfg.Version is the running
+	// version), fetches + stages the candidate, then asks the agent to exit
+	// so the wrapper health-gates it. The envelope signature is already
+	// enforced by the dispatcher gate wired above.
+	if a.updateDir != "" {
+		if a.updateFetch == nil {
+			a.updateFetch = httpUpdateFetch
+		}
+		a.dispatcher.Register("agent.update",
+			agentupdate.New(a.updateDir, a.updateFetch, a.requestRestart, cfg.Version))
+	}
 
 	interval := cfg.TelemetryInterval
 	if interval <= 0 {
@@ -345,7 +402,61 @@ func (a *Agent) Start() error {
 			a.probePublisher.Run(pubCtx)
 		}()
 	}
+
+	// Update health marker (issue #39, ADR-035 §5). The Subscribe above
+	// proves mTLS-connected + cmd-topic-subscribed (controllable); one
+	// heartbeat proves alive. Emit that heartbeat now, then write
+	// <UpdateDir>/healthy = version so the resident wrapper promotes the
+	// candidate it's gating. Marker failure is logged, not fatal.
+	if a.updateDir != "" {
+		a.healthDone = make(chan struct{})
+		go func() {
+			defer close(a.healthDone)
+			a.telemetry.PublishOnce()
+			path := filepath.Join(a.updateDir, "healthy")
+			if err := os.WriteFile(path, []byte(a.version), 0o644); err != nil {
+				a.logger.Error("write health marker failed", "error", err, "path", path)
+				return
+			}
+			a.logger.Info("health marker written", "version", a.version, "path", path)
+		}()
+	}
 	return nil
+}
+
+// requestRestart asks the process to exit so the resident wrapper can
+// health-gate a freshly-staged update candidate. It is the agentupdate
+// handler's OnStaged callback. Idempotent: a second staged update in the
+// same lifetime is a no-op (the first restart is already in flight).
+func (a *Agent) requestRestart() {
+	a.restartOnce.Do(func() {
+		a.logger.Info("update staged — requesting restart for the wrapper to gate it")
+		close(a.restart)
+	})
+}
+
+// RestartRequested fires when a staged update wants the agent to exit (so the
+// resident wrapper restarts and health-gates the candidate). main selects on
+// it alongside SIGTERM/SIGINT and exits 0.
+func (a *Agent) RestartRequested() <-chan struct{} { return a.restart }
+
+// httpUpdateFetch downloads a staged binary from CP's presigned URL. The
+// agentupdate handler re-checks the sha256 against the signed manifest, so a
+// tampered URL yields bytes that fail that check.
+func httpUpdateFetch(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch %s: status %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 func (a *Agent) Stop() error {
@@ -358,6 +469,9 @@ func (a *Agent) Stop() error {
 		if a.probeDone != nil {
 			<-a.probeDone
 		}
+	}
+	if a.healthDone != nil {
+		<-a.healthDone
 	}
 	return a.transport.Close()
 }
