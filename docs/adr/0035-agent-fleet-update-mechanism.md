@@ -36,3 +36,11 @@ Separately, ADR-013 says the manifest/command Ed25519 key lives "in KMS." AWS KM
 - (−) Command-channel authenticity for `agent.update` lags manifest authenticity until slice 2; mitigated by the signed manifest + no-downgrade rule.
 
 **Verification.** TBD at implementation. Tests cover: manifest signature + sha256 verification (good/forged/downgrade), the wrapper promote/rollback cycle against a deliberately-broken candidate, the health-marker gate (alive+controllable, not feature reports), and CP reconcile re-pushing on reconnect when reported ≠ desired.
+
+**Command signing — landed (#41, slice 2).** `agent.update` envelope signing is implemented per decision #2: CP signs the command in-process with an Ed25519 private key held in **Secrets Manager** (NOT KMS — KMS has no Ed25519); the agent verifies against a **baked-in public key** (`internal/protocol/cmdsign`, mirroring the manifest key but distinct and *online*) before dispatch, and refuses any **downgrade** (`agentupdate.IsDowngrade`) even under a valid signature. The dispatcher gates only the high-blast-radius `agent.update`; the Phase 0/2 handlers stay unsigned (ADR-028 forward-compat).
+
+*Key handling.* Two distinct keypairs, opposite availability:
+- **Manifest key** (#38): private half is the CI secret `AGENT_MANIFEST_SIGNING_KEY`, never in AWS; public half `internal/protocol/agentmanifest/release_pubkey.b64`.
+- **Command key** (#41): private half in Secrets Manager, loaded by cp-api + cp-ingest via `CP_COMMAND_SIGNING_SECRET_ID`; public half `internal/protocol/cmdsign/command_pubkey.b64`.
+
+Both committed public keys are **DEV keys** — rotate before production: regenerate with `cmd/agent-manifest-keygen`, commit the new public key, set the new secret. Tests: `cmdsign` sign/verify + wire round trip, dispatcher gate (missing/invalid/forward-compat), no-downgrade rule, and a CP→agent end-to-end signing contract (`tests/integration/command_signing_test.go`).
