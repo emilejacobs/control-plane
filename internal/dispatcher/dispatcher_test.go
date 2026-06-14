@@ -328,3 +328,103 @@ func TestDispatcherHandlerReturnedError(t *testing.T) {
 		t.Errorf("expected error message to contain 'something broke', got %q", result.Error.Message)
 	}
 }
+
+// --- issue #41: signature-verification gate ---
+
+// A required-signature command type runs its handler only when the injected
+// verifier accepts the command; a missing or invalid signature is rejected
+// with command.bad_signature and the handler never runs.
+func TestDispatcherGatesRequiredSignature(t *testing.T) {
+	verify := func(cmd envelope.Command) error {
+		if cmd.Signature != nil && *cmd.Signature == "good" {
+			return nil
+		}
+		return errors.New("bad signature")
+	}
+
+	run := func(t *testing.T, sig *string) (envelope.Result, bool) {
+		t.Helper()
+		var handlerRan bool
+		d := dispatcher.New(dispatcher.WithSignatureVerification(verify, "agent.update"))
+		d.Register("agent.update", dispatcher.HandlerFunc(func(context.Context, json.RawMessage) (any, error) {
+			handlerRan = true
+			return map[string]string{"ok": "1"}, nil
+		}))
+		cmd := envelope.Command{Type: "agent.update", CommandID: "c1", Signature: sig}
+		raw, _ := json.Marshal(cmd)
+		out, err := d.Dispatch(context.Background(), raw)
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var res envelope.Result
+		_ = json.Unmarshal(out, &res)
+		return res, handlerRan
+	}
+
+	good := "good"
+	if res, ran := run(t, &good); !res.Success || !ran {
+		t.Errorf("valid signature: success=%v ran=%v, want true/true (%+v)", res.Success, ran, res.Error)
+	}
+
+	bad := "bad"
+	if res, ran := run(t, &bad); res.Success || ran {
+		t.Errorf("invalid signature: success=%v ran=%v, want false/false", res.Success, ran)
+	} else if res.Error == nil || res.Error.Code != "command.bad_signature" {
+		t.Errorf("invalid signature: error = %+v, want command.bad_signature", res.Error)
+	}
+
+	if res, ran := run(t, nil); res.Success || ran {
+		t.Errorf("missing signature: success=%v ran=%v, want false/false", res.Success, ran)
+	} else if res.Error == nil || res.Error.Code != "command.bad_signature" {
+		t.Errorf("missing signature: error = %+v, want command.bad_signature", res.Error)
+	}
+}
+
+// A command type that is NOT in the required-signature set runs unsigned —
+// forward-compat with the Phase 0/2 unsigned handlers (ADR-028). The verifier
+// is never consulted for it.
+func TestDispatcherForwardCompatUnsignedNonRequired(t *testing.T) {
+	verifyCalled := false
+	verify := func(envelope.Command) error {
+		verifyCalled = true
+		return errors.New("would reject")
+	}
+	var handlerRan bool
+	d := dispatcher.New(dispatcher.WithSignatureVerification(verify, "agent.update"))
+	d.Register("config.update", dispatcher.HandlerFunc(func(context.Context, json.RawMessage) (any, error) {
+		handlerRan = true
+		return nil, nil
+	}))
+
+	cmd := envelope.Command{Type: "config.update", CommandID: "c2"} // no signature
+	raw, _ := json.Marshal(cmd)
+	out, _ := d.Dispatch(context.Background(), raw)
+	var res envelope.Result
+	_ = json.Unmarshal(out, &res)
+
+	if !res.Success || !handlerRan {
+		t.Errorf("unsigned non-required cmd: success=%v ran=%v, want true/true", res.Success, handlerRan)
+	}
+	if verifyCalled {
+		t.Error("verifier was consulted for a non-required command type")
+	}
+}
+
+// A dispatcher built without the verification option leaves every command
+// ungated (the default before #41 wires it in).
+func TestDispatcherNoVerifierGatesNothing(t *testing.T) {
+	var handlerRan bool
+	d := dispatcher.New()
+	d.Register("agent.update", dispatcher.HandlerFunc(func(context.Context, json.RawMessage) (any, error) {
+		handlerRan = true
+		return nil, nil
+	}))
+	cmd := envelope.Command{Type: "agent.update", CommandID: "c3"} // unsigned
+	raw, _ := json.Marshal(cmd)
+	out, _ := d.Dispatch(context.Background(), raw)
+	var res envelope.Result
+	_ = json.Unmarshal(out, &res)
+	if !res.Success || !handlerRan {
+		t.Errorf("no-verifier dispatcher: success=%v ran=%v, want true/true", res.Success, handlerRan)
+	}
+}
