@@ -71,6 +71,11 @@ resource "aws_ecs_task_definition" "cp_api" {
         { name = "TAXONOMY_ECS_TASK_DEF", value = aws_ecs_task_definition.taxonomy_sync.arn_without_revision },
         { name = "TAXONOMY_ECS_SUBNETS", value = join(",", aws_subnet.private[*].id) },
         { name = "TAXONOMY_ECS_SGS", value = aws_security_group.tasks.id },
+        # Agent fleet-update (#40/#41): enables POST /agent-rollouts (reads the
+        # signed release catalog from agent-dist + presigns binaries) and signs
+        # the agent.update envelope with the command-signing key.
+        { name = "AGENT_DIST_BUCKET", value = aws_s3_bucket.main["agent-dist"].bucket },
+        { name = "CP_COMMAND_SIGNING_SECRET_ID", value = "uknomi/cp/command-signing-key" },
       ], local.db_environment)
 
       secrets = [
