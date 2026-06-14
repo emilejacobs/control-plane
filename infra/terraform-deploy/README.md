@@ -100,7 +100,7 @@ The mac-mini-rollout install-package bootstrap key from #10 (`uknomi/cp/bootstra
 - **`image-publish`** (Issue #26): push the four CP images (`cp-api`, `cp-ingest`, `dashboard`, `audit-mirror`) to ECR tagged with the git SHA + `latest`.
 - **`deploy`** (ADR-027): `ecs:UpdateService` + `wait services-stable` on the three long-running services, `ecs:RunTask` + `iam:PassRole` on audit-mirror, and `events:ListTargetsByRule` to re-derive the audit-mirror network config at workflow runtime.
 
-The workflow uses `dorny/paths-filter` to skip rebuilds + redeploys for unaffected services — a docs-only commit does not roll any ECS task; a `web/**`-only commit rolls only the dashboard.
+The workflow uses `dorny/paths-filter` to skip rebuilds + redeploys for unaffected services — a docs-only commit does not roll any ECS task; a `web/**`-only commit rolls only the dashboard. The affected set drives a **dynamic build/deploy matrix**, so an unaffected service produces no job (not a green no-op), one service's build failure does not skip another's deploy, and a leg whose `:<sha>` image never reached ECR fails instead of rolling a stale `:latest` (issue #11 — see [ADR-027](../../docs/adr/0027-phase-1-auto-deploy-direct-to-prod.md) § Amendment).
 
 If the AWS account already has a `token.actions.githubusercontent.com` OIDC provider, `terraform apply` fails with `EntityAlreadyExists`. Recover via:
 
