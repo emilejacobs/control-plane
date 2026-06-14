@@ -9,10 +9,10 @@
 
 # ── Task role ───────────────────────────────────────────────────────────────
 # Scoped to s3:PutObject + s3:GetObject + s3:HeadObject on the
-# audit-mirror bucket only, plus Secrets Manager + KMS to read the
-# db-dsn secret. No SecretsManager:* on anything else; no S3 on the
-# other buckets. The task execution role (from ecs.tf) already covers
-# image pull + log write + db-dsn secret-fetch-via-task-def-secrets.
+# audit-mirror bucket only. No SecretsManager:* on anything else; no S3 on
+# the other buckets. The task execution role (from ecs.tf) already covers
+# image pull + log write + the DB password fetch (from the RDS-managed
+# secret) via task-def secrets (issue #49).
 
 resource "aws_iam_role" "audit_mirror" {
   name               = "uknomi-cp-audit-mirror"
@@ -62,13 +62,13 @@ resource "aws_ecs_task_definition" "audit_mirror" {
       image     = "${aws_ecr_repository.main["audit-mirror"].repository_url}:${var.image_tag}"
       essential = true
 
-      environment = [
+      environment = concat([
         { name = "AUDIT_BUCKET", value = aws_s3_bucket.main["audit-mirror"].bucket },
         { name = "AWS_REGION", value = var.region },
-      ]
+      ], local.db_environment)
 
       secrets = [
-        { name = "DB_DSN", valueFrom = aws_secretsmanager_secret.db_dsn.arn },
+        local.db_password_secret,
       ]
 
       logConfiguration = {
