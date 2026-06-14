@@ -1,12 +1,35 @@
 package cmdsign
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
 
 	"github.com/emilejacobs/control-plane/internal/envelope"
 )
+
+// KeyLoader fetches the base64 command-signing private key from its store of
+// record — AWS Secrets Manager in production (bootstrap.SecretsManagerLoader
+// satisfies it), a fake in tests.
+type KeyLoader interface {
+	Load(ctx context.Context) (string, error)
+}
+
+// LoadSigner builds a Signer from the key the loader yields, failing fast on a
+// missing or malformed key so a misconfigured service does not start up only
+// to sign garbage the fleet rejects.
+func LoadSigner(ctx context.Context, loader KeyLoader) (*Signer, error) {
+	b64, err := loader.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load command signing key: %w", err)
+	}
+	key, err := ParsePrivateKey(b64)
+	if err != nil {
+		return nil, err
+	}
+	return NewSigner(key), nil
+}
 
 // Signer holds an Ed25519 private key and signs command envelopes in-process.
 // cp-api / cp-ingest build one from the key they load out of Secrets Manager

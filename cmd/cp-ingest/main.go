@@ -27,6 +27,10 @@
 //	                           devices whose reported version drifted from
 //	                           desired_agent_version. Unset disables the
 //	                           reconcile (reported versions still persist).
+//	CP_COMMAND_SIGNING_SECRET_ID  Secrets Manager id of the base64 Ed25519
+//	                           command-signing key (issue #41). When set, the
+//	                           reconcile re-pushes are signed; unset = unsigned
+//	                           (forward-compat). Set it together with cp-api's.
 //
 // SERVICE_STATUS_* are optional so a deploy that lands the code before
 // Terraform provisions the queue does not crash. When both are set, the
@@ -48,11 +52,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
+	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
@@ -60,6 +66,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
+	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 )
@@ -134,11 +141,32 @@ func run(logger *slog.Logger) error {
 				o.BaseEndpoint = aws.String(endpoint)
 			})
 		}
+		// Command-envelope signing (#41): reconcile re-pushes must be signed
+		// too, or a verifying agent rejects them. Gated on
+		// CP_COMMAND_SIGNING_SECRET_ID, same as cp-api; unset = unsigned
+		// (forward-compat).
+		var cmdSigner agentrollout.CommandSigner
+		if secretID := os.Getenv("CP_COMMAND_SIGNING_SECRET_ID"); secretID != "" {
+			var smOpts []func(*secretsmanager.Options)
+			if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
+				smOpts = append(smOpts, func(o *secretsmanager.Options) { o.BaseEndpoint = aws.String(endpoint) })
+			}
+			smClient := secretsmanager.NewFromConfig(awsCfg, smOpts...)
+			signer, err := cmdsign.LoadSigner(ctx, bootstrap.NewSecretsManagerLoader(smClient, secretID))
+			if err != nil {
+				return fmt.Errorf("command signing key: %w", err)
+			}
+			cmdSigner = signer
+			logger.Info("command signing wired", "secret_id", secretID)
+		} else {
+			logger.Info("command signing disabled — CP_COMMAND_SIGNING_SECRET_ID unset")
+		}
 		pusher := &agentrollout.Pusher{
 			Manifests: agentrollout.NewS3ManifestSource(s3Client, bucket),
 			Presigner: agentrollout.NewS3Presigner(s3.NewPresignClient(s3Client), bucket),
 			Publisher: iotpublisher.NewAWS(iotdataplane.NewFromConfig(awsCfg, iotDataOpts...)),
 			Logger:    logger,
+			Signer:    cmdSigner,
 		}
 		heartbeatIngester.Updates = pusher
 		heartbeatIngester.Logger = logger
