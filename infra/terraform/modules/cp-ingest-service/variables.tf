@@ -90,6 +90,21 @@ variable "db_sslmode" {
   default     = "require"
 }
 
+# Agent fleet-update reconcile (#40/#41). Empty defaults keep the module
+# applyable before the feature is enabled — cp-ingest skips the re-push when
+# AGENT_DIST_BUCKET is unset and publishes unsigned when the signing id is unset.
+variable "agent_dist_bucket" {
+  description = "S3 bucket holding the signed agent release catalog. Empty disables reconcile re-push."
+  type        = string
+  default     = ""
+}
+
+variable "command_signing_secret_id" {
+  description = "Secrets Manager id of the Ed25519 command-signing key. Empty publishes unsigned."
+  type        = string
+  default     = ""
+}
+
 variable "desired_count" {
   description = "Number of cp-ingest tasks to run."
   type        = number
