@@ -47,6 +47,18 @@ func (p *Publisher) Run(ctx context.Context) {
 	}
 }
 
+// PublishOnce runs the collectors once and publishes a single telemetry
+// payload. Run calls it on every tick; the agent also calls it directly at
+// startup to emit the first heartbeat before writing its update health marker
+// (ADR-035 §5 "alive + controllable").
+func (p *Publisher) PublishOnce() {
+	log := p.Logger
+	if log == nil {
+		log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+	p.publishOnce(log)
+}
+
 func (p *Publisher) publishOnce(log *slog.Logger) {
 	correlationID := newCorrelationID()
 	payload := map[string]any{"correlation_id": correlationID}
