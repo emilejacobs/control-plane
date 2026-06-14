@@ -49,3 +49,16 @@ ADR-020's staging + manual-promote shape remains the **stated target** for the P
 - `.github/workflows/build-images.yml` contains an `audit-mirror` run-task step gated on the audit-mirror path filter.
 - `infra/terraform-deploy/ci-oidc.tf` grants the `uknomi-gha-image-publish` role the `ecs:UpdateService` + `ecs:DescribeServices` + `ecs:RunTask` + `iam:PassRole` permissions scoped to the four CP services + their task roles, and `events:ListTargetsByRule` for audit-mirror network-config discovery.
 - `infra/terraform-deploy/README.md` § Deploying the CP documents the new flow: merge to `main` rolls the affected services automatically; manual `--force-new-deployment` remains a runbook escape hatch for redeploying without an image change.
+
+**Amendment (2026-06-14, issue #11) — gate semantics hardened.** The original shape reported `Deploy <svc>: success` for unaffected services (their per-service deploy step was skipped, but a job whose steps all skip still concludes green), and coupled all deploys to the aggregate `build` result so one service's build failure skipped every deploy — including services that built fine. The 2026-05-26 session hit both: cameras/network-scan routes were 404 in prod across several "successful" runs.
+
+Fixed in `build-images.yml`:
+- The affected set is computed once in `changes`, which emits two **dynamic matrix lists** (`build_services`, `deploy_services`). `build` and `deploy` fan out over those, so an unaffected service produces **no job** — it is absent from the run, never a green no-op.
+- `deploy` (and the scheduled `*-run` jobs) use `if: ${{ !cancelled() && … }}`, so a build failure in one service no longer skips the deploy of a different service whose build succeeded.
+- Each deploy/run leg verifies its `:<git-sha>` image is in ECR (`aws ecr batch-get-image`, already in the role's grant) **before** rolling; a service whose own build failed fails the leg loudly instead of force-redeploying the stale `:latest`.
+
+*Verify the gate (regression procedure):*
+1. **Unaffected = absent.** A docs-only push (no `cmd/**`, `internal/**`, `web/**`, `go.*`) shows the `changes` job only — no `Build *` / `Deploy *` jobs. (`build_services`/`deploy_services` log as `[]`.)
+2. **Independent deploys.** On a push touching `cmd/cp-api/**` while a dashboard build is forced to fail, `Deploy cp-api` still runs and rolls; `Deploy dashboard` fails on the image check. cp-api is **not** blocked by the dashboard failure.
+3. **No stale roll.** A leg whose `:<sha>` image is missing from ECR fails at the "Verify … image was published" step rather than reporting a green roll.
+4. **Escape hatch unchanged.** `gh workflow run build-images.yml --ref main` (workflow_dispatch) rebuilds + redeploys every service.

@@ -6,6 +6,20 @@ name: Build, push & deploy
 # to the diff: a web/** change rolls only the dashboard; a shared
 # internal/** change rolls all three Go services.
 #
+# Gate semantics (issue #11). The set of affected services is computed ONCE
+# in the `changes` job, which emits dynamic matrix lists (build_services /
+# deploy_services). The build and deploy jobs fan out over those lists, so an
+# unaffected service produces NO job at all — it shows as absent, never as a
+# green "success" that did nothing. Two further guards close the
+# false-success holes #11 documented:
+#   - deploy uses `if: !cancelled()` (not the implicit skip-on-needs-failure),
+#     so one service's build failure no longer skips the deploy of a DIFFERENT
+#     service whose build succeeded.
+#   - before rolling, each deploy leg verifies its <sha> image is actually in
+#     ECR; if its own build failed, the leg fails loudly instead of
+#     force-redeploying the stale :latest and reporting a green roll.
+# See the "verify the gate" procedure in ADR-027 § Verification.
+#
 # CI auths to AWS via the OIDC role provisioned in terraform-deploy
 # (uknomi-gha-image-publish; widened by ADR-027 to grant ecs:UpdateService
 # + RunTask + PassRole on top of the original ECR push permissions).
@@ -59,16 +73,24 @@ jobs:
   #   - workflow_dispatch always builds + deploys everything (filter
   #     outputs default to false on dispatch, so we OR them with a
   #     dispatch override below).
+  #
+  # Emits both the per-service booleans (consumed by the scheduled run-task
+  # jobs) and two dynamic matrix lists: build_services (every affected image)
+  # and deploy_services (the affected long-running services only). Fanning the
+  # build/deploy jobs over those lists is what makes an unaffected service
+  # ABSENT from the run rather than a green no-op (issue #11).
   changes:
     name: Detect affected services
     runs-on: ubuntu-latest
     outputs:
       # Hyphenated GHA expression keys require bracket access, not dot.
-      cp-api:        ${{ steps.combine.outputs['cp-api'] }}
-      cp-ingest:     ${{ steps.combine.outputs['cp-ingest'] }}
-      dashboard:     ${{ steps.combine.outputs['dashboard'] }}
-      audit-mirror:  ${{ steps.combine.outputs['audit-mirror'] }}
-      taxonomy-sync: ${{ steps.combine.outputs['taxonomy-sync'] }}
+      cp-api:         ${{ steps.combine.outputs['cp-api'] }}
+      cp-ingest:      ${{ steps.combine.outputs['cp-ingest'] }}
+      dashboard:      ${{ steps.combine.outputs['dashboard'] }}
+      audit-mirror:   ${{ steps.combine.outputs['audit-mirror'] }}
+      taxonomy-sync:  ${{ steps.combine.outputs['taxonomy-sync'] }}
+      build_services:  ${{ steps.combine.outputs.build_services }}
+      deploy_services: ${{ steps.combine.outputs.deploy_services }}
     steps:
       - uses: actions/checkout@v4
 
@@ -146,130 +168,147 @@ jobs:
           F_DASHBOARD: ${{ steps.filter.outputs['dashboard'] }}
         run: |
           set -euo pipefail
-          out() {
-            local key="$1" filter="$2"
-            local val="false"
-            if [[ "$DISPATCH" == "true" || "$filter" == "true" ]]; then
-              val="true"
-            fi
-            echo "${key}=${val}" >> "$GITHUB_OUTPUT"
-            echo "${key}=${val}"
+          # workflow_dispatch forces every service true; otherwise honor the
+          # path filter. Plain vars (no associative arrays) keep this portable.
+          val() {
+            if [[ "$DISPATCH" == "true" || "$1" == "true" ]]; then echo true; else echo false; fi
           }
-          out cp-api        "$F_CP_API"
-          out cp-ingest     "$F_CP_INGEST"
-          out audit-mirror  "$F_AUDIT_MIRROR"
-          out taxonomy-sync "$F_TAXONOMY_SYNC"
-          out dashboard     "$F_DASHBOARD"
+          V_CP_API="$(val "$F_CP_API")"
+          V_CP_INGEST="$(val "$F_CP_INGEST")"
+          V_AUDIT_MIRROR="$(val "$F_AUDIT_MIRROR")"
+          V_TAXONOMY_SYNC="$(val "$F_TAXONOMY_SYNC")"
+          V_DASHBOARD="$(val "$F_DASHBOARD")"
+          {
+            echo "cp-api=$V_CP_API"
+            echo "cp-ingest=$V_CP_INGEST"
+            echo "audit-mirror=$V_AUDIT_MIRROR"
+            echo "taxonomy-sync=$V_TAXONOMY_SYNC"
+            echo "dashboard=$V_DASHBOARD"
+          } >> "$GITHUB_OUTPUT"
+
+          # Dynamic matrix lists. build covers every affected image; deploy
+          # covers only the long-running services rolled via update-service
+          # (audit-mirror / taxonomy-sync are scheduled run-task jobs below).
+          build_services='[]'
+          deploy_services='[]'
+          add_build()  { if [[ "$1" == "true" ]]; then build_services="$(jq -c --arg s "$2" '. + [$s]' <<<"$build_services")"; fi; }
+          add_deploy() { if [[ "$1" == "true" ]]; then deploy_services="$(jq -c --arg s "$2" '. + [$s]' <<<"$deploy_services")"; fi; }
+          add_build  "$V_CP_API"        cp-api
+          add_build  "$V_CP_INGEST"     cp-ingest
+          add_build  "$V_DASHBOARD"     dashboard
+          add_build  "$V_AUDIT_MIRROR"  audit-mirror
+          add_build  "$V_TAXONOMY_SYNC" taxonomy-sync
+          add_deploy "$V_CP_API"        cp-api
+          add_deploy "$V_CP_INGEST"     cp-ingest
+          add_deploy "$V_DASHBOARD"     dashboard
+          {
+            echo "build_services=$build_services"
+            echo "deploy_services=$deploy_services"
+          } >> "$GITHUB_OUTPUT"
+          echo "build_services=$build_services"
+          echo "deploy_services=$deploy_services"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Build + push only the affected images. The matrix entry's `if` is
-  # evaluated per job, so an unaffected service is skipped entirely
-  # rather than running a no-op build.
+  # Build + push only the affected images. The matrix is the dynamic
+  # build_services list, so an unaffected service produces no build job at
+  # all (rather than a skipped-step no-op that still reports success).
+  # fail-fast: false keeps each service's build independent.
   build:
-    name: Build ${{ matrix.service.name }}
+    name: Build ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: changes
-    if: |
-      needs.changes.outputs['cp-api'] == 'true' ||
-      needs.changes.outputs['cp-ingest'] == 'true' ||
-      needs.changes.outputs['dashboard'] == 'true' ||
-      needs.changes.outputs['audit-mirror'] == 'true' ||
-      needs.changes.outputs['taxonomy-sync'] == 'true'
+    if: ${{ needs.changes.outputs.build_services != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        service:
-          - name: cp-api
-            context: .
-            dockerfile: cmd/cp-api/Dockerfile
-            build_args: ""
-          - name: cp-ingest
-            context: .
-            dockerfile: cmd/cp-ingest/Dockerfile
-            build_args: ""
-          - name: dashboard
-            context: web
-            dockerfile: web/Dockerfile
-            build_args: |
-              NEXT_PUBLIC_API_URL=https://api.control.uknomi.com
-          - name: audit-mirror
-            context: .
-            dockerfile: cmd/audit-mirror/Dockerfile
-            build_args: ""
-          - name: taxonomy-sync
-            context: .
-            dockerfile: cmd/taxonomy-sync/Dockerfile
-            build_args: ""
+        service: ${{ fromJSON(needs.changes.outputs.build_services) }}
     steps:
-      - name: Skip if service unaffected
-        id: gate
-        env:
-          AFFECTED: ${{ needs.changes.outputs[matrix.service.name] }}
-        run: echo "affected=${AFFECTED}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
 
-      - if: steps.gate.outputs.affected == 'true'
-        uses: actions/checkout@v4
-
-      - if: steps.gate.outputs.affected == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - if: steps.gate.outputs.affected == 'true'
-        id: ecr-login
+      - id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - if: steps.gate.outputs.affected == 'true'
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Build & push ${{ matrix.service.name }}
-        if: steps.gate.outputs.affected == 'true'
+      - name: Resolve build context for ${{ matrix.service }}
+        id: cfg
+        # The per-service build inputs (Docker context / file / args) live
+        # here rather than in a static matrix so the matrix itself can be the
+        # dynamic affected-services list.
+        run: |
+          set -euo pipefail
+          case "${{ matrix.service }}" in
+            cp-api)        ctx="."   ; df="cmd/cp-api/Dockerfile"        ; ba="" ;;
+            cp-ingest)     ctx="."   ; df="cmd/cp-ingest/Dockerfile"     ; ba="" ;;
+            dashboard)     ctx="web" ; df="web/Dockerfile"              ; ba="NEXT_PUBLIC_API_URL=https://api.control.uknomi.com" ;;
+            audit-mirror)  ctx="."   ; df="cmd/audit-mirror/Dockerfile"  ; ba="" ;;
+            taxonomy-sync) ctx="."   ; df="cmd/taxonomy-sync/Dockerfile" ; ba="" ;;
+            *) echo "::error::unknown service ${{ matrix.service }}"; exit 1 ;;
+          esac
+          {
+            echo "context=$ctx"
+            echo "dockerfile=$df"
+            echo "build_args=$ba"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build & push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.service.context }}
-          file: ${{ matrix.service.dockerfile }}
+          context: ${{ steps.cfg.outputs.context }}
+          file: ${{ steps.cfg.outputs.dockerfile }}
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.ecr-login.outputs.registry }}/uknomi/${{ matrix.service.name }}:${{ github.sha }}
-            ${{ steps.ecr-login.outputs.registry }}/uknomi/${{ matrix.service.name }}:latest
-          build-args: ${{ matrix.service.build_args }}
-          cache-from: type=gha,scope=${{ matrix.service.name }}
-          cache-to: type=gha,scope=${{ matrix.service.name }},mode=max
+            ${{ steps.ecr-login.outputs.registry }}/uknomi/${{ matrix.service }}:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/uknomi/${{ matrix.service }}:latest
+          build-args: ${{ steps.cfg.outputs.build_args }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Roll each long-running ECS service whose image was rebuilt. Each job
-  # fires its own update-service + wait services-stable so a failure in
-  # one service does not block the others; the wait gives the workflow a
-  # real pass/fail signal instead of fire-and-forget. Per ADR-027.
+  # Roll each long-running ECS service whose image was rebuilt. The matrix is
+  # the dynamic deploy_services list. `if: !cancelled()` means a build failure
+  # in a DIFFERENT service no longer skips this job (issue #11 AC2); the
+  # per-leg image check then refuses to roll a service whose OWN build failed.
   deploy:
     name: Deploy ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [changes, build]
-    if: |
-      needs.changes.outputs['cp-api'] == 'true' ||
-      needs.changes.outputs['cp-ingest'] == 'true' ||
-      needs.changes.outputs['dashboard'] == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.deploy_services != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        service: [cp-api, cp-ingest, dashboard]
+        service: ${{ fromJSON(needs.changes.outputs.deploy_services) }}
     steps:
-      - name: Skip if service unaffected
-        id: gate
-        env:
-          AFFECTED: ${{ needs.changes.outputs[matrix.service] }}
-        run: echo "affected=${AFFECTED}" >> "$GITHUB_OUTPUT"
-
-      - if: steps.gate.outputs.affected == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Verify ${{ matrix.service }} image was published
+        # This service is affected, so its build was expected to push
+        # uknomi/<svc>:<sha>. If it is absent the build failed (the deploy job
+        # runs anyway under !cancelled()): fail loudly here instead of
+        # force-redeploying the stale :latest and reporting a green roll that
+        # shipped nothing new (issue #11).
+        run: |
+          set -euo pipefail
+          found="$(aws ecr batch-get-image \
+            --repository-name "uknomi/${{ matrix.service }}" \
+            --image-ids imageTag=${{ github.sha }} \
+            --query 'length(images)' --output text)"
+          if [ "$found" = "0" ]; then
+            echo "::error::uknomi/${{ matrix.service }}:${{ github.sha }} is not in ECR — its build did not publish this commit. Refusing to roll the stale :latest."
+            exit 1
+          fi
+          echo "::notice::uknomi/${{ matrix.service }}:${{ github.sha }} present in ECR; rolling."
+
       - name: Force-redeploy ${{ matrix.service }}
-        if: steps.gate.outputs.affected == 'true'
         run: |
           set -euo pipefail
           aws ecs update-service \
@@ -280,7 +319,6 @@ jobs:
             --output table
 
       - name: Wait for ${{ matrix.service }} to stabilize
-        if: steps.gate.outputs.affected == 'true'
         # services-stable polls every 15s for up to 10 minutes by default.
         # ECS's deployment circuit-breaker will roll back internally if
         # the new task fails health checks; this step then fails because
@@ -296,7 +334,10 @@ jobs:
   # Audit-mirror is a one-shot scheduled task, not a long-running service.
   # On an image change, kick a fresh run-task so the new image is
   # exercised immediately rather than waiting until the next 00:05 UTC
-  # scheduled run. Fire-and-forget — the existing
+  # scheduled run. `if: !cancelled()` decouples it from an unrelated
+  # service's build failure (issue #11); the image check guards against
+  # smoke-running a stale image when audit-mirror's OWN build failed.
+  # Otherwise fire-and-forget — the existing
   # `uknomi-cp-audit-mirror-failure` log-metric alarm catches a non-zero
   # exit, so blocking the workflow on task completion would only add
   # cycle-time cost.
@@ -304,12 +345,24 @@ jobs:
     name: Smoke-run audit-mirror
     runs-on: ubuntu-latest
     needs: [changes, build]
-    if: needs.changes.outputs['audit-mirror'] == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs['audit-mirror'] == 'true' }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify audit-mirror image was published
+        run: |
+          set -euo pipefail
+          found="$(aws ecr batch-get-image \
+            --repository-name "uknomi/audit-mirror" \
+            --image-ids imageTag=${{ github.sha }} \
+            --query 'length(images)' --output text)"
+          if [ "$found" = "0" ]; then
+            echo "::error::uknomi/audit-mirror:${{ github.sha }} is not in ECR — its build did not publish this commit; skipping the smoke run."
+            exit 1
+          fi
 
       - name: Derive network config from the EventBridge target
         id: netconf
@@ -367,12 +420,24 @@ jobs:
     name: Smoke-run taxonomy-sync
     runs-on: ubuntu-latest
     needs: [changes, build]
-    if: needs.changes.outputs['taxonomy-sync'] == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs['taxonomy-sync'] == 'true' }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify taxonomy-sync image was published
+        run: |
+          set -euo pipefail
+          found="$(aws ecr batch-get-image \
+            --repository-name "uknomi/taxonomy-sync" \
+            --image-ids imageTag=${{ github.sha }} \
+            --query 'length(images)' --output text)"
+          if [ "$found" = "0" ]; then
+            echo "::error::uknomi/taxonomy-sync:${{ github.sha }} is not in ECR — its build did not publish this commit; skipping the smoke run."
+            exit 1
+          fi
 
       - name: Derive network config from the EventBridge target
         id: netconf
