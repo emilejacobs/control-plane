@@ -58,7 +58,7 @@ resource "aws_ecs_task_definition" "cp_api" {
         protocol      = "tcp"
       }]
 
-      environment = [
+      environment = concat([
         { name = "PORT", value = "8080" },
         { name = "IOT_POLICY_NAME", value = "UknomiAgentPolicy" },
         { name = "AWS_REGION", value = var.region },
@@ -71,10 +71,10 @@ resource "aws_ecs_task_definition" "cp_api" {
         { name = "TAXONOMY_ECS_TASK_DEF", value = aws_ecs_task_definition.taxonomy_sync.arn_without_revision },
         { name = "TAXONOMY_ECS_SUBNETS", value = join(",", aws_subnet.private[*].id) },
         { name = "TAXONOMY_ECS_SGS", value = aws_security_group.tasks.id },
-      ]
+      ], local.db_environment)
 
       secrets = [
-        { name = "DB_DSN", valueFrom = aws_secretsmanager_secret.db_dsn.arn },
+        local.db_password_secret,
         { name = "JWT_SIGNING_KEY", valueFrom = aws_secretsmanager_secret.jwt_signing_key.arn },
         { name = "TOTP_ENCRYPTION_KEY", valueFrom = aws_secretsmanager_secret.totp_encryption_key.arn },
       ]

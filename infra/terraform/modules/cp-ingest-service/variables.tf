@@ -53,9 +53,41 @@ variable "lifecycle_dlq_url" {
   type        = string
 }
 
-variable "db_dsn_secret_arn" {
-  description = "Secrets Manager ARN holding the Postgres DSN."
+# Postgres connection (issue #49). The password is injected from the
+# RDS-managed master secret via a task-def secret reference; the rest is
+# non-secret env. cp-ingest builds the DSN in-process (storage.ResolveDSN).
+variable "db_password_secret_arn" {
+  description = "ARN of the RDS-managed master secret; the module appends ':password::' to read the password JSON key."
   type        = string
+}
+
+variable "db_host" {
+  description = "Postgres host (RDS endpoint address)."
+  type        = string
+}
+
+variable "db_port" {
+  description = "Postgres port."
+  type        = string
+  default     = "5432"
+}
+
+variable "db_name" {
+  description = "Postgres database name."
+  type        = string
+  default     = "uknomi_cp"
+}
+
+variable "db_user" {
+  description = "Postgres user."
+  type        = string
+  default     = "uknomi_admin"
+}
+
+variable "db_sslmode" {
+  description = "libpq sslmode."
+  type        = string
+  default     = "require"
 }
 
 variable "desired_count" {

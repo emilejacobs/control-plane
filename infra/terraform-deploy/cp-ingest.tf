@@ -125,7 +125,13 @@ module "cp_ingest" {
   cmd_result_queue_url = module.sqs_cmd_result.queue_url
   cmd_result_dlq_url   = module.sqs_cmd_result.dlq_url
 
-  db_dsn_secret_arn = aws_secretsmanager_secret.db_dsn.arn
+  # Postgres password from the RDS-managed master secret (issue #49); the
+  # non-secret parts ride as plain env. No hand-synced db-dsn to go stale.
+  db_password_secret_arn = aws_db_instance.main.master_user_secret[0].secret_arn
+  db_host                = aws_db_instance.main.address
+  db_port                = tostring(aws_db_instance.main.port)
+  db_name                = aws_db_instance.main.db_name
+  db_user                = aws_db_instance.main.username
 
   desired_count = 1
 

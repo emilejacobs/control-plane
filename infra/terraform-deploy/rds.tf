@@ -1,8 +1,8 @@
 # RDS Postgres — the CP's source of truth. Single-AZ for Wave 0 with a
 # variable to flip to multi-AZ before the ship gate. RDS manages the master
 # password in its own Secrets Manager secret (rotated by AWS, encrypted with
-# our KMS key); cp-api consumes a constructed DSN secret the operator
-# populates once after first apply.
+# our KMS key); the CP services read that password directly via a task-def
+# secret reference (issue #49) — nothing to populate or re-sync by hand.
 
 resource "aws_db_subnet_group" "main" {
   name       = "uknomi-cp"
@@ -63,8 +63,9 @@ resource "aws_db_instance" "main" {
 
   # RDS owns the master password lifecycle: it generates the value, stores
   # it in a Secrets Manager secret encrypted with our KMS key, and rotates
-  # on demand. cp-api never reads this secret directly — see uknomi/cp/db-dsn
-  # in secrets.tf.
+  # on demand. The CP services read the password directly from this managed
+  # secret via a task-def secret reference (issue #49) — see locals.tf
+  # (db_password_secret) and the per-service task defs.
   manage_master_user_password   = true
   master_user_secret_kms_key_id = aws_kms_key.main.arn
 

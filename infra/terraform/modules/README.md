@@ -74,7 +74,10 @@ module "cp_ingest" {
   heartbeat_dlq_url   = module.presence_heartbeats.dlq_url
   lifecycle_queue_url = module.presence_lifecycle.queue_url
   lifecycle_dlq_url   = module.presence_lifecycle.dlq_url
-  db_dsn_secret_arn   = module.secrets.db_dsn_arn
+  # Postgres: password injected from the RDS-managed secret (issue #49),
+  # the rest as plain connection parts.
+  db_password_secret_arn = module.rds.master_user_secret_arn
+  db_host                = module.rds.address
 }
 ```
 
