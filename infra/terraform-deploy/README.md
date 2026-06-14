@@ -123,6 +123,14 @@ The task definitions reference ECR via `${repo}:${var.image_tag}`. `image_tag` d
 2. Push a commit to `main` (or trigger `.github/workflows/build-images.yml` via `workflow_dispatch`). Wait ~3–5 min for the build matrix; another ~1–2 min for the deploy matrix to mark services stable.
 3. Done. Subsequent merges follow the normal flow above — no manual `terraform apply` needed unless a task-def field actually changed.
 
+**Task-def changes that need a manual apply (image-first ordering).** When a change touches both the app and the task definitions — e.g. issue #49 (services read the DB password from the RDS-managed secret instead of the `db-dsn` secret) — the order matters, because a task def and the image that runs under it must agree on the env contract:
+
+1. **Merge to `main` and let the build-images workflow finish first.** This deploys the new image under the *current* task def. Such changes ship backward-compatible (the #49 image still honors `DB_DSN`), so the service keeps running on the old task def.
+2. **Then `terraform apply`.** It registers the new task-def revisions and — because the service's `task_definition` ARN changes — rolls cp-api/cp-ingest onto them automatically (no `--force-new-deployment` needed).
+3. Verify: `aws ecs wait services-stable --cluster uknomi-cp --services cp-api cp-ingest`, then exercise a login.
+
+Do **not** apply before the new image is live: the old binary would be rolled onto a task def missing the env it expects (e.g. `DB_DSN`) and crash-loop. For #49 specifically, expect the plan to show 4 task-def revisions, the exec role gaining read on the `rds!db-…` managed secret, and `aws_secretsmanager_secret.db_dsn` (+ version) being **destroyed** — confirm that's the only deletion.
+
 **Manual rollout (escape hatch):**
 
 Useful when redeploying without an image change (e.g. to pick up a Secrets Manager rotation) or when CI is down:

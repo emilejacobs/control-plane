@@ -72,10 +72,8 @@ output "rds_master_user_secret_arn" {
   value       = aws_db_instance.main.master_user_secret[0].secret_arn
 }
 
-output "db_dsn_secret_arn" {
-  description = "Secrets Manager ARN of the constructed Postgres DSN. cp-api / cp-ingest read this; consumed by cp-ingest-service module."
-  value       = aws_secretsmanager_secret.db_dsn.arn
-}
+# db_dsn_secret_arn removed (issue #49): services read the DB password from
+# rds_master_user_secret_arn directly; there is no constructed-DSN secret.
 
 # ── ECR (step 5) ────────────────────────────────────────────────────────────
 

@@ -63,17 +63,18 @@ resource "aws_ecs_task_definition" "taxonomy_sync" {
       image     = "${aws_ecr_repository.main["taxonomy-sync"].repository_url}:${var.image_tag}"
       essential = true
 
-      environment = [
+      environment = concat([
         { name = "AWS_REGION", value = var.region },
         { name = "TAXONOMY_API_BASE_URL", value = "https://api.uknomi.com" },
-      ]
+      ], local.db_environment)
 
       # Cognito service-account credentials live in the JSON secret
       # uknomi/cp/taxonomy-api-creds ({"username","password"}). ECS
       # task-def `secrets` resolves JSON fields via the SecretsManager
-      # task-def syntax: ARN + ":<key>::".
+      # task-def syntax: ARN + ":<key>::". The DB password is injected the
+      # same way from the RDS-managed master secret (issue #49).
       secrets = [
-        { name = "DB_DSN", valueFrom = aws_secretsmanager_secret.db_dsn.arn },
+        local.db_password_secret,
         { name = "TAXONOMY_USERNAME", valueFrom = "${aws_secretsmanager_secret.taxonomy_api_creds.arn}:username::" },
         { name = "TAXONOMY_PASSWORD", valueFrom = "${aws_secretsmanager_secret.taxonomy_api_creds.arn}:password::" },
       ]

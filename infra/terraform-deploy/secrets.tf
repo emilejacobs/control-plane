@@ -60,30 +60,15 @@ resource "aws_secretsmanager_secret_version" "tailscale_auth_key" {
   }
 }
 
-# The constructed Postgres DSN cp-api and cp-ingest read. Two paths to
-# populate it post-RDS-apply, both manual (operator):
-#   1. Read uknomi_admin's password from the RDS-managed secret, build
-#      `postgresql://uknomi_admin:<pw>@<rds-endpoint>:5432/uknomi_cp?sslmode=require`,
-#      and `aws secretsmanager put-secret-value` it here.
-#   2. After any RDS master-password rotation, repeat step 1.
-# A future improvement is to switch cp-api to read the username, password,
-# and host as separate env vars (the password directly from the
-# RDS-managed secret via ECS task-definition JSON-field references) — that
-# eliminates this manual sync. Tracked as a follow-up.
-resource "aws_secretsmanager_secret" "db_dsn" {
-  name        = "uknomi/cp/db-dsn"
-  description = "Constructed Postgres DSN for cp-api and cp-ingest. Set out-of-band; refresh after each RDS master-password rotation."
-  kms_key_id  = aws_kms_key.main.arn
-}
-
-resource "aws_secretsmanager_secret_version" "db_dsn" {
-  secret_id     = aws_secretsmanager_secret.db_dsn.id
-  secret_string = "PLACEHOLDER-set-the-real-dsn-out-of-band"
-
-  lifecycle {
-    ignore_changes = [secret_string]
-  }
-}
+# NOTE (issue #49): the hand-synced `uknomi/cp/db-dsn` secret was removed.
+# It held a constructed Postgres DSN that had to be re-synced by hand after
+# every RDS master-password rotation; missing a sync silently took the
+# control plane down (login failed as "invalid email or password"). The CP
+# services now read the password **directly** from the RDS-managed master
+# secret via a task-def secret JSON-key reference (`<arn>:password::`) and
+# build the DSN in-process (storage.ResolveDSN) — see locals.tf,
+# cp-api.tf / audit-mirror.tf / taxonomy-sync.tf, and the cp-ingest-service
+# module. Nothing to populate or rotate by hand anymore.
 
 # Cognito service-account credentials the cmd/taxonomy-sync task
 # uses to call api.uknomi.com (ADR-033 § 7). The secret was created
