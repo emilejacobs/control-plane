@@ -196,6 +196,11 @@ type Device struct {
 	// even when device.hostname diverged from the tailnet name (the
 	// bench-Mac drift case 2026-05-26).
 	TailscaleName *string
+	// DesiredAgentVersion is the fleet-update rollout target (migration
+	// 023, issue #40, ADR-035 §1/§4). Nil = untargeted. Rollout state is
+	// derived by comparing it against AgentVersion (the reported side);
+	// CP pushes agent.update until the two converge.
+	DesiredAgentVersion *string
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -214,7 +219,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       devices.site_id::text AS site_id,
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
-		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name
+		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
+		       devices.desired_agent_version
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -230,6 +236,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.SiteName, &d.ClientName,
 		&d.AssetNumber,
 		&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
+		&d.DesiredAgentVersion,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -255,7 +262,8 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       devices.mtls_cert_expires_at, devices.enrolled_at,
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
-		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name
+		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
+		       devices.desired_agent_version
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -278,6 +286,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.SiteName, &d.ClientName,
 			&d.AssetNumber,
 			&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
+			&d.DesiredAgentVersion,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -863,6 +872,81 @@ func (r *Registry) GetServiceConfig(ctx context.Context, deviceID string) (Servi
 		cfg.AllowListOverride = &list
 	}
 	return cfg, nil
+}
+
+// AgentVersionState returns a device's reported + desired agent version for
+// the reconnect reconcile check (issue #40). Unlike GetByID it is not
+// site-scoped: cp-ingest workers run without an operator scope, same as the
+// other ingest-side reads.
+func (r *Registry) AgentVersionState(ctx context.Context, deviceID string) (string, *string, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return "", nil, ErrDeviceNotFound
+	}
+	var reported string
+	var desired *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT agent_version, desired_agent_version FROM devices WHERE id = $1
+	`, deviceID).Scan(&reported, &desired)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, ErrDeviceNotFound
+		}
+		return "", nil, fmt.Errorf("agent version state: %w", err)
+	}
+	return reported, desired, nil
+}
+
+// RecordReportedAgentVersion persists the heartbeat-reported agent version
+// (issue #40) — after enrollment seeds agent_version, this is what keeps the
+// reported side of desired-vs-reported fresh as updates land. It returns the
+// device's desired version (nil = untargeted) so the heartbeat ingester can
+// make the reconcile decision without a second round trip.
+func (r *Registry) RecordReportedAgentVersion(ctx context.Context, deviceID, version string) (*string, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return nil, ErrDeviceNotFound
+	}
+	var desired *string
+	err := r.pool.QueryRow(ctx, `
+		UPDATE devices
+		SET agent_version = $2,
+		    updated_at    = now()
+		WHERE id = $1
+		RETURNING desired_agent_version
+	`, deviceID, version).Scan(&desired)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrDeviceNotFound
+		}
+		return nil, fmt.Errorf("record reported agent version: %w", err)
+	}
+	return desired, nil
+}
+
+// SetDesiredAgentVersion stamps the fleet-update rollout target on a set of
+// devices (issue #40, ADR-035 §1). Non-UUID or unknown ids in the set are
+// skipped, not an error — the returned count of stamped rows is the caller's
+// signal (the API layer rejects a target set that matched nothing). Last-wins
+// on re-target: canary promotion and abort are both just another set.
+func (r *Registry) SetDesiredAgentVersion(ctx context.Context, deviceIDs []string, version string) (int, error) {
+	valid := make([]string, 0, len(deviceIDs))
+	for _, id := range deviceIDs {
+		if _, err := uuid.Parse(id); err == nil {
+			valid = append(valid, id)
+		}
+	}
+	if len(valid) == 0 {
+		return 0, nil
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET desired_agent_version = $2,
+		    updated_at            = now()
+		WHERE id = ANY($1::uuid[])
+	`, valid, version)
+	if err != nil {
+		return 0, fmt.Errorf("set desired agent version: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // SetServiceConfig writes the per-device override. nil for either

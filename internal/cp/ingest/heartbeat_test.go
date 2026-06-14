@@ -43,6 +43,12 @@ func (f *fakeWriter) UpdateHeartbeatNetwork(_ context.Context, deviceID string, 
 	return f.networkErr
 }
 
+// RecordReportedAgentVersion satisfies LastSeenWriter for the pre-#40 tests;
+// versionWriter overrides it with a recording version.
+func (f *fakeWriter) RecordReportedAgentVersion(context.Context, string, string) (*string, error) {
+	return nil, nil
+}
+
 func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
 }
@@ -202,4 +208,141 @@ func TestPresenceIngesterPartialNetworkUsesNilForAbsentFields(t *testing.T) {
 	if got.tailscaleN != nil {
 		t.Errorf("tailscaleName: got %v want nil (absent in envelope)", *got.tailscaleN)
 	}
+}
+
+// versionCall records every RecordReportedAgentVersion invocation.
+type versionCall struct {
+	deviceID string
+	version  string
+}
+
+// versionWriter extends fakeWriter with the issue-#40 reported-version
+// persistence; desired is what RecordReportedAgentVersion hands back.
+type versionWriter struct {
+	fakeWriter
+	versionCalls []versionCall
+	desired      *string
+	versionErr   error
+}
+
+func (f *versionWriter) RecordReportedAgentVersion(_ context.Context, deviceID, version string) (*string, error) {
+	f.versionCalls = append(f.versionCalls, versionCall{deviceID, version})
+	return f.desired, f.versionErr
+}
+
+// pushCall records every reconcile push.
+type pushCall struct {
+	deviceID, version, correlationID string
+}
+
+type fakePusher struct {
+	calls []pushCall
+	err   error
+}
+
+func (f *fakePusher) Push(_ context.Context, deviceID, version, correlationID string) error {
+	f.calls = append(f.calls, pushCall{deviceID, version, correlationID})
+	return f.err
+}
+
+// Issue #40: a heartbeat carrying the agent's version persists it (the
+// reported side of desired-vs-reported). A device whose desired version
+// matches gets no push.
+func TestPresenceIngesterPersistsReportedVersionNoPushWhenConverged(t *testing.T) {
+	desired := "v1.4.0"
+	p := presence.New()
+	w := &versionWriter{desired: &desired}
+	push := &fakePusher{}
+	ing := NewPresenceIngester(p, w, fixedClock(time.Now()))
+	ing.Updates = push
+
+	hb := Heartbeat{DeviceID: "dev-1", CorrelationID: "corr-1", Version: "v1.4.0"}
+	if err := ing.Handle(context.Background(), hb); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(w.versionCalls) != 1 || w.versionCalls[0] != (versionCall{"dev-1", "v1.4.0"}) {
+		t.Errorf("version calls = %+v, want one dev-1/v1.4.0", w.versionCalls)
+	}
+	if len(push.calls) != 0 {
+		t.Errorf("pushed despite converged version: %+v", push.calls)
+	}
+}
+
+// Issue #40 reconcile: a heartbeat reporting a version != desired re-pushes
+// agent.update — this is the convergence engine for devices that missed (or
+// failed) the initial push.
+func TestPresenceIngesterRepushesOnVersionMismatch(t *testing.T) {
+	desired := "v1.5.0"
+	p := presence.New()
+	w := &versionWriter{desired: &desired}
+	push := &fakePusher{}
+	ing := NewPresenceIngester(p, w, fixedClock(time.Now()))
+	ing.Updates = push
+
+	hb := Heartbeat{DeviceID: "dev-1", CorrelationID: "corr-7", Version: "v1.4.0"}
+	if err := ing.Handle(context.Background(), hb); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(push.calls) != 1 || push.calls[0] != (pushCall{"dev-1", "v1.5.0", "corr-7"}) {
+		t.Errorf("push calls = %+v, want one dev-1/v1.5.0/corr-7", push.calls)
+	}
+}
+
+// An untargeted device (desired NULL) never gets a push, whatever it reports.
+func TestPresenceIngesterNoPushWhenUntargeted(t *testing.T) {
+	p := presence.New()
+	w := &versionWriter{desired: nil}
+	push := &fakePusher{}
+	ing := NewPresenceIngester(p, w, fixedClock(time.Now()))
+	ing.Updates = push
+
+	hb := Heartbeat{DeviceID: "dev-1", CorrelationID: "corr-1", Version: "v1.4.0"}
+	if err := ing.Handle(context.Background(), hb); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(push.calls) != 0 {
+		t.Errorf("pushed an untargeted device: %+v", push.calls)
+	}
+}
+
+// A push failure must not fail heartbeat processing (the next heartbeat
+// retries); a heartbeat without a version (pre-#40 agent) skips the
+// version path entirely; and with no pusher configured (cp-ingest without
+// AGENT_DIST_BUCKET) the version still persists.
+func TestPresenceIngesterVersionEdgeCases(t *testing.T) {
+	desired := "v1.5.0"
+
+	t.Run("push failure is swallowed", func(t *testing.T) {
+		w := &versionWriter{desired: &desired}
+		push := &fakePusher{err: errors.New("iot down")}
+		ing := NewPresenceIngester(presence.New(), w, fixedClock(time.Now()))
+		ing.Updates = push
+		if err := ing.Handle(context.Background(), Heartbeat{DeviceID: "dev-1", CorrelationID: "c", Version: "v1.4.0"}); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	})
+
+	t.Run("no version in heartbeat", func(t *testing.T) {
+		w := &versionWriter{desired: &desired}
+		push := &fakePusher{}
+		ing := NewPresenceIngester(presence.New(), w, fixedClock(time.Now()))
+		ing.Updates = push
+		if err := ing.Handle(context.Background(), Heartbeat{DeviceID: "dev-1", CorrelationID: "c"}); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+		if len(w.versionCalls) != 0 || len(push.calls) != 0 {
+			t.Errorf("version path ran without a version: %+v %+v", w.versionCalls, push.calls)
+		}
+	})
+
+	t.Run("nil pusher still persists version", func(t *testing.T) {
+		w := &versionWriter{desired: &desired}
+		ing := NewPresenceIngester(presence.New(), w, fixedClock(time.Now()))
+		if err := ing.Handle(context.Background(), Heartbeat{DeviceID: "dev-1", CorrelationID: "c", Version: "v1.4.0"}); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+		if len(w.versionCalls) != 1 {
+			t.Errorf("version not persisted with nil pusher: %+v", w.versionCalls)
+		}
+	})
 }

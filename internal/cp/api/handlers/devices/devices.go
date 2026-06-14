@@ -35,12 +35,16 @@ type GetHandler struct {
 func NewGet(svc Service) *GetHandler { return &GetHandler{svc: svc, now: time.Now} }
 
 type response struct {
-	DeviceID              string  `json:"device_id"`
-	Hostname              string  `json:"hostname"`
-	HardwareUUID          string  `json:"hardware_uuid"`
-	HardwareKind          string  `json:"hardware_kind"`
-	OSVersion             string  `json:"os_version"`
-	AgentVersion          string  `json:"agent_version"`
+	DeviceID     string `json:"device_id"`
+	Hostname     string `json:"hostname"`
+	HardwareUUID string `json:"hardware_uuid"`
+	HardwareKind string `json:"hardware_kind"`
+	OSVersion    string `json:"os_version"`
+	AgentVersion string `json:"agent_version"`
+	// DesiredAgentVersion is the fleet-update rollout target (issue
+	// #40); null = untargeted. The per-device view can render
+	// "updating to X" while it differs from agent_version.
+	DesiredAgentVersion   *string `json:"desired_agent_version"`
 	IoTThingARN           string  `json:"iot_thing_arn"`
 	IsOnline              bool    `json:"is_online"`
 	LastSeenAgoSeconds    *int64  `json:"last_seen_ago_seconds"`
@@ -236,6 +240,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		HardwareKind:          dev.HardwareKind,
 		OSVersion:             dev.OSVersion,
 		AgentVersion:          dev.AgentVersion,
+		DesiredAgentVersion:   dev.DesiredAgentVersion,
 		IoTThingARN:           dev.IoTThingARN,
 		IsOnline:              dev.IsOnline,
 		LastSeenAgoSeconds:    agoSeconds,

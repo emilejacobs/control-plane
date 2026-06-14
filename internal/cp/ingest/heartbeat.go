@@ -7,6 +7,8 @@ package ingest
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/presence"
@@ -30,6 +32,11 @@ type Heartbeat struct {
 	LanIP         string `json:"lan_ip,omitempty"`
 	TailscaleIP   string `json:"tailscale_ip,omitempty"`
 	TailscaleName string `json:"tailscale_name,omitempty"`
+	// Version is the agent's self-reported version (issue #40) — the
+	// reported side of the fleet-update desired-vs-reported model. The
+	// agent has always published it in the telemetry payload; empty means
+	// a pre-#40 envelope and the version path is skipped.
+	Version string `json:"version,omitempty"`
 }
 
 // Correlation satisfies sqsconsumer.Correlated.
@@ -46,6 +53,18 @@ func (h Heartbeat) Correlation() string { return h.CorrelationID }
 type LastSeenWriter interface {
 	UpdateLastSeen(ctx context.Context, deviceID string, at time.Time) error
 	UpdateHeartbeatNetwork(ctx context.Context, deviceID string, lanIP, tailscaleIP, tailscaleName *string) error
+	// RecordReportedAgentVersion persists the heartbeat-reported agent
+	// version and returns the device's desired version (nil =
+	// untargeted) so the ingester can make the reconcile decision in
+	// the same round trip.
+	RecordReportedAgentVersion(ctx context.Context, deviceID, version string) (desired *string, err error)
+}
+
+// UpdatePusher re-publishes agent.update toward a device whose reported
+// version drifted from desired (issue #40, ADR-035 §1).
+// *agentrollout.Pusher satisfies it.
+type UpdatePusher interface {
+	Push(ctx context.Context, deviceID, version, correlationID string) error
 }
 
 // PresenceIngester is the SQSConsumer handler for the heartbeat queue: it
@@ -55,6 +74,16 @@ type PresenceIngester struct {
 	presence *presence.Presence
 	writer   LastSeenWriter
 	now      func() time.Time
+
+	// Updates, when non-nil, enables the issue-#40 reconcile path: a
+	// heartbeat reporting a version != the device's desired version
+	// re-pushes agent.update. nil (cp-ingest without AGENT_DIST_BUCKET)
+	// still persists the reported version, just never pushes.
+	Updates UpdatePusher
+	// Logger receives reconcile push failures (the next heartbeat
+	// retries; a push failure never fails heartbeat ingestion). nil
+	// discards.
+	Logger *slog.Logger
 }
 
 // NewPresenceIngester builds the ingester. now defaults to time.Now.
@@ -100,8 +129,35 @@ func (i *PresenceIngester) Handle(ctx context.Context, hb Heartbeat) error {
 			return err
 		}
 	}
+	if hb.Version != "" {
+		desired, err := i.writer.RecordReportedAgentVersion(ctx, hb.DeviceID, hb.Version)
+		if err != nil {
+			if errors.Is(err, registry.ErrDeviceNotFound) {
+				return sqsconsumer.Poison(err)
+			}
+			return err
+		}
+		// Reconcile (issue #40): reported != desired means this device
+		// missed (or failed) the rollout push — re-push. Push failure is
+		// logged, not returned: the heartbeat itself ingested fine and
+		// the next heartbeat retries the push.
+		if i.Updates != nil && desired != nil && *desired != hb.Version {
+			if err := i.Updates.Push(ctx, hb.DeviceID, *desired, hb.CorrelationID); err != nil {
+				i.logger().Warn("reconcile push failed; next heartbeat retries",
+					"device_id", hb.DeviceID, "desired", *desired,
+					"reported", hb.Version, "err", err)
+			}
+		}
+	}
 	i.presence.RecordHeartbeat(hb.DeviceID, at)
 	return nil
+}
+
+func (i *PresenceIngester) logger() *slog.Logger {
+	if i.Logger != nil {
+		return i.Logger
+	}
+	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
 // optionalString returns nil for the empty string ("agent omitted
