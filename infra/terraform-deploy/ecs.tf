@@ -61,8 +61,16 @@ resource "aws_iam_role_policy_attachment" "task_execution_managed" {
 # anything but Secrets Manager).
 data "aws_iam_policy_document" "task_execution_secrets" {
   statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:uknomi/cp/*"]
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:uknomi/cp/*",
+      # The RDS-managed master secret (issue #49): services read the DB
+      # password directly from it via a task-def secret reference, so no
+      # hand-synced db-dsn copy goes stale on rotation. Its name is
+      # AWS-generated (rds!db-…), so it's listed explicitly rather than
+      # under the uknomi/cp/* prefix.
+      aws_db_instance.main.master_user_secret[0].secret_arn,
+    ]
   }
   statement {
     actions   = ["kms:Decrypt"]

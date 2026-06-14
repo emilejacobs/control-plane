@@ -53,12 +53,20 @@ resource "aws_ecs_task_definition" "this" {
         # disables the consumer; populating both turns it on.
         { name = "CMD_RESULT_QUEUE_URL", value = var.cmd_result_queue_url },
         { name = "CMD_RESULT_DLQ_URL", value = var.cmd_result_dlq_url },
+        # Postgres connection (issue #49). Non-secret parts; the password is
+        # injected separately from the RDS-managed secret below, and
+        # cp-ingest builds the DSN in-process via storage.ResolveDSN.
+        { name = "DB_HOST", value = var.db_host },
+        { name = "DB_PORT", value = var.db_port },
+        { name = "DB_NAME", value = var.db_name },
+        { name = "DB_USER", value = var.db_user },
+        { name = "DB_SSLMODE", value = var.db_sslmode },
       ]
 
-      # The DSN carries the DB password — injected from Secrets Manager,
-      # never baked into the task definition.
+      # The DB password is injected from the RDS-managed master secret's
+      # `password` JSON key — no hand-synced DSN copy to go stale on rotation.
       secrets = [
-        { name = "DB_DSN", valueFrom = var.db_dsn_secret_arn },
+        { name = "DB_PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::" },
       ]
 
       logConfiguration = {

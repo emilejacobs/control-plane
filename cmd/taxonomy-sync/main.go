@@ -5,7 +5,9 @@
 //
 // Required env:
 //
-//	DB_DSN                   Postgres DSN (postgres://...)
+//	DB_PASSWORD              Postgres password from the RDS-managed secret (#49);
+//	                         with DB_HOST (+ optional DB_PORT/DB_NAME/DB_USER/
+//	                         DB_SSLMODE) the DSN is built in-process. Or DB_DSN.
 //	TAXONOMY_API_BASE_URL    e.g. https://api.uknomi.com
 //	TAXONOMY_USERNAME        Cognito service-account username
 //	TAXONOMY_PASSWORD        Cognito service-account password
@@ -27,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
+	"github.com/emilejacobs/control-plane/internal/cp/storage"
 	"github.com/emilejacobs/control-plane/internal/cp/taxonomy"
 )
 
@@ -48,7 +51,10 @@ func run(logger *slog.Logger) error {
 	dryRun := flag.Bool("dry-run", false, "Exercise auth + parsing without writing to Postgres.")
 	flag.Parse()
 
-	dsn := mustEnv("DB_DSN")
+	dsn, err := storage.ResolveDSN(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("resolve db dsn: %w", err)
+	}
 	apiURL := mustEnv("TAXONOMY_API_BASE_URL")
 	username := mustEnv("TAXONOMY_USERNAME")
 	password := mustEnv("TAXONOMY_PASSWORD")
