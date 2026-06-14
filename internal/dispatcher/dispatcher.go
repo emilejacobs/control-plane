@@ -27,6 +27,13 @@ type Dispatcher struct {
 	handlers map[string]Handler
 	logger   *slog.Logger
 
+	// verify, when set, authenticates a command before its handler runs;
+	// requireSig is the set of command types it gates. Types outside the
+	// set dispatch unsigned (ADR-028 forward-compat). See
+	// WithSignatureVerification.
+	verify     func(envelope.Command) error
+	requireSig map[string]bool
+
 	mu            sync.RWMutex
 	lastCommandAt time.Time
 }
@@ -44,6 +51,23 @@ type Option func(*Dispatcher)
 
 func WithLogger(l *slog.Logger) Option {
 	return func(d *Dispatcher) { d.logger = l }
+}
+
+// WithSignatureVerification gates the named command types on a valid envelope
+// signature (issue #41, ADR-035 §2): before such a command's handler runs,
+// verify must accept it, else the dispatch returns a command.bad_signature
+// result and the handler never executes. Command types not listed dispatch
+// unsigned — the forward-compat path for the Phase 0/2 unsigned handlers
+// (ADR-028). The agent wires verify to cmdsign.VerifyCommand and requires the
+// high-blast-radius "agent.update".
+func WithSignatureVerification(verify func(envelope.Command) error, requiredTypes ...string) Option {
+	return func(d *Dispatcher) {
+		d.verify = verify
+		d.requireSig = make(map[string]bool, len(requiredTypes))
+		for _, t := range requiredTypes {
+			d.requireSig[t] = true
+		}
+	}
 }
 
 func New(opts ...Option) *Dispatcher {
@@ -83,6 +107,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, raw []byte) (out []byte, err 
 				Message: "unknown command type: " + cmd.Type,
 			},
 		})
+	}
+
+	// Authenticate a signature-required command before it runs. A forged or
+	// unsigned agent.update is refused here — the handler never sees it.
+	if d.verify != nil && d.requireSig[cmd.Type] {
+		if err := d.verify(cmd); err != nil {
+			log.Warn("command signature verification failed", "error", err)
+			return json.Marshal(envelope.Result{
+				CorrelationID: cmd.CorrelationID,
+				CommandID:     cmd.CommandID,
+				Type:          cmd.Type,
+				Success:       false,
+				Error: &envelope.ResultError{
+					Code:    "command.bad_signature",
+					Message: "command signature verification failed",
+				},
+			})
+		}
 	}
 
 	defer func() {
