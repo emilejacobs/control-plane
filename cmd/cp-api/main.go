@@ -3,7 +3,11 @@
 //
 // Required env:
 //
-//	DB_DSN              Postgres DSN (postgres://...)
+//	DB_PASSWORD         Postgres password — injected from the RDS-managed
+//	                    secret (issue #49). With DB_HOST (and optional
+//	                    DB_PORT/DB_NAME/DB_USER/DB_SSLMODE, defaulting to
+//	                    5432/uknomi_cp/uknomi_admin/require) the DSN is built
+//	                    in-process. Or set DB_DSN with a full postgres:// URL.
 //	IOT_POLICY_NAME     name of the IoT Core policy to attach to each device cert
 //	JWT_SIGNING_KEY     base64-encoded HS256 signing key, >= 32 bytes decoded (ADR-010)
 //	TOTP_ENCRYPTION_KEY base64-encoded AES-256 key, exactly 32 bytes decoded (TOTP secret at rest)
@@ -79,7 +83,10 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	dsn := mustEnv("DB_DSN")
+	dsn, err := storage.ResolveDSN(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("resolve db dsn: %w", err)
+	}
 	policyName := mustEnv("IOT_POLICY_NAME")
 	bootstrapSecretID := envOr("CP_BOOTSTRAP_SECRET_ID", "uknomi/cp/bootstrap-key")
 	port := envOr("PORT", "8080")

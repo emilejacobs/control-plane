@@ -4,7 +4,9 @@
 //
 // Required env:
 //
-//	DB_DSN          Postgres DSN (postgres://...)
+//	DB_PASSWORD     Postgres password from the RDS-managed secret (#49); with
+//	                DB_HOST (+ optional DB_PORT/DB_NAME/DB_USER/DB_SSLMODE) the
+//	                DSN is built in-process. Or set DB_DSN with a full URL.
 //	AUDIT_BUCKET    Name of the audit-mirror S3 bucket
 //
 // Optional env:
@@ -34,6 +36,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/auditmirror"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
+	"github.com/emilejacobs/control-plane/internal/cp/storage"
 )
 
 func main() {
@@ -53,7 +56,10 @@ func run(logger *slog.Logger) error {
 	toFlag := flag.String("to", "", "Backfill end UTC date in YYYY-MM-DD form. Requires --from.")
 	flag.Parse()
 
-	dsn := mustEnv("DB_DSN")
+	dsn, err := storage.ResolveDSN(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("resolve db dsn: %w", err)
+	}
 	bucket := mustEnv("AUDIT_BUCKET")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
