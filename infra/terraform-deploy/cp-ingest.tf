@@ -133,6 +133,11 @@ module "cp_ingest" {
   db_name                = aws_db_instance.main.db_name
   db_user                = aws_db_instance.main.username
 
+  # Agent fleet-update reconcile (#40/#41): re-push signed agent.update to
+  # drifted devices. Set together — a verifying agent rejects unsigned.
+  agent_dist_bucket         = aws_s3_bucket.main["agent-dist"].bucket
+  command_signing_secret_id = "uknomi/cp/command-signing-key"
+
   desired_count = 1
 
   tags = var.tags
