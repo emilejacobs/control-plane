@@ -193,7 +193,9 @@ Phase 2's second slice — per-device allow-list overrides — landed and **esta
 
 Phase 2's third slice — on-demand log tail — reuses everything slice 2 built: same cmd channel, same cmd-result pipeline, same authz model. An operator's `POST /devices/{id}/logs/tail` persists a per-request row in `device_log_tails` (migration 013, PK `correlation_id`) and publishes a `log.tail` cmd. The agent's `internal/handlers/logtail.Handler` resolves the operator-supplied `log_name` against a per-OS allow-list (`agent.PerOSAllowList()`), runs `agent.TailFile` (walks backwards from EOF in 64 KB blocks, caps content at 200 KB to fit MQTT, refuses files that look binary on a tail-window heuristic), and returns the lines in the cmd-result `Result` field. `cp-ingest`'s `CmdResultIngester` gains a `log.tail` branch that calls `CompleteLogTail` (success → row gets content + truncation) or `FailLogTail` (error → row gets the agent's error code/message). A new `LogTailSweeper` goroutine in `cp-ingest` runs hourly, deleting rows older than 24h. The dashboard's per-device page gains a `LogsPanel` Card with a log dropdown + line count + Fetch button; the panel polls the GET endpoint every 2s until status flips to `done` or `error` (or 30s timeout). The same ADR-028 unsigned-handler carve-out applies — the allow-list lookup is the hard security boundary (an attacker who can publish to `devices/{id}/cmd` can only exfil files an SSH'd operator could already read).
 
-Not yet built: command execution (Phase 3); the rest of Phase 2 (Edge UI proxy, camera snapshot, site/client assignment).
+Phase 2's captures pipeline — the first device→S3 binary-artifact path (issue #8, ADR-030 § 7) — landed: a polymorphic `device_captures` index (migration 022, `kind ∈ {snapshot, audio, transcript}`), the `uknomi-cp-captures` bucket (snapshots expire after 90 days; audio/transcripts kept), and presigned-URL up/download so CP never proxies the bytes. cp-ingest's `CmdResultIngester` gained the agent-initiated generic handshake (`upload.request` → `upload.url` → `upload.complete`) and the CP-initiated on-demand snapshot (`POST /devices/{id}/snapshot` → `camera.snapshot` with an embedded presigned PUT → `InsertCapture`). The dashboard's Cameras panel shows a per-camera latest-snapshot thumbnail (signed GET URL) + a "Refresh snapshot" button. See § Key flows → Captures pipeline. Scheduled snapshots (#9) and the audio producer (#10) build on this.
+
+Not yet built: command execution (Phase 3); the rest of Phase 2 (Edge UI proxy, scheduled snapshots #9, audio captures #10, site/client assignment).
 
 ## Cloud infrastructure
 
@@ -308,6 +310,47 @@ Operator interacts inline; all traffic is auth'd at CP boundary
 ```
 
 This works identically for the future mobile app — clients never touch Tailscale themselves.
+
+### Captures pipeline (device → S3)
+
+The first device→S3 binary-artifact pipeline (issue #8, ADR-030 § 7). CP never proxies the bytes — it presigns short-lived S3 URLs the agent and browser use directly. Two upload paths feed one `device_captures` index + one read surface.
+
+**CP-initiated (on-demand camera snapshot):**
+
+```
+Operator clicks "Refresh snapshot" on a camera row
+  ↓
+POST /devices/{id}/snapshot { camera_id }
+  ↓
+cp-api mints an s3_key + presigns a PUT (image/jpeg, 5 min),
+publishes camera.snapshot { camera_id, s3_key, put_url } on devices/{id}/cmd
+  ↓
+agent resolves the RTSP URL from its cameras file, ffmpeg one JPEG frame,
+HTTP PUTs the bytes straight to S3, ACKs { s3_key, size } on cmd-result
+  ↓
+cp-ingest's CmdResultIngester routes camera.snapshot → InsertCapture
+(kind=snapshot, camera_id in metadata)
+  ↓
+dashboard re-polls GET /devices/{id}/captures?kind=snapshot, fetches a
+signed GET URL per latest-per-camera, renders the thumbnail
+```
+
+The snapshot embeds the presigned PUT in the command rather than using the generic handshake below, because the agent's ordered command router would deadlock if a command handler blocked waiting for a reply on the same channel.
+
+**Agent-initiated (generic upload — audio/transcripts, fsnotify producers):**
+
+```
+agent (outside any command handler) publishes upload.request
+  { kind, content_type, size } on cmd-result
+  ↓
+cp-ingest mints an s3_key + presigns a PUT, publishes upload.url on devices/{id}/cmd
+  ↓
+agent HTTP PUTs the bytes, then publishes upload.complete { s3_key, size } on cmd-result
+  ↓
+cp-ingest → InsertCapture
+```
+
+Storage: bucket `uknomi-cp-captures`, prefixes `snapshots/` (90-day lifecycle expiry), `audio/` + `transcripts/` (kept indefinitely). The agent only ever uploads to CP-minted keys — it never chooses its own S3 path.
 
 ## Mobile readiness
 
