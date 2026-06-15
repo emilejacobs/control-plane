@@ -221,6 +221,44 @@ func TestGetDeviceByIDIncludesSiteAndClient(t *testing.T) {
 	}
 }
 
+// Registry.List must populate Device.SiteID, not just SiteName — the rollout
+// site picker (#64) builds its dropdown from each device's site_id, so a List
+// that scans site_name but drops site_id leaves every device "unassigned" and
+// the picker shows "No assigned sites in scope". (GetByID already scanned it;
+// List silently omitted it.)
+func TestRegistryListPopulatesSiteID(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	clientID := insertClient(t, ctx, srv, "Acme Corp")
+	siteID := insertSite(t, ctx, srv, clientID, "Acme HQ")
+	sitedID := insertDeviceAtSite(t, ctx, srv, "mac-sited", siteID)
+	unsitedID := enrollForTest(t, srv, "mac-unsited", "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c")
+
+	devices, err := srv.Registry.List(staffCtx(ctx))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	bySited := map[string]*string{}
+	for _, d := range devices {
+		bySited[d.ID] = d.SiteID
+	}
+
+	got, ok := bySited[sitedID]
+	if !ok {
+		t.Fatalf("sited device %s not in List", sitedID)
+	}
+	if got == nil || *got != siteID {
+		t.Errorf("sited device SiteID: got %v want %q", got, siteID)
+	}
+	if unsited, ok := bySited[unsitedID]; !ok {
+		t.Fatalf("unsited device %s not in List", unsitedID)
+	} else if unsited != nil {
+		t.Errorf("unsited device SiteID: got %v want nil", *unsited)
+	}
+}
+
 // decodeDeviceGet issues an authenticated GET /devices/{id} and returns the
 // decoded JSON object.
 func decodeDeviceGet(t *testing.T, baseURL, deviceID, token string) map[string]any {
