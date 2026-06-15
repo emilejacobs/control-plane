@@ -74,10 +74,14 @@ func (r Request) Validate() error {
 }
 
 // URL is the CP→agent grant: the key CP assigned and a short-lived presigned
-// PUT URL the agent uploads to.
+// PUT URL the agent uploads to. CorrelationID echoes the originating
+// upload.request so the agent's uploader can match a grant to the in-flight
+// upload — the dispatcher hands a handler only the command args, not the
+// envelope, so the id must travel inside the grant body.
 type URL struct {
-	S3Key  string `json:"s3_key"`
-	PutURL string `json:"put_url"`
+	CorrelationID string `json:"correlation_id"`
+	S3Key         string `json:"s3_key"`
+	PutURL        string `json:"put_url"`
 }
 
 // Complete is the agent→CP confirmation that the PUT landed; CP indexes a

@@ -105,8 +105,8 @@ func TestCmdResultUploadRequestPresignsAndPublishesURL(t *testing.T) {
 	if err := json.Unmarshal(cmd.Args, &grant); err != nil {
 		t.Fatalf("cmd.Args not an upload.URL: %v", err)
 	}
-	if grant.S3Key != wantKey || grant.PutURL == "" {
-		t.Errorf("grant = %+v, want key %q + a PUT URL", grant, wantKey)
+	if grant.S3Key != wantKey || grant.PutURL == "" || grant.CorrelationID != "corr-1" {
+		t.Errorf("grant = %+v, want key %q + a PUT URL + corr-1", grant, wantKey)
 	}
 	// upload.request must not itself write a capture row — that waits for complete.
 	if len(applier.captures) != 0 {
