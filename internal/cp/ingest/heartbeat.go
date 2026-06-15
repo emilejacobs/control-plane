@@ -37,6 +37,11 @@ type Heartbeat struct {
 	// agent has always published it in the telemetry payload; empty means
 	// a pre-#40 envelope and the version path is skipped.
 	Version string `json:"version,omitempty"`
+	// RolledBackVersion is the version the resident wrapper most recently
+	// reverted (migration 024). The agent reports it from rollback.log when
+	// present; empty/omitted means no rollback to record (and the previously
+	// stored value is left untouched).
+	RolledBackVersion string `json:"rolled_back_version,omitempty"`
 }
 
 // Correlation satisfies sqsconsumer.Correlated.
@@ -53,6 +58,10 @@ func (h Heartbeat) Correlation() string { return h.CorrelationID }
 type LastSeenWriter interface {
 	UpdateLastSeen(ctx context.Context, deviceID string, at time.Time) error
 	UpdateHeartbeatNetwork(ctx context.Context, deviceID string, lanIP, tailscaleIP, tailscaleName *string) error
+	// RecordRolledBackVersion persists the version the resident wrapper most
+	// recently reverted on the device (migration 024), reported in the
+	// heartbeat. Called only when the field is present.
+	RecordRolledBackVersion(ctx context.Context, deviceID, version string) error
 	// RecordReportedAgentVersion persists the heartbeat-reported agent
 	// version and returns the device's desired version (nil =
 	// untargeted) so the ingester can make the reconcile decision in
@@ -123,6 +132,14 @@ func (i *PresenceIngester) Handle(ctx context.Context, hb Heartbeat) error {
 			optionalString(hb.TailscaleIP),
 			optionalString(hb.TailscaleName),
 		); err != nil {
+			if errors.Is(err, registry.ErrDeviceNotFound) {
+				return sqsconsumer.Poison(err)
+			}
+			return err
+		}
+	}
+	if hb.RolledBackVersion != "" {
+		if err := i.writer.RecordRolledBackVersion(ctx, hb.DeviceID, hb.RolledBackVersion); err != nil {
 			if errors.Is(err, registry.ErrDeviceNotFound) {
 				return sqsconsumer.Poison(err)
 			}

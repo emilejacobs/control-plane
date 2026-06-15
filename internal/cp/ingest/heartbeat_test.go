@@ -27,10 +27,17 @@ type networkCall struct {
 // fakeWriter records every UpdateLastSeen call and returns its configured
 // error.
 type fakeWriter struct {
-	err          error
-	calls        []writeCall
-	networkErr   error
-	networkCalls []networkCall
+	err             error
+	calls           []writeCall
+	networkErr      error
+	networkCalls    []networkCall
+	rolledBackErr   error
+	rolledBackCalls []rolledBackCall
+}
+
+type rolledBackCall struct {
+	deviceID string
+	version  string
 }
 
 func (f *fakeWriter) UpdateLastSeen(_ context.Context, deviceID string, at time.Time) error {
@@ -49,8 +56,42 @@ func (f *fakeWriter) RecordReportedAgentVersion(context.Context, string, string)
 	return nil, nil
 }
 
+func (f *fakeWriter) RecordRolledBackVersion(_ context.Context, deviceID, version string) error {
+	f.rolledBackCalls = append(f.rolledBackCalls, rolledBackCall{deviceID, version})
+	return f.rolledBackErr
+}
+
 func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
+}
+
+// A heartbeat carrying rolled_back_version persists it (issue #42 follow-up);
+// an absent field skips the write so the prior value is left untouched.
+func TestPresenceIngesterRecordsRolledBackVersion(t *testing.T) {
+	at := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	w := &fakeWriter{}
+	ing := NewPresenceIngester(presence.New(), w, fixedClock(at))
+
+	if err := ing.Handle(context.Background(),
+		Heartbeat{DeviceID: "dev-1", RolledBackVersion: "1.4.1"}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(w.rolledBackCalls) != 1 ||
+		w.rolledBackCalls[0].deviceID != "dev-1" ||
+		w.rolledBackCalls[0].version != "1.4.1" {
+		t.Fatalf("RecordRolledBackVersion calls: got %+v want one {dev-1, 1.4.1}", w.rolledBackCalls)
+	}
+
+	// No rollback field → no write.
+	w2 := &fakeWriter{}
+	ing2 := NewPresenceIngester(presence.New(), w2, fixedClock(at))
+	if err := ing2.Handle(context.Background(),
+		Heartbeat{DeviceID: "dev-1", Version: "1.4.1"}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(w2.rolledBackCalls) != 0 {
+		t.Errorf("absent rolled_back_version should skip the write; got %+v", w2.rolledBackCalls)
+	}
 }
 
 func TestPresenceIngesterHappyPath(t *testing.T) {

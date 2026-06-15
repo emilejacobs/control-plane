@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"runtime"
 	"sync"
 	"time"
@@ -360,7 +361,33 @@ func (a *Agent) defaultCollectors() []func() map[string]any {
 		// cp-ingest's conditional UPDATE doesn't clobber stored
 		// values when the agent loses tailnet visibility mid-life.
 		NewNetworkCollector(SystemInterfaceAddrs{}, SystemTailscaleStatusRunner{}),
+		// Rollout rollback signal (#42 follow-up): when the resident wrapper
+		// has reverted a failed candidate it appends the version to
+		// <UpdateDir>/rollback.log. Report the most recent one so CP can show
+		// "rolled_back" instead of an indefinite "in_flight". OMITTED when
+		// there's nothing to report (no UpdateDir, or no rollback yet).
+		func() map[string]any {
+			if v := a.rolledBackVersion(); v != "" {
+				return map[string]any{"rolled_back_version": v}
+			}
+			return map[string]any{}
+		},
 	}
+}
+
+// rolledBackVersion returns the version the resident wrapper most recently
+// reverted — the last line of <UpdateDir>/rollback.log — or "" when the agent
+// isn't running under the wrapper or no rollback has been recorded.
+func (a *Agent) rolledBackVersion() string {
+	if a.updateDir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(a.updateDir, "rollback.log"))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func (a *Agent) Start() error {

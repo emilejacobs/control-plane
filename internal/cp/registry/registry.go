@@ -201,6 +201,13 @@ type Device struct {
 	// derived by comparing it against AgentVersion (the reported side);
 	// CP pushes agent.update until the two converge.
 	DesiredAgentVersion *string
+
+	// RolledBackVersion is the version the resident wrapper most recently
+	// reverted after a failed health gate (migration 024). The agent reports
+	// it in its heartbeat. Nil = no rollback reported. The rollout view shows
+	// "rolled_back" when this equals DesiredAgentVersion on an un-converged
+	// device — it tried the desired version and reverted.
+	RolledBackVersion *string
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -220,7 +227,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
-		       devices.desired_agent_version
+		       devices.desired_agent_version, devices.rolled_back_version
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -236,7 +243,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.SiteName, &d.ClientName,
 		&d.AssetNumber,
 		&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
-		&d.DesiredAgentVersion,
+		&d.DesiredAgentVersion, &d.RolledBackVersion,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -263,7 +270,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
-		       devices.desired_agent_version
+		       devices.desired_agent_version, devices.rolled_back_version
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -286,7 +293,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.SiteName, &d.ClientName,
 			&d.AssetNumber,
 			&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
-			&d.DesiredAgentVersion,
+			&d.DesiredAgentVersion, &d.RolledBackVersion,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -920,6 +927,29 @@ func (r *Registry) RecordReportedAgentVersion(ctx context.Context, deviceID, ver
 		return nil, fmt.Errorf("record reported agent version: %w", err)
 	}
 	return desired, nil
+}
+
+// RecordRolledBackVersion persists the version the resident wrapper most
+// recently reverted on a device (migration 024), reported in the heartbeat.
+// It's a last-wins write — the agent always reports the latest rollback — so
+// the rollout view can flag a device that tried the desired version and
+// reverted. Unknown / non-UUID ids are reported as ErrDeviceNotFound.
+func (r *Registry) RecordRolledBackVersion(ctx context.Context, deviceID, version string) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET rolled_back_version = $2, updated_at = now()
+		WHERE id = $1
+	`, deviceID, version)
+	if err != nil {
+		return fmt.Errorf("record rolled back version: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
 }
 
 // SetDesiredAgentVersion stamps the fleet-update rollout target on a set of
