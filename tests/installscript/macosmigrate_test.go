@@ -131,6 +131,100 @@ func macSandbox(t *testing.T) (root string, env []string) {
 	return root, env
 }
 
+// TestMigratePreservesEnrollment locks the core safety property: migration
+// must NOT re-enroll. The device's cert, private key, CA, and agent-config
+// under /var/uknomi are left byte-for-byte untouched — a migration that
+// rewrote them would orphan the device's IoT identity across the whole fleet.
+func TestMigratePreservesEnrollment(t *testing.T) {
+	requireBash(t)
+	root, env := macSandbox(t)
+
+	runtimeDir := filepath.Join(root, "var", "uknomi")
+	before := map[string][]byte{}
+	for _, name := range []string{"cert.pem", "key.pem", "ca.pem", "agent-config.json"} {
+		b, err := os.ReadFile(filepath.Join(runtimeDir, name))
+		if err != nil {
+			t.Fatalf("read %s before: %v", name, err)
+		}
+		before[name] = b
+	}
+
+	out, err := runMigrate(t, env)
+	if err != nil {
+		t.Fatalf("migrate exited %v\nout:\n%s", err, out)
+	}
+
+	for name, want := range before {
+		got, err := os.ReadFile(filepath.Join(runtimeDir, name))
+		if err != nil {
+			t.Fatalf("read %s after: %v", name, err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("%s was modified by migration\nbefore: %s\nafter:  %s", name, want, got)
+		}
+	}
+}
+
+// TestMigrateRefusesWhenNotEnrolled locks the guard: on a Mac with no
+// agent-config (never enrolled), migration must refuse with a non-zero exit
+// rather than lay down a crash-looping wrapper that has no device identity.
+func TestMigrateRefusesWhenNotEnrolled(t *testing.T) {
+	requireBash(t)
+	root, env := macSandbox(t)
+
+	// Remove the enrollment marker.
+	if err := os.Remove(filepath.Join(root, "var", "uknomi", "agent-config.json")); err != nil {
+		t.Fatalf("rm agent-config: %v", err)
+	}
+
+	out, err := runMigrate(t, env)
+	if err == nil {
+		t.Fatalf("migration succeeded on an unenrolled Mac; want non-zero exit\nout:\n%s", out)
+	}
+	// And it must not have laid down the wrapper layout.
+	if _, statErr := os.Stat(filepath.Join(root, "var/uknomi/agent-update/current")); statErr == nil {
+		t.Errorf("migration laid out AGENT_DIR/current despite refusing")
+	}
+}
+
+// TestMigrateIsIdempotent locks re-runnability: running the migration twice
+// converges on the same state and stays green — the operator can safely
+// re-run it across the fleet (or after a transient launchctl hiccup).
+func TestMigrateIsIdempotent(t *testing.T) {
+	requireBash(t)
+	root, env := macSandbox(t)
+
+	for i := 1; i <= 2; i++ {
+		out, err := runMigrate(t, env)
+		if err != nil {
+			t.Fatalf("migrate run %d failed %v\nout:\n%s", i, err, out)
+		}
+	}
+
+	cur, err := os.ReadFile(filepath.Join(root, "var/uknomi/agent-update/current"))
+	if err != nil {
+		t.Fatalf("current missing after two runs: %v", err)
+	}
+	if !contains(string(cur), "FRESH-STAMPED-1.4.0") {
+		t.Errorf("current is not the fresh stamped binary after two runs; content=%s", cur)
+	}
+}
+
+// TestMigrateScriptIsShellcheckClean keeps the migration script to the same
+// shellcheck bar as the Linux installer. Skips locally without shellcheck; CI
+// enforces it.
+func TestMigrateScriptIsShellcheckClean(t *testing.T) {
+	requireBash(t)
+	if _, err := exec.LookPath("shellcheck"); err != nil {
+		t.Skip("shellcheck not in PATH; CI is expected to enforce this")
+	}
+	cmd := exec.Command("shellcheck", "--severity=warning", migrateScriptPath(t))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shellcheck reported issues (severity>=warning):\n%s", out)
+	}
+}
+
 // runMigrate exec's migrate-cp-agent-supervisor.sh with the given env.
 func runMigrate(t *testing.T, env []string) (string, error) {
 	t.Helper()
