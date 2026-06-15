@@ -11,6 +11,7 @@ import { Dot } from "../../components/ui/Dot";
 import { Pill, type PillTone } from "../../components/ui/Pill";
 import { RequireAuth } from "../../components/RequireAuth";
 import { StartRolloutPanel } from "../../components/StartRolloutPanel";
+import { RolloutActions } from "../../components/RolloutActions";
 
 // RolloutsPage — the operator-facing agent fleet-update surface (#42, ADR-035
 // §4). This slice is the READ view: roll-up counts plus a per-device
@@ -125,6 +126,8 @@ export function RolloutsBody() {
             </div>
           </div>
         )}
+
+        {isStaff && rollout.data && <RolloutActions devices={devices} />}
 
         {rollout.data && (
           <Card label="Devices" flush>

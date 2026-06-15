@@ -26,6 +26,7 @@ import {
   getAgentRollout,
   getAgentVersions,
   startRollout,
+  abortRollout,
   type StartRolloutInput,
 } from "./rollouts";
 import {
@@ -170,6 +171,16 @@ export function useStartRollout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: StartRolloutInput) => startRollout(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agent-rollout"] }),
+  });
+}
+
+// useAbortRollout reverts un-converged devices to their reported version
+// (#42 Slice C). On success it invalidates the rollout view.
+export function useAbortRollout() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (devices: { id: string; reportedVersion: string }[]) => abortRollout(devices),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agent-rollout"] }),
   });
 }
