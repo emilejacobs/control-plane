@@ -24,6 +24,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { id: "overview", label: "Overview", href: "/overview", prefixes: ["/overview", "/"] },
   { id: "fleet", label: "Fleet", href: "/devices", prefixes: ["/devices"] },
+  { id: "rollouts", label: "Rollouts", href: "/rollouts", prefixes: ["/rollouts"] },
   { id: "operators", label: "Operators", href: "/operators", prefixes: ["/operators"] },
   { id: "settings", label: "Settings", href: "/settings", prefixes: ["/settings"] },
 ];
