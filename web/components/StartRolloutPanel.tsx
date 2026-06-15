@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useAgentVersions, useSitesTree, useStartRollout } from "../lib/api/hooks";
-import type { RolloutTarget } from "../lib/api/rollouts";
+import { useMemo, useState } from "react";
+import { useAgentVersions, useStartRollout } from "../lib/api/hooks";
+import type { RolloutDevice, RolloutTarget } from "../lib/api/rollouts";
 import { Card } from "./ui/Card";
 
 // StartRolloutPanel is the staff-only "start a rollout" control (#42): pick a
@@ -17,19 +17,49 @@ import { Card } from "./ui/Card";
 type TargetMode = "all" | "site" | "devices";
 
 interface Props {
+  devices?: RolloutDevice[];
   selectedDeviceIds?: string[];
   onStarted?: () => void;
 }
 
-export function StartRolloutPanel({ selectedDeviceIds = [], onStarted }: Props = {}) {
+// SiteOption is one entry in the "Specific site" dropdown, derived from the
+// sites devices are actually assigned to.
+interface SiteOption {
+  id: string;
+  siteName: string;
+  clientName: string | null;
+}
+
+// rolloutSiteOptions collapses the in-scope devices to the distinct sites they
+// are assigned to (#64). Building the dropdown from devices.site_id — rather
+// than the active-taxonomy tree — guarantees the offered id matches ≥1 device,
+// so site targeting can't return a spurious no_targets when a site is re-keyed
+// in the external source.
+function rolloutSiteOptions(devices: RolloutDevice[]): SiteOption[] {
+  const byId = new Map<string, SiteOption>();
+  for (const d of devices) {
+    if (d.siteId === null || byId.has(d.siteId)) continue;
+    byId.set(d.siteId, {
+      id: d.siteId,
+      siteName: d.siteName ?? d.siteId,
+      clientName: d.clientName,
+    });
+  }
+  return [...byId.values()].sort((a, b) => {
+    const client = (a.clientName ?? "").localeCompare(b.clientName ?? "");
+    return client !== 0 ? client : a.siteName.localeCompare(b.siteName);
+  });
+}
+
+export function StartRolloutPanel({ devices = [], selectedDeviceIds = [], onStarted }: Props = {}) {
   const versions = useAgentVersions();
-  const sites = useSitesTree();
   const start = useStartRollout();
 
   const [version, setVersion] = useState("");
   const [mode, setMode] = useState<TargetMode>("all");
   const [siteId, setSiteId] = useState("");
 
+  const siteOptions = useMemo(() => rolloutSiteOptions(devices), [devices]);
   const versionList = versions.data ?? [];
   // Default to the newest (the catalog comes newest-first) until the operator
   // picks one explicitly.
@@ -120,15 +150,13 @@ export function StartRolloutPanel({ selectedDeviceIds = [], onStarted }: Props =
               value={siteId}
               onChange={(e) => setSiteId(e.target.value)}
             >
-              <option value="">Select a site…</option>
-              {(sites.data ?? []).map((c) => (
-                <optgroup key={c.id} label={c.name}>
-                  {c.sites.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </optgroup>
+              <option value="">
+                {siteOptions.length === 0 ? "No assigned sites in scope" : "Select a site…"}
+              </option>
+              {siteOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.clientName ? `${s.clientName} · ${s.siteName}` : s.siteName}
+                </option>
               ))}
             </select>
           </label>

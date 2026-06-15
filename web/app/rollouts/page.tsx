@@ -86,6 +86,7 @@ export function RolloutsBody() {
 
         {isStaff && (
           <StartRolloutPanel
+            devices={devices}
             selectedDeviceIds={[...selectedIds]}
             onStarted={() => setSelectedIds(new Set())}
           />

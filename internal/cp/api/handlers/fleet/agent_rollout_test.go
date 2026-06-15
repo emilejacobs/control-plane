@@ -121,6 +121,43 @@ func TestAgentRolloutViewSurfacesRolledBack(t *testing.T) {
 	}
 }
 
+// Each rollout device carries the assigned site_id so the start panel can
+// build its "Specific site" dropdown from the ids devices are actually
+// assigned to (#64) — the active-taxonomy picker can offer a re-keyed site
+// whose id matches no device, yielding a spurious no_targets.
+func TestAgentRolloutViewExposesSiteID(t *testing.T) {
+	store := &rolloutDeviceStore{devices: []registry.Device{
+		{ID: "dev-a", Hostname: "mac-01", AgentVersion: "1.5.0", SiteID: ver("site-54"), SiteName: ver("Store 54"), ClientName: ver("Eegee's")},
+		{ID: "dev-b", Hostname: "mac-02", AgentVersion: "1.5.0"}, // unassigned → null
+	}}
+	h := fleet.NewAgentRollout(store)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/fleet/agent-rollout", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Devices []struct {
+			ID     string  `json:"id"`
+			SiteID *string `json:"site_id"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	got := map[string]*string{}
+	for _, d := range resp.Devices {
+		got[d.ID] = d.SiteID
+	}
+	if got["dev-a"] == nil || *got["dev-a"] != "site-54" {
+		t.Errorf("dev-a site_id = %v, want site-54", got["dev-a"])
+	}
+	if got["dev-b"] != nil {
+		t.Errorf("dev-b site_id = %v, want null", got["dev-b"])
+	}
+}
+
 // An empty (or fully out-of-scope) fleet renders zero counts and an empty
 // device list, not nulls.
 func TestAgentRolloutViewEmptyFleet(t *testing.T) {
