@@ -201,6 +201,14 @@ button { font-family: inherit; }
   box-shadow: var(--shadow-card);
   padding: 24px;
 }
+/* A card placed directly in the page flow gets the standard 24px vertical
+   rhythm automatically — matching .page-header / .stat-grid — so a newly
+   added top-level card is never left butting against its neighbour. Cards
+   inside grids (.overview-row), rows, or modals are children of those
+   containers, not .page, so they're unaffected and keep their own spacing. */
+.page > .card {
+  margin-bottom: 24px;
+}
 .card-section-label {
   font-size: 11px;
   letter-spacing: 0.11em;
@@ -578,9 +586,9 @@ label.field .hint {
 }
 .overview-row.single { grid-template-columns: 1fr; }
 
-/* The one-time temp-password reveal sits above the Operators table; give it
-   the same 16px gap that separates the dashboard's stacked cards. */
-.temp-pw-notice { margin-bottom: 16px; }
+/* The one-time temp-password reveal sits above the Operators table; its
+   bottom spacing now comes from the standard `.page > .card` rule (it's a
+   top-level card), so no bespoke margin is needed here. */
 
 .list-row {
   display: flex;
