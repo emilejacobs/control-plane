@@ -21,6 +21,7 @@ import {
   type UpdateOperatorInput,
 } from "./operators";
 import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
+import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
 import { getFleetAlerts } from "./fleet";
 import {
   getAgentRollout,
@@ -234,6 +235,40 @@ export function useNetworkScan(deviceId: string, correlationId: string | null) {
       if (data?.status === "done" || data?.status === "error") return false;
       return networkScanPollInterval;
     },
+  });
+}
+
+// useDeviceSnapshots loads a device's snapshot captures newest-first (#8). Same
+// 10s device-page cadence, so a freshly-captured snapshot surfaces within a poll.
+export function useDeviceSnapshots(deviceId: string) {
+  return useQuery({
+    queryKey: ["device", deviceId, "captures", "snapshot"],
+    queryFn: () => getDeviceCaptures(deviceId, "snapshot"),
+    refetchInterval: devicePollInterval,
+  });
+}
+
+// useCaptureUrl resolves a short-lived signed download URL for one capture (#8).
+// staleTime is just under the server's ~5-min TTL so a thumbnail isn't re-signed
+// on every render but never serves an expired URL.
+export function useCaptureUrl(captureId: string | null) {
+  return useQuery({
+    queryKey: ["capture-url", captureId],
+    queryFn: () => getCaptureUrl(captureId as string),
+    enabled: captureId !== null,
+    staleTime: 4 * 60_000,
+  });
+}
+
+// useRequestSnapshot triggers an on-demand snapshot for a camera (#8). On
+// success it invalidates the device's snapshot list so the new row (and its
+// thumbnail) appears as soon as the agent's ACK lands.
+export function useRequestSnapshot(deviceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cameraId: string) => requestSnapshot(deviceId, cameraId),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["device", deviceId, "captures", "snapshot"] }),
   });
 }
 

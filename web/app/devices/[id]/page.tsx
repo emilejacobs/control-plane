@@ -367,6 +367,7 @@ export default function DevicePage() {
               <CamerasPanel
                 cameras={camData?.cameras ?? []}
                 lastAppliedAt={camData?.lastAppliedAt ?? null}
+                deviceId={id}
                 onAddCamera={() => setCameraDialog({ mode: "add" })}
                 onEditCamera={(c) => setCameraDialog({ mode: "edit", camera: c })}
                 onDeleteCamera={(c) => setCameraDialog({ mode: "delete", camera: c })}
