@@ -57,6 +57,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/api"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
+	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/fleet"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
@@ -204,9 +205,15 @@ func run(logger *slog.Logger) error {
 	// POST /agent-rollouts stays disabled.
 	var rolloutCatalog agentrollout.ManifestSource
 	var rolloutPusher devices.UpdatePusher
+	// versionCatalog stays a true nil interface until the bucket is configured,
+	// so the GET /fleet/agent-versions route guard (d.AgentVersionCatalog !=
+	// nil) sees nil rather than a typed-nil *S3ManifestSource.
+	var versionCatalog fleet.VersionCatalog
 	if bucket := os.Getenv("AGENT_DIST_BUCKET"); bucket != "" {
 		s3Client := s3.NewFromConfig(awsCfg)
-		rolloutCatalog = agentrollout.NewS3ManifestSource(s3Client, bucket)
+		s3Catalog := agentrollout.NewS3ManifestSource(s3Client, bucket)
+		rolloutCatalog = s3Catalog
+		versionCatalog = s3Catalog
 		// Command-envelope signing (#41). Gated on CP_COMMAND_SIGNING_SECRET_ID
 		// so a deploy before the secret exists still serves the rollout API
 		// (unsigned, ADR-028 forward-compat); a verifying agent rejects an
@@ -244,6 +251,7 @@ func run(logger *slog.Logger) error {
 			CmdPublisher:       cmdPublisher,
 			AgentRolloutCatalog: rolloutCatalog,
 			AgentRolloutPusher:  rolloutPusher,
+			AgentVersionCatalog: versionCatalog,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
