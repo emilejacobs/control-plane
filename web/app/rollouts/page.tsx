@@ -33,6 +33,7 @@ export default function RolloutsPage() {
 const STATE_LABEL: Record<RolloutState, { label: string; tone: PillTone }> = {
   done: { label: "Converged", tone: "green" },
   in_flight: { label: "In flight", tone: "amber" },
+  rolled_back: { label: "Rolled back", tone: "red" },
   untargeted: { label: "Untargeted", tone: "neutral" },
 };
 
@@ -118,6 +119,15 @@ export function RolloutsBody() {
               <div className="stat-label">In flight</div>
               <div className="stat-value">{counts.inFlight}</div>
               <div className="stat-sub">targeted, not yet converged</div>
+            </div>
+            <div className="stat" data-testid="rollup-rolled_back">
+              <div className="stat-label">Rolled back</div>
+              <div className="stat-value">{counts.rolledBack}</div>
+              <div className="stat-sub">
+                {counts.rolledBack === 0
+                  ? "no failed updates"
+                  : "tried desired, reverted"}
+              </div>
             </div>
             <div className="stat" data-testid="rollup-untargeted">
               <div className="stat-label">Untargeted</div>

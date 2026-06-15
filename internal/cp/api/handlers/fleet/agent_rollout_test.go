@@ -73,6 +73,54 @@ func TestAgentRolloutViewDerivesState(t *testing.T) {
 	}
 }
 
+// A device that tried the desired version and the resident wrapper reverted it
+// (rolled_back_version == desired, reported still behind) surfaces as
+// "rolled_back" — not an indefinite "in_flight" (#42 follow-up). A rollback for
+// a now-superseded desired, or a device that later converged, does not.
+func TestAgentRolloutViewSurfacesRolledBack(t *testing.T) {
+	store := &rolloutDeviceStore{devices: []registry.Device{
+		// tried 1.5.0, reverted → rolled_back
+		{ID: "rb", Hostname: "mac-rb", AgentVersion: "1.4.0", DesiredAgentVersion: ver("1.5.0"), RolledBackVersion: ver("1.5.0"), IsOnline: true},
+		// targeted but no rollback yet → in_flight
+		{ID: "if", Hostname: "mac-if", AgentVersion: "1.4.0", DesiredAgentVersion: ver("1.5.0"), IsOnline: true},
+		// stale rollback (1.4.5) for a newer desired (1.5.0) → in_flight
+		{ID: "stale", Hostname: "mac-stale", AgentVersion: "1.4.0", DesiredAgentVersion: ver("1.5.0"), RolledBackVersion: ver("1.4.5"), IsOnline: true},
+		// converged despite an earlier rollback → done
+		{ID: "done", Hostname: "mac-done", AgentVersion: "1.5.0", DesiredAgentVersion: ver("1.5.0"), RolledBackVersion: ver("1.5.0"), IsOnline: true},
+	}}
+	h := fleet.NewAgentRollout(store)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/fleet/agent-rollout", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Counts struct {
+			Done       int `json:"done"`
+			InFlight   int `json:"in_flight"`
+			RolledBack int `json:"rolled_back"`
+			Untargeted int `json:"untargeted"`
+		} `json:"counts"`
+		Devices []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	want := map[string]string{"rb": "rolled_back", "if": "in_flight", "stale": "in_flight", "done": "done"}
+	for _, d := range resp.Devices {
+		if d.State != want[d.ID] {
+			t.Errorf("device %s state = %q, want %q", d.ID, d.State, want[d.ID])
+		}
+	}
+	if resp.Counts.RolledBack != 1 || resp.Counts.InFlight != 2 || resp.Counts.Done != 1 {
+		t.Errorf("counts = %+v, want rolled_back 1 / in_flight 2 / done 1", resp.Counts)
+	}
+}
+
 // An empty (or fully out-of-scope) fleet renders zero counts and an empty
 // device list, not nulls.
 func TestAgentRolloutViewEmptyFleet(t *testing.T) {

@@ -31,6 +31,7 @@ func NewAgentRollout(store RolloutDeviceLister) *AgentRolloutHandler {
 type rolloutCounts struct {
 	Done       int `json:"done"`
 	InFlight   int `json:"in_flight"`
+	RolledBack int `json:"rolled_back"`
 	Untargeted int `json:"untargeted"`
 }
 
@@ -66,6 +67,13 @@ func (h *AgentRolloutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		case *d.DesiredAgentVersion == d.AgentVersion:
 			state = "done"
 			resp.Counts.Done++
+		case d.RolledBackVersion != nil && *d.RolledBackVersion == *d.DesiredAgentVersion:
+			// The device tried the desired version and the resident wrapper
+			// reverted it — not merely in flight. The stale-rollback case
+			// (a rollback recorded for a now-superseded desired) falls through
+			// to in_flight because the versions no longer match.
+			state = "rolled_back"
+			resp.Counts.RolledBack++
 		default:
 			state = "in_flight"
 			resp.Counts.InFlight++

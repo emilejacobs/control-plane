@@ -357,3 +357,45 @@ func TestRegistryReconcileStalePresence(t *testing.T) {
 		t.Errorf("second reconcile count: got %d want 0", n2)
 	}
 }
+
+// TestRegistryRecordRolledBackVersion is the migration-024 + registry coverage
+// for the rolled_back rollout state (#42 follow-up): RecordRolledBackVersion
+// persists the reverted version (last-wins), GetByID surfaces it, and an
+// unknown id is ErrDeviceNotFound.
+func TestRegistryRecordRolledBackVersion(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	id := enrollForTest(t, srv, "mac-rollback", "77777777-7777-7777-7777-777777777777")
+
+	dev, err := srv.Registry.GetByID(staffCtx(ctx), id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if dev.RolledBackVersion != nil {
+		t.Errorf("fresh device rolled_back_version = %v, want nil", dev.RolledBackVersion)
+	}
+
+	if err := srv.Registry.RecordRolledBackVersion(ctx, id, "1.5.0"); err != nil {
+		t.Fatalf("RecordRolledBackVersion: %v", err)
+	}
+	dev, _ = srv.Registry.GetByID(staffCtx(ctx), id)
+	if dev.RolledBackVersion == nil || *dev.RolledBackVersion != "1.5.0" {
+		t.Fatalf("rolled_back_version = %v, want 1.5.0", dev.RolledBackVersion)
+	}
+
+	// Last-wins: a later rollback overwrites.
+	if err := srv.Registry.RecordRolledBackVersion(ctx, id, "1.5.1"); err != nil {
+		t.Fatalf("RecordRolledBackVersion 2: %v", err)
+	}
+	dev, _ = srv.Registry.GetByID(staffCtx(ctx), id)
+	if dev.RolledBackVersion == nil || *dev.RolledBackVersion != "1.5.1" {
+		t.Errorf("rolled_back_version = %v, want 1.5.1", dev.RolledBackVersion)
+	}
+
+	unknown := "00000000-0000-0000-0000-000000000000"
+	if err := srv.Registry.RecordRolledBackVersion(ctx, unknown, "x"); !errors.Is(err, registry.ErrDeviceNotFound) {
+		t.Errorf("unknown id: got %v want ErrDeviceNotFound", err)
+	}
+}
