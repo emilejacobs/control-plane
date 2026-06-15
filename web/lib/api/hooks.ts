@@ -22,7 +22,12 @@ import {
 } from "./operators";
 import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
 import { getFleetAlerts } from "./fleet";
-import { getAgentRollout } from "./rollouts";
+import {
+  getAgentRollout,
+  getAgentVersions,
+  startRollout,
+  type StartRolloutInput,
+} from "./rollouts";
 import {
   getSitesTree,
   updateDeviceDeployment,
@@ -144,6 +149,28 @@ export function useAgentRollout() {
     queryKey: ["agent-rollout"],
     queryFn: getAgentRollout,
     refetchInterval: devicePollInterval,
+  });
+}
+
+// useAgentVersions loads the published catalog versions (#42) that back the
+// rollout target picker. Long staleTime — the catalog only changes when a new
+// release is cut, not on dashboard interactions.
+export function useAgentVersions() {
+  return useQuery({
+    queryKey: ["agent-versions"],
+    queryFn: getAgentVersions,
+    staleTime: 5 * 60_000,
+  });
+}
+
+// useStartRollout is the start/abort/promote mutation (POST /agent-rollouts,
+// staff-only). On success it invalidates the rollout view so the table reflects
+// the newly-stamped desired versions on the next render.
+export function useStartRollout() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: StartRolloutInput) => startRollout(input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agent-rollout"] }),
   });
 }
 
