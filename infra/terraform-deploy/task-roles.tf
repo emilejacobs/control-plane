@@ -103,6 +103,20 @@ data "aws_iam_policy_document" "cp_api" {
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.main["agent-dist"].arn}/agent/*"]
   }
+  # GET /fleet/agent-versions (#42) lists the published versions in the catalog
+  # via ListObjectsV2 over the agent/ prefix — which needs s3:ListBucket on the
+  # bucket itself (GetObject above only covers reading a known key). Scoped with
+  # a prefix condition so the role can only enumerate under agent/.
+  statement {
+    sid       = "AgentDistList"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.main["agent-dist"].arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["agent/", "agent/*"]
+    }
+  }
   statement {
     sid       = "CommandSigningKeyRead"
     actions   = ["secretsmanager:GetSecretValue"]
