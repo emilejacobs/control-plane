@@ -122,6 +122,14 @@ data "aws_iam_policy_document" "cp_api" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:uknomi/cp/command-signing-key*"]
   }
+  # Captures read surface (#8): GET /captures/{id}/url presigns a download URL,
+  # so cp-api's role must itself hold s3:GetObject on the captures bucket for the
+  # signed URL to resolve. Scoped to the artifact prefixes.
+  statement {
+    sid       = "CapturesRead"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.main["captures"].arn}/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_api" {
