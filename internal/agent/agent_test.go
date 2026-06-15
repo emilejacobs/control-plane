@@ -120,6 +120,100 @@ func (f *fakeTransport) publishedOn(topic string) [][]byte {
 	return out
 }
 
+// wedgedTransport is a fakeTransport with a controllable LastPublishSuccess,
+// simulating a dead MQTT session whose publishes never succeed (#65). Because it
+// implements the liveness reporter, the agent wires a watchdog around it. last
+// is mutex-guarded — the watchdog reads it from its own goroutine.
+type wedgedTransport struct {
+	*fakeTransport
+	mu   sync.Mutex
+	last time.Time
+}
+
+func newWedgedTransport(last time.Time) *wedgedTransport {
+	return &wedgedTransport{fakeTransport: newFakeTransport(), last: last}
+}
+
+func (w *wedgedTransport) LastPublishSuccess() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.last
+}
+
+func (w *wedgedTransport) setLast(t time.Time) {
+	w.mu.Lock()
+	w.last = t
+	w.mu.Unlock()
+}
+
+// A session whose last successful publish is far in the past is detected as
+// wedged: the agent signals WedgeDetected so main can exit and let launchd
+// restart it with a fresh transport (#65, exit-based recovery).
+func TestAgentWatchdogSignalsWedgedSession(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newWedgedTransport(time.Now().Add(-time.Hour))
+
+	a, err := agent.New(agent.Config{
+		CertPath:           cert,
+		DeviceID:           "dev-wedge",
+		Version:            "1.0.0",
+		WatchdogStaleAfter: 20 * time.Millisecond,
+		WatchdogInterval:   time.Millisecond,
+	}, tr)
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	select {
+	case <-a.WedgeDetected():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchdog did not signal a wedged session")
+	}
+}
+
+// A healthy transport (LastPublishSuccess keeps advancing) is never flagged,
+// even over many watchdog checks.
+func TestAgentWatchdogQuietWhenHealthy(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newWedgedTransport(time.Now())
+
+	a, err := agent.New(agent.Config{
+		CertPath:           cert,
+		DeviceID:           "dev-healthy",
+		Version:            "1.0.0",
+		WatchdogStaleAfter: 20 * time.Millisecond,
+		WatchdogInterval:   time.Millisecond,
+	}, tr)
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	// Keep the liveness signal fresh across many check intervals.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			tr.setLast(time.Now())
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	<-done
+
+	select {
+	case <-a.WedgeDetected():
+		t.Fatal("watchdog flagged a healthy session")
+	default:
+	}
+}
+
 func writeTestCert(t *testing.T, notAfter time.Time) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

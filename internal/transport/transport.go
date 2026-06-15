@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -22,6 +23,12 @@ type MessageHandler = func(topic string, payload []byte)
 
 type Transport struct {
 	client mqtt.Client
+
+	// lastPublishOK is the time of the most recent successful publish (the
+	// connect in New seeds it). It is the liveness signal the agent watchdog
+	// reads to detect a wedged MQTT session (#65).
+	mu            sync.Mutex
+	lastPublishOK time.Time
 }
 
 func New(cfg Config) (*Transport, error) {
@@ -62,7 +69,15 @@ func New(cfg Config) (*Transport, error) {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 
-	return &Transport{client: client}, nil
+	return &Transport{client: client, lastPublishOK: time.Now()}, nil
+}
+
+// LastPublishSuccess reports when a publish (or the initial connect) last
+// succeeded. The agent watchdog (#65) treats a stale value as a wedged session.
+func (t *Transport) LastPublishSuccess() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastPublishOK
 }
 
 func (t *Transport) Subscribe(topic string, h MessageHandler) error {
@@ -76,7 +91,13 @@ func (t *Transport) Subscribe(topic string, h MessageHandler) error {
 func (t *Transport) Publish(topic string, payload []byte) error {
 	token := t.client.Publish(topic, 1, false, payload)
 	token.Wait()
-	return token.Error()
+	if err := token.Error(); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	t.lastPublishOK = time.Now()
+	t.mu.Unlock()
+	return nil
 }
 
 func (t *Transport) Close() error {
