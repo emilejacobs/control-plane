@@ -7,10 +7,11 @@ import { apiRequest } from "./client";
 import { ApiError } from "./auth";
 
 // RolloutState mirrors the backend's per-device derivation:
-//   done       reported_version == desired_version
-//   in_flight  targeted (desired set) but not yet converged
-//   untargeted no desired_version set
-export type RolloutState = "done" | "in_flight" | "untargeted";
+//   done        reported_version == desired_version
+//   in_flight   targeted (desired set) but not yet converged
+//   rolled_back tried the desired version; the wrapper reverted it
+//   untargeted  no desired_version set
+export type RolloutState = "done" | "in_flight" | "rolled_back" | "untargeted";
 
 export interface RolloutDevice {
   id: string;
@@ -27,6 +28,7 @@ export interface RolloutDevice {
 export interface RolloutCounts {
   done: number;
   inFlight: number;
+  rolledBack: number;
   untargeted: number;
 }
 
@@ -36,7 +38,7 @@ export interface AgentRollout {
 }
 
 interface RolloutWire {
-  counts: { done: number; in_flight: number; untargeted: number };
+  counts: { done: number; in_flight: number; rolled_back: number; untargeted: number };
   devices: Array<{
     id: string;
     hostname: string;
@@ -172,6 +174,7 @@ export async function getAgentRollout(): Promise<AgentRollout> {
     counts: {
       done: body.counts.done,
       inFlight: body.counts.in_flight,
+      rolledBack: body.counts.rolled_back,
       untargeted: body.counts.untargeted,
     },
     devices: body.devices.map((d) => ({
