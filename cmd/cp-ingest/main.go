@@ -33,6 +33,11 @@
 //	                           command-signing key (issue #41). When set, the
 //	                           reconcile re-pushes are signed; unset = unsigned
 //	                           (forward-compat). Set it together with cp-api's.
+//	CAPTURES_BUCKET            S3 bucket for the captures pipeline (issue #8).
+//	                           When set, the cmd-result consumer handles
+//	                           upload.request (presign a PUT + publish
+//	                           upload.url) and upload.complete (index the row).
+//	                           Unset = those message types are ignored.
 //
 // SERVICE_STATUS_* are optional so a deploy that lands the code before
 // Terraform provisions the queue does not crash. When both are set, the
@@ -61,6 +66,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
 	"github.com/emilejacobs/control-plane/internal/cp/bootstrap"
+	"github.com/emilejacobs/control-plane/internal/cp/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
@@ -254,6 +260,25 @@ func run(logger *slog.Logger) error {
 	if cmdResultQueueURL != "" && cmdResultDLQURL != "" {
 		crIngester := ingest.NewCmdResultIngester(reg, nil)
 		crIngester.Logger = logger
+		// Captures upload pipeline (#8): gated on CAPTURES_BUCKET. When set,
+		// upload.request presigns a PUT against the captures bucket and
+		// publishes upload.url back on the device cmd topic; upload.complete
+		// indexes the row. Unset → the cmd-result handler ignores those types.
+		if capturesBucket := os.Getenv("CAPTURES_BUCKET"); capturesBucket != "" {
+			capS3 := s3.NewFromConfig(awsCfg)
+			var capIotOpts []func(*iotdataplane.Options)
+			if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
+				capIotOpts = append(capIotOpts, func(o *iotdataplane.Options) {
+					o.BaseEndpoint = aws.String(endpoint)
+				})
+			}
+			crIngester.Captures = reg
+			crIngester.Presigner = captures.NewS3Presigner(s3.NewPresignClient(capS3), capturesBucket)
+			crIngester.Publisher = iotpublisher.NewAWS(iotdataplane.NewFromConfig(awsCfg, capIotOpts...))
+			logger.Info("captures upload pipeline enabled", "captures_bucket", capturesBucket)
+		} else {
+			logger.Info("captures upload pipeline disabled — CAPTURES_BUCKET unset")
+		}
 		cmdResultConsumer = sqsconsumer.NewConsumer[ingest.CmdResult](
 			sqsClient,
 			crIngester.Handle,

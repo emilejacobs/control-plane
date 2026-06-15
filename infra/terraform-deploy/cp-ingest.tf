@@ -138,6 +138,10 @@ module "cp_ingest" {
   agent_dist_bucket         = aws_s3_bucket.main["agent-dist"].bucket
   command_signing_secret_id = "uknomi/cp/command-signing-key"
 
+  # Captures pipeline (#8): enables upload.request presign + upload.complete
+  # indexing against the captures bucket.
+  captures_bucket = aws_s3_bucket.main["captures"].bucket
+
   desired_count = 1
 
   tags = var.tags
