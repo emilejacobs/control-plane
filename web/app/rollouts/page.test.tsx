@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/server";
 import { renderWithClient } from "../../test/render";
@@ -139,6 +140,32 @@ describe("rollout dashboard — read view", () => {
 
     expect(await screen.findByText(/start a rollout/i)).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /start rollout/i })).toBeInTheDocument();
+  });
+
+  it("canary: ticking a device in the table enables the Selected-devices target", async () => {
+    setTokens({
+      accessToken: fakeToken({ email: "staff@uknomi.com", is_staff: true }),
+      refreshToken: "r",
+    });
+    rolloutReturns(sample);
+    server.use(
+      http.get(`${API_BASE}/fleet/agent-versions`, () =>
+        HttpResponse.json({ versions: ["1.4.1"] }),
+      ),
+      http.get(`${API_BASE}/sites`, () => HttpResponse.json({ clients: [] })),
+    );
+    renderWithClient(<RolloutsPage />);
+
+    // With nothing ticked, the subset option is disabled.
+    const optZero = await screen.findByRole("radio", { name: /selected devices \(0\)/i });
+    expect(optZero).toBeDisabled();
+
+    // Tick one device (wait for the table to load); the option reflects the
+    // count and enables.
+    await userEvent.click(await screen.findByRole("checkbox", { name: /select mac-inflight/i }));
+    expect(
+      await screen.findByRole("radio", { name: /selected devices \(1\)/i }),
+    ).toBeEnabled();
   });
 
   it("polls GET /fleet/agent-rollout every 10 seconds", async () => {
