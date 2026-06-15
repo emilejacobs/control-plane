@@ -10,10 +10,14 @@
 // "no cameras configured" is distinguishable from a fetch failure.
 import type { Camera } from "../lib/api/devices";
 import { Pill } from "./ui/Pill";
+import { CameraSnapshot } from "./CameraSnapshot";
 
 interface Props {
   cameras: Camera[];
   lastAppliedAt: string | null;
+  // deviceId enables the per-camera snapshot thumbnail + Refresh button (#8).
+  // Omitted (e.g. in isolated tests) → the snapshot column is hidden.
+  deviceId?: string;
   // Action callbacks open the CameraDialog at the page level. Each
   // is wired by page.tsx; the panel itself does not own the modal
   // state.
@@ -56,6 +60,7 @@ interface Props {
 export function CamerasPanel({
   cameras,
   lastAppliedAt,
+  deviceId,
   onAddCamera,
   onEditCamera,
   onDeleteCamera,
@@ -156,6 +161,7 @@ export function CamerasPanel({
               <th style={{ padding: "6px 8px" }}>Label</th>
               <th style={{ padding: "6px 8px", width: 60 }}>LPR</th>
               <th style={{ padding: "6px 8px" }}>RTSP URL</th>
+              {deviceId && <th style={{ padding: "6px 8px", width: 120 }}>Snapshot</th>}
               {(onEditCamera || onDeleteCamera || onVerifyAngle || lanURL) && (
                 <th style={{ padding: "6px 8px", width: 200 }}></th>
               )}
@@ -182,6 +188,11 @@ export function CamerasPanel({
                 >
                   {c.rtspUrl}
                 </td>
+                {deviceId && (
+                  <td style={{ padding: "6px 8px" }}>
+                    <CameraSnapshot deviceId={deviceId} cameraId={c.cameraId} />
+                  </td>
+                )}
                 {(onEditCamera || onDeleteCamera || onVerifyAngle || lanURL) && (
                   <td style={{ padding: "6px 8px", textAlign: "right" }}>
                     {onEditCamera && (
