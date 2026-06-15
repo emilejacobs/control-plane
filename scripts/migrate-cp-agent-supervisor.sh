@@ -105,6 +105,12 @@ cat > "$plist_path" <<PLIST
 </plist>
 PLIST
 chmod 644 "$plist_path"
+# launchd refuses to load a LaunchDaemon plist not owned by root:wheel. Guard
+# on EUID so the sandboxed (non-root) test still passes; in prod the operator
+# runs this under sudo and the ownership is applied.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    chown root:wheel "$plist_path"
+fi
 
 # ── 4. Reload the LaunchDaemon ───────────────────────────────────────────────
 # Unload the running (old-layout) daemon first, then load the rewritten plist
