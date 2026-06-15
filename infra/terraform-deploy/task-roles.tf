@@ -122,12 +122,14 @@ data "aws_iam_policy_document" "cp_api" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:uknomi/cp/command-signing-key*"]
   }
-  # Captures read surface (#8): GET /captures/{id}/url presigns a download URL,
-  # so cp-api's role must itself hold s3:GetObject on the captures bucket for the
-  # signed URL to resolve. Scoped to the artifact prefixes.
+  # Captures surface (#8): cp-api presigns S3 URLs whose signature inherits this
+  # role's permissions. GET /captures/{id}/url signs a download (s3:GetObject);
+  # POST /devices/{id}/snapshot signs the agent's upload PUT (s3:PutObject) for
+  # the on-demand camera snapshot. Both are needed or the presigned URL 403s when
+  # the agent/browser uses it.
   statement {
-    sid       = "CapturesRead"
-    actions   = ["s3:GetObject"]
+    sid       = "CapturesReadWrite"
+    actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.main["captures"].arn}/*"]
   }
 }
