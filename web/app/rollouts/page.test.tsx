@@ -34,7 +34,7 @@ function rolloutReturns(body: Record<string, unknown>) {
 }
 
 const sample = {
-  counts: { done: 2, in_flight: 1, untargeted: 3 },
+  counts: { done: 2, in_flight: 1, rolled_back: 1, untargeted: 3 },
   devices: [
     {
       id: "d1",
@@ -45,6 +45,16 @@ const sample = {
       desired_version: "1.4.1",
       is_online: true,
       state: "in_flight",
+    },
+    {
+      id: "d4",
+      hostname: "mac-rolledback",
+      site_name: "HQ",
+      client_name: "Acme",
+      reported_version: "1.4.0",
+      desired_version: "1.4.1",
+      is_online: true,
+      state: "rolled_back",
     },
     {
       id: "d2",
@@ -78,7 +88,16 @@ describe("rollout dashboard — read view", () => {
     const converged = await screen.findByTestId("rollup-done");
     expect(converged).toHaveTextContent("2");
     expect(screen.getByTestId("rollup-in_flight")).toHaveTextContent("1");
+    expect(screen.getByTestId("rollup-rolled_back")).toHaveTextContent("1");
     expect(screen.getByTestId("rollup-untargeted")).toHaveTextContent("3");
+  });
+
+  it("renders a rolled-back device with its state", async () => {
+    rolloutReturns(sample);
+    renderWithClient(<RolloutsPage />);
+
+    const row = await screen.findByRole("row", { name: /mac-rolledback/ });
+    expect(within(row).getByText("Rolled back")).toBeInTheDocument();
   });
 
   it("renders a per-device desired-vs-reported row with its state", async () => {
