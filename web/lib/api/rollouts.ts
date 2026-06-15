@@ -49,6 +49,90 @@ interface RolloutWire {
   }>;
 }
 
+// getAgentVersions lists the published catalog versions (GET /fleet/agent-versions,
+// #42) that back the target picker, newest-first. Auth-only (not staff-gated).
+export async function getAgentVersions(): Promise<string[]> {
+  const res = await apiRequest("/fleet/agent-versions");
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to load agent versions");
+  }
+  const body = (await res.json()) as { versions: string[] };
+  return body.versions ?? [];
+}
+
+// RolloutTarget is the exactly-one-of device selector the POST accepts: the
+// whole fleet, a single site, or an explicit device subset (canary).
+export type RolloutTarget =
+  | { kind: "all" }
+  | { kind: "site"; siteId: string }
+  | { kind: "devices"; deviceIds: string[] };
+
+export interface StartRolloutInput {
+  version: string;
+  target: RolloutTarget;
+}
+
+export interface StartRolloutResult {
+  correlationId: string;
+  targeted: number;
+  pushed: number;
+}
+
+// RolloutError carries cp-api's structured rollout error code
+// (agent_rollout.unknown_version / .no_targets / .bad_payload) alongside the
+// human-readable message, so the start panel can tailor its inline notice.
+export class RolloutError extends ApiError {
+  constructor(
+    status: number,
+    message: string,
+    public readonly code: string | null,
+  ) {
+    super(status, message);
+    this.name = "RolloutError";
+  }
+}
+
+// startRollout stamps the desired version on the target set (POST
+// /agent-rollouts, staff-only). Abort / promote-canary are the same call with a
+// different selector — there is no campaign entity (ADR-035 §4).
+export async function startRollout(input: StartRolloutInput): Promise<StartRolloutResult> {
+  const body: Record<string, unknown> = { version: input.version };
+  switch (input.target.kind) {
+    case "all":
+      body.all = true;
+      break;
+    case "site":
+      body.site_id = input.target.siteId;
+      break;
+    case "devices":
+      body.device_ids = input.target.deviceIds;
+      break;
+  }
+
+  const res = await apiRequest("/agent-rollouts", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = "failed to start rollout";
+    let code: string | null = null;
+    try {
+      const err = (await res.json()) as { code?: string; message?: string };
+      if (err.message) message = err.message;
+      if (err.code) code = err.code;
+    } catch {
+      // non-JSON error body (e.g. a 502 from http.Error) — keep the default.
+    }
+    throw new RolloutError(res.status, message, code);
+  }
+  const r = (await res.json()) as {
+    correlation_id: string;
+    targeted: number;
+    pushed: number;
+  };
+  return { correlationId: r.correlation_id, targeted: r.targeted, pushed: r.pushed };
+}
+
 // getAgentRollout fetches the operator's site-scoped rollout view from
 // GET /fleet/agent-rollout: roll-up counts plus per-device desired-vs-reported
 // state. Site scope is applied server-side (staff see the fleet).

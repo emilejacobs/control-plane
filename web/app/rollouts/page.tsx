@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useAgentRollout } from "../../lib/api/hooks";
 import type { RolloutState } from "../../lib/api/rollouts";
+import { currentOperator } from "../../lib/api/client";
 import { Topbar } from "../../components/ui/Topbar";
 import { Card } from "../../components/ui/Card";
 import { Dot } from "../../components/ui/Dot";
 import { Pill, type PillTone } from "../../components/ui/Pill";
 import { RequireAuth } from "../../components/RequireAuth";
+import { StartRolloutPanel } from "../../components/StartRolloutPanel";
 
 // RolloutsPage — the operator-facing agent fleet-update surface (#42, ADR-035
 // §4). This slice is the READ view: roll-up counts plus a per-device
@@ -41,6 +43,9 @@ export function RolloutsBody() {
   const rollout = useAgentRollout();
   const counts = rollout.data?.counts;
   const devices = rollout.data?.devices ?? [];
+  // The start control is staff-only (the POST /agent-rollouts is staff-gated
+  // server-side too). Scoped operators still get the read view below.
+  const isStaff = currentOperator()?.isStaff ?? false;
 
   return (
     <>
@@ -59,6 +64,8 @@ export function RolloutsBody() {
             </p>
           </div>
         </div>
+
+        {isStaff && <StartRolloutPanel />}
 
         {rollout.isPending && (
           <div role="status" className="muted" style={{ padding: 12 }}>
