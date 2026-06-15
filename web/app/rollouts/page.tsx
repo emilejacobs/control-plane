@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useAgentRollout } from "../../lib/api/hooks";
 import type { RolloutState } from "../../lib/api/rollouts";
@@ -10,6 +11,7 @@ import { Dot } from "../../components/ui/Dot";
 import { Pill, type PillTone } from "../../components/ui/Pill";
 import { RequireAuth } from "../../components/RequireAuth";
 import { StartRolloutPanel } from "../../components/StartRolloutPanel";
+import { RolloutActions } from "../../components/RolloutActions";
 
 // RolloutsPage — the operator-facing agent fleet-update surface (#42, ADR-035
 // §4). This slice is the READ view: roll-up counts plus a per-device
@@ -47,6 +49,22 @@ export function RolloutsBody() {
   // server-side too). Scoped operators still get the read view below.
   const isStaff = currentOperator()?.isStaff ?? false;
 
+  // Canary selection (#42 Slice C): staff tick devices in the table to target
+  // an explicit subset. Cleared after a successful start.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  function toggle(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  const allSelected = devices.length > 0 && devices.every((d) => selectedIds.has(d.id));
+  function toggleAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(devices.map((d) => d.id)));
+  }
+
   return (
     <>
       <Topbar />
@@ -65,7 +83,12 @@ export function RolloutsBody() {
           </div>
         </div>
 
-        {isStaff && <StartRolloutPanel />}
+        {isStaff && (
+          <StartRolloutPanel
+            selectedDeviceIds={[...selectedIds]}
+            onStarted={() => setSelectedIds(new Set())}
+          />
+        )}
 
         {rollout.isPending && (
           <div role="status" className="muted" style={{ padding: 12 }}>
@@ -104,6 +127,8 @@ export function RolloutsBody() {
           </div>
         )}
 
+        {isStaff && rollout.data && <RolloutActions devices={devices} />}
+
         {rollout.data && (
           <Card label="Devices" flush>
             {devices.length === 0 ? (
@@ -115,6 +140,16 @@ export function RolloutsBody() {
               <table className="table">
                 <thead>
                   <tr>
+                    {isStaff && (
+                      <th style={{ width: 36 }}>
+                        <input
+                          type="checkbox"
+                          aria-label="Select all devices"
+                          checked={allSelected}
+                          onChange={toggleAll}
+                        />
+                      </th>
+                    )}
                     <th>Device</th>
                     <th>Client / site</th>
                     <th>Reported &rarr; desired</th>
@@ -124,6 +159,16 @@ export function RolloutsBody() {
                 <tbody>
                   {devices.map((d) => (
                     <tr key={d.id}>
+                      {isStaff && (
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${d.hostname}`}
+                            checked={selectedIds.has(d.id)}
+                            onChange={() => toggle(d.id)}
+                          />
+                        </td>
+                      )}
                       <td>
                         <span className="row" style={{ gap: 6 }}>
                           <Dot tone={d.isOnline ? "green" : "gray"} />

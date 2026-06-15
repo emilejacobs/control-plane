@@ -5,16 +5,23 @@ import { useAgentVersions, useSitesTree, useStartRollout } from "../lib/api/hook
 import type { RolloutTarget } from "../lib/api/rollouts";
 import { Card } from "./ui/Card";
 
-// StartRolloutPanel is the staff-only "start a rollout" control (#42, Slice B):
-// pick a published version + a target (entire fleet or a specific site) and
-// POST /agent-rollouts. The page gates this to staff; the POST is staff-only
-// server-side too, so a non-staff caller still gets a surfaced 403.
+// StartRolloutPanel is the staff-only "start a rollout" control (#42): pick a
+// published version + a target — the entire fleet, a specific site, or an
+// explicit device subset (the canary, Slice C) — and POST /agent-rollouts. The
+// page gates this to staff; the POST is staff-only server-side too, so a
+// non-staff caller still gets a surfaced 403.
 //
-// Explicit device-subset targeting (the canary mechanism) + abort / promote
-// are Slice C; the RolloutTarget type already carries the "devices" case.
-type TargetMode = "all" | "site";
+// The "Selected devices" mode is driven by the page's table-selection state
+// (selectedDeviceIds); onStarted fires after a successful start so the page can
+// clear the selection.
+type TargetMode = "all" | "site" | "devices";
 
-export function StartRolloutPanel() {
+interface Props {
+  selectedDeviceIds?: string[];
+  onStarted?: () => void;
+}
+
+export function StartRolloutPanel({ selectedDeviceIds = [], onStarted }: Props = {}) {
   const versions = useAgentVersions();
   const sites = useSitesTree();
   const start = useStartRollout();
@@ -27,16 +34,21 @@ export function StartRolloutPanel() {
   // Default to the newest (the catalog comes newest-first) until the operator
   // picks one explicitly.
   const effectiveVersion = version || versionList[0] || "";
+  const selectedCount = selectedDeviceIds.length;
 
   const canStart =
     effectiveVersion !== "" &&
-    (mode === "all" || siteId !== "") &&
-    !start.isPending;
+    !start.isPending &&
+    (mode === "all" ||
+      (mode === "site" && siteId !== "") ||
+      (mode === "devices" && selectedCount > 0));
 
   function onStart() {
-    const target: RolloutTarget =
-      mode === "all" ? { kind: "all" } : { kind: "site", siteId };
-    start.mutate({ version: effectiveVersion, target });
+    let target: RolloutTarget;
+    if (mode === "site") target = { kind: "site", siteId };
+    else if (mode === "devices") target = { kind: "devices", deviceIds: selectedDeviceIds };
+    else target = { kind: "all" };
+    start.mutate({ version: effectiveVersion, target }, { onSuccess: () => onStarted?.() });
   }
 
   const errorMessage =
@@ -82,6 +94,20 @@ export function StartRolloutPanel() {
                 onChange={() => setMode("site")}
               />
               Specific site
+            </label>
+            <label
+              className="row"
+              style={{ gap: 6, opacity: selectedCount === 0 ? 0.5 : 1 }}
+              title={selectedCount === 0 ? "Tick devices in the table below" : undefined}
+            >
+              <input
+                type="radio"
+                name="rollout-target"
+                checked={mode === "devices"}
+                disabled={selectedCount === 0}
+                onChange={() => setMode("devices")}
+              />
+              Selected devices ({selectedCount})
             </label>
           </div>
         </fieldset>
