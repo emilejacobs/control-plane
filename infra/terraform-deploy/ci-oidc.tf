@@ -6,9 +6,11 @@
 # for continuity with the workflow's role-to-assume ARN — the `deploy`
 # inline policy below is what actually grants the rollout perms.
 #
-# CI assumes this role via OIDC (no long-lived AWS keys) on merge to main.
-# The trust policy pins the OIDC sub claim to a single repo + branch so
-# PR builds and forks cannot push or deploy.
+# CI assumes this role via OIDC (no long-lived AWS keys): build-images on
+# merge to main, and agent-release on an `agent-v*` tag push (issue #39 — the
+# release workflow uploads binaries + the signed manifest to agent-dist). The
+# trust policy pins the OIDC sub claim to this repo's main branch + release
+# tags, so PR builds and forks cannot push or deploy.
 #
 # If the account already has a token.actions.githubusercontent.com OIDC
 # provider, terraform apply will fail with EntityAlreadyExists; in that
@@ -33,10 +35,15 @@ data "aws_iam_policy_document" "gha_image_publish_trust" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
+    # StringLike so the value list is OR'd: the main branch (exact — no
+    # wildcard) for build-images, plus agent-v* tags for agent-release.
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/${var.github_image_publish_branch}"]
+      values = [
+        "repo:${var.github_repo}:ref:refs/heads/${var.github_image_publish_branch}",
+        "repo:${var.github_repo}:ref:refs/tags/agent-v*",
+      ]
     }
   }
 }
