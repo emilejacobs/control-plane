@@ -388,7 +388,7 @@ func (i *CmdResultIngester) handleUploadRequest(ctx context.Context, r CmdResult
 		return err // transient — let SQS redeliver
 	}
 
-	args, err := json.Marshal(upload.URL{S3Key: key, PutURL: putURL})
+	args, err := json.Marshal(upload.URL{CorrelationID: r.CorrelationID, S3Key: key, PutURL: putURL})
 	if err != nil {
 		return sqsconsumer.Poison(err)
 	}
