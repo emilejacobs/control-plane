@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -46,6 +47,36 @@ func (s *S3ManifestSource) Manifest(ctx context.Context, version string) (agentm
 		return agentmanifest.Manifest{}, fmt.Errorf("decode manifest %s: %w", key, err)
 	}
 	return m, nil
+}
+
+// ListVersions enumerates the published versions in the catalog by listing the
+// agent/<version>/ "directories" in the dist bucket (the same key layout
+// Manifest reads). It uses a delimited ListObjectsV2 so S3 returns one common
+// prefix per version rather than every object. The "latest" alias prefix is
+// excluded — it points at a release, it is not itself a selectable version.
+func (s *S3ManifestSource) ListVersions(ctx context.Context) ([]string, error) {
+	var versions []string
+	p := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.bucket),
+		Prefix:    aws.String("agent/"),
+		Delimiter: aws.String("/"),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list agent versions: %w", err)
+		}
+		for _, cp := range page.CommonPrefixes {
+			// cp.Prefix is like "agent/1.4.1/" — strip the prefix and trailing
+			// slash to recover the bare version.
+			v := strings.TrimSuffix(strings.TrimPrefix(aws.ToString(cp.Prefix), "agent/"), "/")
+			if v == "" || v == "latest" {
+				continue
+			}
+			versions = append(versions, v)
+		}
+	}
+	return versions, nil
 }
 
 // S3Presigner is the real Presigner over the agent-dist bucket.
