@@ -11,6 +11,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/protocol/camerasnapshot"
 	"github.com/emilejacobs/control-plane/internal/protocol/upload"
 )
 
@@ -159,6 +160,55 @@ func TestCmdResultUploadRequestInvalidIsPoison(t *testing.T) {
 	}
 	if pre.calls != 0 || pub.calls != 0 {
 		t.Errorf("invalid request should not presign/publish: pre=%d pub=%d", pre.calls, pub.calls)
+	}
+}
+
+// A successful camera.snapshot ACK indexes a snapshot capture row, with the
+// camera_id threaded into metadata (#8 Slice B).
+func TestCmdResultCameraSnapshotInsertsCapture(t *testing.T) {
+	applier := &recordingApplier{}
+	i := uploadIngester(applier, &fakePresigner{}, &fakePublisher{})
+
+	body, _ := json.Marshal(camerasnapshot.Result{
+		S3Key: "snapshots/dev-1/abc.jpg", SizeBytes: 4096, CameraID: "cam2",
+	})
+	err := i.Handle(context.Background(), ingest.CmdResult{
+		Result:   envelope.Result{Type: "camera.snapshot", CorrelationID: "c1", Success: true, Result: body},
+		DeviceID: "dev-1",
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(applier.captures) != 1 {
+		t.Fatalf("captures = %d, want 1", len(applier.captures))
+	}
+	got := applier.captures[0]
+	if got.DeviceID != "dev-1" || got.Kind != upload.KindSnapshot ||
+		got.S3Key != "snapshots/dev-1/abc.jpg" || got.ContentType != camerasnapshot.ContentType ||
+		got.SizeBytes != 4096 {
+		t.Errorf("capture input = %+v", got)
+	}
+	if got.Metadata["camera_id"] != "cam2" {
+		t.Errorf("metadata camera_id not threaded: %+v", got.Metadata)
+	}
+}
+
+// A failed camera.snapshot ACK writes no row (logged, not retried).
+func TestCmdResultCameraSnapshotFailureNoRow(t *testing.T) {
+	applier := &recordingApplier{}
+	i := uploadIngester(applier, &fakePresigner{}, &fakePublisher{})
+	err := i.Handle(context.Background(), ingest.CmdResult{
+		Result: envelope.Result{
+			Type: "camera.snapshot", CorrelationID: "c1", Success: false,
+			Error: &envelope.ResultError{Code: "camera_snapshot.snapshot_failed", Message: "ffmpeg exited 1"},
+		},
+		DeviceID: "dev-1",
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(applier.captures) != 0 {
+		t.Errorf("failed snapshot wrote %d captures, want 0", len(applier.captures))
 	}
 }
 
