@@ -1056,6 +1056,36 @@ func (r *Registry) SetPresence(ctx context.Context, deviceID string, online bool
 	return nil
 }
 
+// ReconcileStalePresence is the DB-backed backstop for the in-memory presence
+// sweeper (issue: stuck "online" with a stale last_seen). It flips is_online to
+// false for every device that is still marked online but whose last_seen — AND
+// last presence transition — are both older than staleBefore, stamping the
+// transition at `now`. Returns the number of devices reconciled.
+//
+// Unlike the in-memory sweeper this reads the database, so it catches devices
+// the sweeper never learned about (e.g. one that died ungracefully before a
+// cp-ingest restart — no IoT "disconnected" event, no heartbeat to repopulate
+// the in-memory model). The presence_changed_at guard protects a device that
+// just reconnected via a lifecycle event but hasn't heartbeated yet: its
+// transition is recent even though last_seen is still old, so it is left online
+// until staleBefore catches up (by which point a healthy device has
+// heartbeated and refreshed last_seen). last_seen itself is never modified — it
+// remains the record of last contact.
+func (r *Registry) ReconcileStalePresence(ctx context.Context, staleBefore, now time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET is_online = false, presence_changed_at = $2, updated_at = now()
+		WHERE is_online = true
+		  AND last_seen IS NOT NULL
+		  AND last_seen < $1
+		  AND (presence_changed_at IS NULL OR presence_changed_at < $1)
+	`, staleBefore, now)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile stale presence: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // LogTailRequest is the operator-initiated tail request shape — what
 // CreateLogTailRequest persists. CorrelationID is the row PK and is
 // minted CP-side; the agent echoes it on cmd-result so the
