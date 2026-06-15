@@ -66,6 +66,10 @@ resource "aws_ecs_task_definition" "this" {
         # unsigned (a verifying agent then rejects, so set them together).
         { name = "AGENT_DIST_BUCKET", value = var.agent_dist_bucket },
         { name = "CP_COMMAND_SIGNING_SECRET_ID", value = var.command_signing_secret_id },
+        # Captures pipeline (#8). Empty disables upload.request/complete handling
+        # (the cmd-result consumer ignores those types); set to the captures
+        # bucket to enable presign-PUT + row indexing.
+        { name = "CAPTURES_BUCKET", value = var.captures_bucket },
       ]
 
       # The DB password is injected from the RDS-managed master secret's
