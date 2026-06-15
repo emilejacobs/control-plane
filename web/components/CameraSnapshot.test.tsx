@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../test/server";
@@ -42,8 +42,34 @@ describe("CameraSnapshot", () => {
     );
     renderWithClient(<CameraSnapshot deviceId="dev-1" cameraId="cam1" />);
 
-    const img = (await screen.findByRole("img", { name: /snapshot for cam1/i })) as HTMLImageElement;
+    const img = (await screen.findByRole("img", { name: /latest snapshot for cam1/i })) as HTMLImageElement;
     expect(img.src).toBe("https://s3.example/signed/snap-2.jpg");
+  });
+
+  it("clicking the thumbnail opens a full-size lightbox; Escape closes it", async () => {
+    server.use(
+      http.get(`${API_BASE}/devices/dev-1/captures`, () =>
+        HttpResponse.json({
+          captures: [captureRow({ id: "snap-2", cameraId: "cam1", createdAt: "2026-06-15T10:00:00Z" })],
+        }),
+      ),
+      http.get(`${API_BASE}/captures/snap-2/url`, () =>
+        HttpResponse.json({ url: "https://s3.example/signed/snap-2.jpg" }),
+      ),
+    );
+    renderWithClient(<CameraSnapshot deviceId="dev-1" cameraId="cam1" />);
+
+    await screen.findByRole("img", { name: /latest snapshot for cam1/i });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /enlarge snapshot for cam1/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /snapshot for cam1/i });
+    const full = within(dialog).getByRole("img", { name: /full size/i }) as HTMLImageElement;
+    expect(full.src).toBe("https://s3.example/signed/snap-2.jpg");
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("shows a placeholder when the camera has no snapshot", async () => {
