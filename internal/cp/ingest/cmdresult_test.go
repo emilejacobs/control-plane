@@ -24,13 +24,26 @@ type recordingApplier struct {
 	camerasCalls           []applyArgs
 	networkScanCompletes   []registry.NetworkScanCompletion
 	networkScanFailures    []registry.NetworkScanFailure
+	captures               []registry.CaptureInput
 	err                    error
 	logTailCompleteErr     error
 	logTailFailErr         error
 	camerasErr             error
 	networkScanCompleteErr error
 	networkScanFailErr     error
+	captureErr             error
 }
+
+func (r *recordingApplier) InsertCapture(_ context.Context, in registry.CaptureInput) (registry.Capture, error) {
+	r.mu.Lock()
+	r.captures = append(r.captures, in)
+	r.mu.Unlock()
+	if r.captureErr != nil {
+		return registry.Capture{}, r.captureErr
+	}
+	return registry.Capture{ID: "cap-row", DeviceID: in.DeviceID, Kind: in.Kind, S3Key: in.S3Key}, nil
+}
+
 type applyArgs struct {
 	deviceID, correlationID string
 	at                      time.Time

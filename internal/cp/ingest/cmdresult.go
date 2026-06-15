@@ -2,6 +2,8 @@ package ingest
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,7 +14,32 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
+	"github.com/emilejacobs/control-plane/internal/protocol/upload"
 )
+
+// uploadURLTTL is how long the presigned PUT URL CP hands the agent stays
+// valid — long enough to upload a snapshot/recording, short enough to limit a
+// leaked URL's blast radius (#8).
+const uploadURLTTL = 5 * time.Minute
+
+// CaptureWriter indexes a freshly-uploaded artifact. *registry.Registry
+// satisfies it. Separate from CmdResultWriter so the captures pipeline is
+// optional wiring.
+type CaptureWriter interface {
+	InsertCapture(ctx context.Context, in registry.CaptureInput) (registry.Capture, error)
+}
+
+// uploadPresigner mints the short-lived PUT URL the agent uploads to.
+// *captures.S3Presigner satisfies it.
+type uploadPresigner interface {
+	PutURL(ctx context.Context, key, contentType string, expiry time.Duration) (string, error)
+}
+
+// cmdPublisher publishes a command back to a device's cmd topic.
+// *iotpublisher.AWS satisfies it.
+type cmdPublisher interface {
+	Publish(ctx context.Context, topic string, payload []byte) error
+}
 
 // CmdResult is the cp-ingest wrapper around envelope.Result. The
 // embedded envelope carries the agent's ACK; DeviceID comes from the
@@ -61,6 +88,21 @@ type CmdResultIngester struct {
 	// (at info) for every successful apply. Nil defaults to a discard
 	// logger.
 	Logger *slog.Logger
+
+	// Captures pipeline (#8). All four must be set to enable upload.request /
+	// upload.complete handling; if any is nil the handler logs and ignores
+	// those messages so a cp-ingest without CAPTURES_BUCKET keeps draining.
+	Captures  CaptureWriter
+	Presigner uploadPresigner
+	Publisher cmdPublisher
+	// NewID mints the capture id that becomes the S3 key component. Defaults
+	// to a random uuid when nil but Captures is set.
+	NewID func() string
+}
+
+// capturesEnabled reports whether the full upload pipeline is wired.
+func (i *CmdResultIngester) capturesEnabled() bool {
+	return i.Captures != nil && i.Presigner != nil && i.Publisher != nil
 }
 
 func NewCmdResultIngester(w CmdResultWriter, now func() time.Time) *CmdResultIngester {
@@ -94,6 +136,10 @@ func (i *CmdResultIngester) Handle(ctx context.Context, r CmdResult) error {
 		return i.handleCamerasUpdate(ctx, r, log)
 	case "network.scan":
 		return i.handleNetworkScan(ctx, r, log)
+	case upload.TypeRequest:
+		return i.handleUploadRequest(ctx, r, log)
+	case upload.TypeComplete:
+		return i.handleUploadComplete(ctx, r, log)
 	default:
 		// Other cmd types are valid envelopes but not in scope here;
 		// Phase 3 will add per-type handlers. Silently ignored so the
@@ -305,6 +351,105 @@ func (i *CmdResultIngester) handleNetworkScan(ctx context.Context, r CmdResult, 
 		"host_count", len(resp.Hosts),
 	)
 	return nil
+}
+
+// handleUploadRequest mints a CP-controlled S3 key, presigns a short-lived PUT
+// URL, and publishes upload.url back on the device's cmd topic (#8). An invalid
+// request is poison (the agent can't fix it by resending); a transient presign
+// or publish failure propagates so SQS redelivers.
+func (i *CmdResultIngester) handleUploadRequest(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	if !i.capturesEnabled() {
+		log.Warn("upload.request ignored — captures pipeline not configured", "device_id", r.DeviceID)
+		return nil
+	}
+
+	var req upload.Request
+	if err := json.Unmarshal(r.Result.Result, &req); err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	if err := req.Validate(); err != nil {
+		return sqsconsumer.Poison(err)
+	}
+
+	newID := i.NewID
+	if newID == nil {
+		newID = randomID
+	}
+	key, err := upload.S3Key(req.Kind, r.DeviceID, newID(), req.ContentType)
+	if err != nil {
+		return sqsconsumer.Poison(err)
+	}
+
+	putURL, err := i.Presigner.PutURL(ctx, key, req.ContentType, uploadURLTTL)
+	if err != nil {
+		return err // transient — let SQS redeliver
+	}
+
+	args, err := json.Marshal(upload.URL{S3Key: key, PutURL: putURL})
+	if err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	cmd, err := json.Marshal(envelope.Command{
+		CorrelationID: r.CorrelationID,
+		Type:          upload.TypeURL,
+		Args:          args,
+	})
+	if err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	if err := i.Publisher.Publish(ctx, "devices/"+r.DeviceID+"/cmd", cmd); err != nil {
+		return err // transient
+	}
+	log.Info("upload.url issued",
+		"device_id", r.DeviceID,
+		"correlation_id", r.CorrelationID,
+		"kind", req.Kind,
+		"s3_key", key,
+	)
+	return nil
+}
+
+// handleUploadComplete indexes a device_captures row once the agent confirms
+// its PUT landed (#8).
+func (i *CmdResultIngester) handleUploadComplete(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	if !i.capturesEnabled() {
+		log.Warn("upload.complete ignored — captures pipeline not configured", "device_id", r.DeviceID)
+		return nil
+	}
+
+	var comp upload.Complete
+	if err := json.Unmarshal(r.Result.Result, &comp); err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	if comp.S3Key == "" || comp.Kind == "" {
+		return sqsconsumer.Poison(errors.New("upload.complete missing s3_key or kind"))
+	}
+
+	c, err := i.Captures.InsertCapture(ctx, registry.CaptureInput{
+		DeviceID:    r.DeviceID,
+		Kind:        comp.Kind,
+		S3Key:       comp.S3Key,
+		ContentType: comp.ContentType,
+		SizeBytes:   comp.SizeBytes,
+		Metadata:    comp.Metadata,
+	})
+	if err != nil {
+		return err // transient — SQS redelivers (FK to a since-deleted device DLQs after retries)
+	}
+	log.Info("capture indexed",
+		"device_id", r.DeviceID,
+		"capture_id", c.ID,
+		"kind", c.Kind,
+		"s3_key", c.S3Key,
+	)
+	return nil
+}
+
+// randomID mints a 128-bit hex token for the S3 key when NewID is unset.
+func randomID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // Compile-time checks that the cmd-result plumbing fits the consumer.
