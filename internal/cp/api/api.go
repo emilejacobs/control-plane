@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/auth"
 	captureshttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
@@ -22,7 +23,6 @@ import (
 	taxonomyhttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/taxonomy"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
-	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/authn"
 	"github.com/emilejacobs/control-plane/internal/cp/authz"
 	"github.com/emilejacobs/control-plane/internal/cp/captures"
@@ -253,6 +253,13 @@ func NewBuilderWith(d Deps) *Builder {
 		b.Get("/devices/{id}/captures", requireAuth(onboarded(requireScope(captureshttp.NewList(d.Registry)))))
 		if d.CapturePresigner != nil {
 			b.Get("/captures/{id}/url", requireAuth(onboarded(requireScope(captureshttp.NewURL(d.Registry, d.CapturePresigner)))))
+			// On-demand snapshot (#8 Slice B): presign a PUT + push camera.snapshot.
+			// Needs both the presigner (to sign the upload) and CmdPublisher (to
+			// push the cmd); gated on both being wired.
+			if d.CmdPublisher != nil {
+				b.Post("/devices/{id}/snapshot",
+					requireAuth(onboarded(requireScope(devices.NewCameraSnapshot(d.Registry, d.CapturePresigner, d.CmdPublisher)))))
+			}
 		}
 		// Phase 2 edge-UI rework: cameras inventory CRUD (issue #2).
 		// Read route (GET) requires only auth + TOTP + site scope.
