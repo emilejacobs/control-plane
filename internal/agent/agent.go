@@ -18,6 +18,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
 	"github.com/emilejacobs/control-plane/internal/handlers/agentupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/cameras"
+	"github.com/emilejacobs/control-plane/internal/handlers/camerasnapshot"
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
@@ -269,6 +270,14 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	// cameras leave it empty.
 	if cfg.CamerasPath != "" {
 		a.dispatcher.Register("cameras.update", cameras.New(NewCamerasApplier(cfg.CamerasPath)))
+		// camera.snapshot (#8 Slice B): resolve the camera from the same local
+		// cameras file, ffmpeg one frame, PUT to CP's presigned URL. Needs the
+		// cameras file, so it shares the CamerasPath gate.
+		a.dispatcher.Register("camera.snapshot", camerasnapshot.New(
+			newCamerasFileReader(cfg.CamerasPath),
+			newFFmpegSnapshotter(),
+			newHTTPUploader(),
+		))
 	}
 
 	// Phase 2 Edge UI rework (issue #3): network.scan handler.
