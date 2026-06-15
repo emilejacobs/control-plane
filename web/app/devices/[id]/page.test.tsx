@@ -244,3 +244,55 @@ describe("per-device view", () => {
     }
   });
 });
+
+// Network scan UX feedback (#12): clicking "Scan network" must give immediate
+// in-flight feedback, open the modal in a pending state, and surface POST
+// failures inline instead of failing silently.
+describe("network scan flow", () => {
+  it("loading arc: click flips the button to a disabled in-flight state and opens the modal pending", async () => {
+    deviceReturns(device());
+    server.use(
+      http.post(`${API_BASE}/devices/dev-1/network-scan`, () =>
+        HttpResponse.json({ correlation_id: "corr-1" }, { status: 202 }),
+      ),
+      http.get(`${API_BASE}/devices/dev-1/network-scan/corr-1`, () =>
+        HttpResponse.json({
+          correlation_id: "corr-1",
+          cidr: null,
+          status: "pending",
+          result: null,
+          error_code: null,
+          error_message: null,
+          requested_at: "2026-06-15T00:00:00Z",
+          returned_at: null,
+        }),
+      ),
+    );
+    renderWithClient(<DevicePage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /scan network/i }));
+
+    // Button enters a loading state immediately — no more silent 20s wait.
+    expect(await screen.findByRole("button", { name: /scanning/i })).toBeDisabled();
+    // Modal opens on correlation_id, before results land, showing pending.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/scanning the device's lan/i)).toBeInTheDocument();
+  });
+
+  it("surfaces a POST failure inline instead of failing silently", async () => {
+    deviceReturns(device());
+    server.use(
+      http.post(`${API_BASE}/devices/dev-1/network-scan`, () =>
+        HttpResponse.json({ message: "agent offline" }, { status: 500 }),
+      ),
+    );
+    renderWithClient(<DevicePage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /scan network/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/failed to start network scan/i);
+    // No modal, and the button is interactive again (not stuck scanning).
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /scan network/i })).toBeEnabled();
+  });
+});
