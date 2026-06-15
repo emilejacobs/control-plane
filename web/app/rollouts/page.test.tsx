@@ -18,6 +18,14 @@ beforeEach(() => {
   return () => clearTokens();
 });
 
+// fakeToken builds a JWT-shaped access token carrying the given claims, so the
+// page's currentOperator()/is_staff gate can be exercised (sig is irrelevant —
+// only the payload is decoded).
+function fakeToken(claims: Record<string, unknown>): string {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${b64({ alg: "HS256" })}.${b64(claims)}.sig`;
+}
+
 function rolloutReturns(body: Record<string, unknown>) {
   server.use(
     http.get(`${API_BASE}/fleet/agent-rollout`, () => HttpResponse.json(body)),
@@ -104,6 +112,33 @@ describe("rollout dashboard — read view", () => {
     // so match the state pill's exact label rather than a substring.
     expect(within(row).getByText("Untargeted")).toBeInTheDocument();
     expect(row).toHaveTextContent("—");
+  });
+
+  it("hides the start-rollout control from a non-staff operator", async () => {
+    rolloutReturns(sample);
+    renderWithClient(<RolloutsPage />);
+
+    // Read view still renders for a scoped operator.
+    await screen.findByTestId("rollup-done");
+    expect(screen.queryByText(/start a rollout/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the start-rollout control to a staff operator", async () => {
+    setTokens({
+      accessToken: fakeToken({ email: "staff@uknomi.com", is_staff: true }),
+      refreshToken: "r",
+    });
+    rolloutReturns(sample);
+    server.use(
+      http.get(`${API_BASE}/fleet/agent-versions`, () =>
+        HttpResponse.json({ versions: ["1.4.1"] }),
+      ),
+      http.get(`${API_BASE}/sites`, () => HttpResponse.json({ clients: [] })),
+    );
+    renderWithClient(<RolloutsPage />);
+
+    expect(await screen.findByText(/start a rollout/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /start rollout/i })).toBeInTheDocument();
   });
 
   it("polls GET /fleet/agent-rollout every 10 seconds", async () => {
