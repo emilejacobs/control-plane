@@ -1,11 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../test/server";
 import { renderWithClient } from "../test/render";
 import { API_BASE, setTokens, clearTokens } from "../lib/api/client";
 import { StartRolloutPanel } from "./StartRolloutPanel";
+import type { RolloutDevice } from "../lib/api/rollouts";
+
+function device(over: Partial<RolloutDevice> & { id: string }): RolloutDevice {
+  return {
+    hostname: over.id,
+    siteId: null,
+    siteName: null,
+    clientName: null,
+    reportedVersion: "1.4.0",
+    desiredVersion: null,
+    isOnline: true,
+    state: "untargeted",
+    ...over,
+  };
+}
 
 beforeEach(() => {
   setTokens({ accessToken: "test-access", refreshToken: "test-refresh" });
@@ -13,30 +28,11 @@ beforeEach(() => {
 });
 
 function stubCatalog() {
+  // The panel builds its site dropdown from the `devices` prop (#64), so it no
+  // longer fetches the /sites taxonomy tree — only the version catalog.
   server.use(
     http.get(`${API_BASE}/fleet/agent-versions`, () =>
       HttpResponse.json({ versions: ["1.4.1", "1.4.0"] }),
-    ),
-    http.get(`${API_BASE}/sites`, () =>
-      HttpResponse.json({
-        clients: [
-          {
-            id: "c1",
-            external_id: "",
-            name: "Acme",
-            sites: [
-              {
-                id: "s1",
-                external_id: "",
-                name: "HQ",
-                brand_name: "",
-                brand_external_id: "",
-                active: true,
-              },
-            ],
-          },
-        ],
-      }),
     ),
   );
 }
@@ -76,7 +72,7 @@ describe("StartRolloutPanel", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/5/);
   });
 
-  it("targets a site: switching to Specific site POSTs {version, site_id}", async () => {
+  it("targets a site: the dropdown is built from device assignments and POSTs the device's site_id (#64)", async () => {
     stubCatalog();
     let body: Record<string, unknown> | null = null;
     server.use(
@@ -85,15 +81,44 @@ describe("StartRolloutPanel", () => {
         return HttpResponse.json({ correlation_id: "c", targeted: 2, pushed: 2 }, { status: 202 });
       }),
     );
-    renderWithClient(<StartRolloutPanel />);
+    const devices = [
+      device({ id: "d1", siteId: "site-54", siteName: "Store 54", clientName: "Eegee's" }),
+      device({ id: "d2", siteId: null }), // unassigned → contributes no option
+    ];
+    renderWithClient(<StartRolloutPanel devices={devices} />);
 
     await screen.findByLabelText(/target version/i);
     await userEvent.click(screen.getByRole("radio", { name: /specific site/i }));
-    await userEvent.selectOptions(await screen.findByLabelText(/^site$/i), "s1");
+    const siteSelect = await screen.findByLabelText(/^site$/i);
+    // Only the assigned site is offered (placeholder + Store 54); the
+    // unassigned device adds nothing.
+    expect(within(siteSelect).getByRole("option", { name: /store 54/i })).toBeInTheDocument();
+    expect(within(siteSelect).getAllByRole("option")).toHaveLength(2);
+
+    await userEvent.selectOptions(siteSelect, "site-54");
     await userEvent.click(screen.getByRole("button", { name: /start rollout/i }));
 
     await waitFor(() => expect(body).not.toBeNull());
-    expect(body).toEqual({ version: "1.4.1", site_id: "s1" });
+    // The id sent is the device's stored site_id, so it always matches ≥1 device.
+    expect(body).toEqual({ version: "1.4.1", site_id: "site-54" });
+  });
+
+  it("dedups sites and lists each assigned site once across multiple devices (#64)", async () => {
+    stubCatalog();
+    const devices = [
+      device({ id: "d1", siteId: "site-54", siteName: "Store 54", clientName: "Eegee's" }),
+      device({ id: "d2", siteId: "site-54", siteName: "Store 54", clientName: "Eegee's" }),
+      device({ id: "d3", siteId: "site-12", siteName: "Store 12", clientName: "Eegee's" }),
+    ];
+    renderWithClient(<StartRolloutPanel devices={devices} />);
+
+    await screen.findByLabelText(/target version/i);
+    await userEvent.click(screen.getByRole("radio", { name: /specific site/i }));
+    const siteSelect = await screen.findByLabelText(/^site$/i);
+    // placeholder + the two distinct sites
+    expect(within(siteSelect).getAllByRole("option")).toHaveLength(3);
+    expect(within(siteSelect).getByRole("option", { name: /store 54/i })).toBeInTheDocument();
+    expect(within(siteSelect).getByRole("option", { name: /store 12/i })).toBeInTheDocument();
   });
 
   it("canary: targets the selected device subset and POSTs {version, device_ids}", async () => {

@@ -38,6 +38,7 @@ type rolloutCounts struct {
 type rolloutDevice struct {
 	ID              string  `json:"id"`
 	Hostname        string  `json:"hostname"`
+	SiteID          *string `json:"site_id"`
 	SiteName        *string `json:"site_name"`
 	ClientName      *string `json:"client_name"`
 	ReportedVersion string  `json:"reported_version"`
@@ -81,6 +82,7 @@ func (h *AgentRolloutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		resp.Devices = append(resp.Devices, rolloutDevice{
 			ID:              d.ID,
 			Hostname:        d.Hostname,
+			SiteID:          d.SiteID,
 			SiteName:        d.SiteName,
 			ClientName:      d.ClientName,
 			ReportedVersion: d.AgentVersion,

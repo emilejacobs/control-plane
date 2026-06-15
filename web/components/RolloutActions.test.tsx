@@ -17,6 +17,7 @@ function dev(p: Partial<RolloutDevice> & { id: string }): RolloutDevice {
   return {
     id: p.id,
     hostname: p.hostname ?? p.id,
+    siteId: p.siteId ?? null,
     siteName: p.siteName ?? null,
     clientName: p.clientName ?? null,
     reportedVersion: p.reportedVersion ?? "",
