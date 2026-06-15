@@ -190,6 +190,14 @@ data "aws_iam_policy_document" "cp_ingest" {
     actions   = ["iot:Publish"]
     resources = ["arn:aws:iot:${var.region}:${data.aws_caller_identity.current.account_id}:topic/devices/*/cmd"]
   }
+  # Captures pipeline (#8): cp-ingest presigns the agent's upload PUT, so its
+  # role must itself hold s3:PutObject on the captures bucket for the signed URL
+  # to resolve. (Publishing the resulting upload.url reuses IoTPublishCmd above.)
+  statement {
+    sid       = "CapturesWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.main["captures"].arn}/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_ingest" {

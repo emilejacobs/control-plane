@@ -105,6 +105,14 @@ variable "command_signing_secret_id" {
   default     = ""
 }
 
+# Captures pipeline (#8). Empty default keeps the module applyable before the
+# feature is enabled — cp-ingest ignores upload.request/complete when unset.
+variable "captures_bucket" {
+  description = "S3 bucket for the captures pipeline. Empty disables upload.request/complete handling."
+  type        = string
+  default     = ""
+}
+
 variable "desired_count" {
   description = "Number of cp-ingest tasks to run."
   type        = number
