@@ -46,6 +46,42 @@ func TestTransportRoundtrip(t *testing.T) {
 	}
 }
 
+// LastPublishSuccess is the liveness signal the agent watchdog reads (#65): a
+// successful connect seeds it, and every successful publish advances it. A
+// wedged session (publishes failing) leaves it frozen, which the watchdog
+// detects.
+func TestTransportLastPublishSuccessAdvancesOnPublish(t *testing.T) {
+	ctx := context.Background()
+	certs := generateTestCerts(t)
+	fixture := startMosquitto(t, ctx, certs)
+
+	tr, err := transport.New(transport.Config{
+		BrokerURL: fixture.BrokerURL,
+		ClientID:  "liveness-client",
+		CACertPEM: certs.CAPEM,
+		CertPEM:   certs.ClientCertPEM,
+		KeyPEM:    certs.ClientKeyPEM,
+	})
+	if err != nil {
+		t.Fatalf("transport.New: %v", err)
+	}
+	defer tr.Close()
+
+	seeded := tr.LastPublishSuccess()
+	if seeded.IsZero() {
+		t.Fatal("expected New() to seed LastPublishSuccess on connect")
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	if err := tr.Publish("test/topic", []byte("x")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	advanced := tr.LastPublishSuccess()
+	if !advanced.After(seeded) {
+		t.Fatalf("LastPublishSuccess did not advance on a successful publish: seeded=%v advanced=%v", seeded, advanced)
+	}
+}
+
 func TestTransportNewFailsWhenBrokerUnreachable(t *testing.T) {
 	certs := generateTestCerts(t)
 

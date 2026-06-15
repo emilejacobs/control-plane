@@ -59,6 +59,11 @@ const (
 	defaultTelemetryInterval     = 30 * time.Second
 	defaultServiceStatusInterval = 5 * time.Minute
 	defaultProbeInterval         = 5 * time.Minute
+	// The MQTT-session watchdog (#65) declares a wedge when no publish has
+	// succeeded for staleAfter (~10 missed 30s heartbeats), checked every
+	// interval.
+	defaultWatchdogStaleAfter = 5 * time.Minute
+	defaultWatchdogInterval   = time.Minute
 )
 
 type Config struct {
@@ -77,6 +82,14 @@ type Config struct {
 	// reporter (issue #19); it runs whenever a probe backend is supplied
 	// via WithProbeBackend. Defaults to 5 minutes when unset.
 	ProbeInterval time.Duration
+
+	// WatchdogStaleAfter / WatchdogInterval tune the MQTT-session watchdog
+	// (#65). If no publish succeeds within WatchdogStaleAfter, the agent
+	// signals WedgeDetected so main exits and launchd restarts it with a
+	// fresh transport. The watchdog only runs when the transport reports
+	// liveness (LastPublishSuccess). Default 5m stale / 1m check.
+	WatchdogStaleAfter time.Duration
+	WatchdogInterval   time.Duration
 
 	// ConfigPath is the absolute path to the agent's JSON config file
 	// (the same file that produced this Config via config.Load). When
@@ -151,6 +164,15 @@ type Agent struct {
 	restart     chan struct{}
 	restartOnce sync.Once
 	healthDone  chan struct{}
+
+	// wedged is closed once when the transport watchdog (#65) confirms a dead
+	// MQTT session. main selects on it and exits so launchd restarts the agent
+	// with a fresh transport. watchdog* hold the tuned thresholds.
+	wedged             chan struct{}
+	wedgedOnce         sync.Once
+	watchdogStaleAfter time.Duration
+	watchdogInterval   time.Duration
+	watchdogDone       chan struct{}
 }
 
 type Option func(*Agent)
@@ -196,13 +218,22 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	}
 
 	a := &Agent{
-		transport: transport,
-		deviceID:  cfg.DeviceID,
-		version:   cfg.Version,
-		logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		startTime: time.Now(),
-		updateDir: cfg.UpdateDir,
-		restart:   make(chan struct{}),
+		transport:          transport,
+		deviceID:           cfg.DeviceID,
+		version:            cfg.Version,
+		logger:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		startTime:          time.Now(),
+		updateDir:          cfg.UpdateDir,
+		restart:            make(chan struct{}),
+		wedged:             make(chan struct{}),
+		watchdogStaleAfter: cfg.WatchdogStaleAfter,
+		watchdogInterval:   cfg.WatchdogInterval,
+	}
+	if a.watchdogStaleAfter <= 0 {
+		a.watchdogStaleAfter = defaultWatchdogStaleAfter
+	}
+	if a.watchdogInterval <= 0 {
+		a.watchdogInterval = defaultWatchdogInterval
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -430,6 +461,25 @@ func (a *Agent) Start() error {
 		}()
 	}
 
+	// MQTT-session watchdog (#65). Only runs when the transport reports
+	// liveness — the production transport does; bare test fakes don't, so they
+	// see no behaviour change. On a confirmed wedge it signals WedgeDetected
+	// (main exits → launchd restarts with a fresh transport).
+	if lr, ok := a.transport.(livenessReporter); ok {
+		a.watchdogDone = make(chan struct{})
+		wd := &watchdog{
+			lastSuccess:   lr.LastPublishSuccess,
+			staleAfter:    a.watchdogStaleAfter,
+			checkInterval: a.watchdogInterval,
+			onWedged:      a.signalWedged,
+			logger:        a.logger,
+		}
+		go func() {
+			defer close(a.watchdogDone)
+			wd.run(pubCtx)
+		}()
+	}
+
 	// Update health marker (issue #39, ADR-035 §5). The Subscribe above
 	// proves mTLS-connected + cmd-topic-subscribed (controllable); one
 	// heartbeat proves alive. Emit that heartbeat now, then write
@@ -467,6 +517,22 @@ func (a *Agent) requestRestart() {
 // it alongside SIGTERM/SIGINT and exits 0.
 func (a *Agent) RestartRequested() <-chan struct{} { return a.restart }
 
+// livenessReporter is the optional transport capability the watchdog needs:
+// the time of the last successful publish. *transport.Transport implements it.
+type livenessReporter interface {
+	LastPublishSuccess() time.Time
+}
+
+// signalWedged is the watchdog's onWedged callback — closes wedged once.
+func (a *Agent) signalWedged() {
+	a.wedgedOnce.Do(func() { close(a.wedged) })
+}
+
+// WedgeDetected fires when the transport watchdog confirms a dead MQTT session
+// (#65). main selects on it and exits non-zero so launchd restarts the agent
+// with a fresh transport — the proven recovery for a wedged session.
+func (a *Agent) WedgeDetected() <-chan struct{} { return a.wedged }
+
 // httpUpdateFetch downloads a staged binary from CP's presigned URL. The
 // agentupdate handler re-checks the sha256 against the signed manifest, so a
 // tampered URL yields bytes that fail that check.
@@ -495,6 +561,9 @@ func (a *Agent) Stop() error {
 		}
 		if a.probeDone != nil {
 			<-a.probeDone
+		}
+		if a.watchdogDone != nil {
+			<-a.watchdogDone
 		}
 	}
 	if a.healthDone != nil {

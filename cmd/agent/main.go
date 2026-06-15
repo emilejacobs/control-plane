@@ -151,6 +151,14 @@ func main() {
 		// and health-gates the candidate (issue #39, ADR-035 §3). Exit 0 —
 		// this is an orderly hand-off, not a crash.
 		logger.Info("shutting down to let the wrapper gate a staged update")
+	case <-a.WedgeDetected():
+		// The transport watchdog confirmed a dead MQTT session (#65). Exit
+		// non-zero so launchd's KeepAlive restarts us through the supervisor
+		// with a fresh transport — the proven recovery (manual kickstart).
+		// Stop is best-effort: a wedged paho client may not close cleanly.
+		logger.Error("mqtt session wedged — exiting so launchd restarts the agent with a fresh transport")
+		_ = a.Stop()
+		os.Exit(1)
 	}
 
 	if err := a.Stop(); err != nil {
