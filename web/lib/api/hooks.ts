@@ -22,6 +22,7 @@ import {
 } from "./operators";
 import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
 import { getFleetAlerts } from "./fleet";
+import { getAgentRollout } from "./rollouts";
 import {
   getSitesTree,
   updateDeviceDeployment,
@@ -131,6 +132,17 @@ export function useFleetAlerts() {
   return useQuery({
     queryKey: ["fleet-alerts"],
     queryFn: getFleetAlerts,
+    refetchInterval: devicePollInterval,
+  });
+}
+
+// useAgentRollout loads the site-scoped fleet-update rollout view (#42) —
+// roll-up counts + per-device desired-vs-reported state — on the same 10s
+// cadence as the fleet list, so convergence ticks forward without a refresh.
+export function useAgentRollout() {
+  return useQuery({
+    queryKey: ["agent-rollout"],
+    queryFn: getAgentRollout,
     refetchInterval: devicePollInterval,
   });
 }
