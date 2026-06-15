@@ -96,6 +96,37 @@ describe("StartRolloutPanel", () => {
     expect(body).toEqual({ version: "1.4.1", site_id: "s1" });
   });
 
+  it("canary: targets the selected device subset and POSTs {version, device_ids}", async () => {
+    stubCatalog();
+    let body: Record<string, unknown> | null = null;
+    const onStarted = vi.fn();
+    server.use(
+      http.post(`${API_BASE}/agent-rollouts`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ correlation_id: "c", targeted: 2, pushed: 2 }, { status: 202 });
+      }),
+    );
+    renderWithClient(
+      <StartRolloutPanel selectedDeviceIds={["d1", "d2"]} onStarted={onStarted} />,
+    );
+
+    await screen.findByLabelText(/target version/i);
+    await userEvent.click(screen.getByRole("radio", { name: /selected devices \(2\)/i }));
+    await userEvent.click(screen.getByRole("button", { name: /start rollout/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toEqual({ version: "1.4.1", device_ids: ["d1", "d2"] });
+    await waitFor(() => expect(onStarted).toHaveBeenCalled());
+  });
+
+  it("canary: the Selected devices option is disabled when nothing is selected", async () => {
+    stubCatalog();
+    renderWithClient(<StartRolloutPanel selectedDeviceIds={[]} />);
+
+    await screen.findByLabelText(/target version/i);
+    expect(screen.getByRole("radio", { name: /selected devices \(0\)/i })).toBeDisabled();
+  });
+
   it("surfaces the server's error message when the rollout is rejected", async () => {
     stubCatalog();
     server.use(

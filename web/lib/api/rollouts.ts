@@ -133,6 +133,32 @@ export async function startRollout(input: StartRolloutInput): Promise<StartRollo
   return { correlationId: r.correlation_id, targeted: r.targeted, pushed: r.pushed };
 }
 
+// abortRollout reverts un-converged devices by resetting each one's desired
+// version back to the version it currently reports (ADR-035 §4 abort = "reset
+// desired to current"). Because POST /agent-rollouts sets one version per call,
+// devices are grouped by reported version and one call is made per group.
+// Devices with no reported version yet are skipped (there's nothing to reset to,
+// and version "" would be rejected). Returns the group + skipped counts.
+export async function abortRollout(
+  devices: { id: string; reportedVersion: string }[],
+): Promise<{ groups: number; skipped: number }> {
+  const byVersion = new Map<string, string[]>();
+  let skipped = 0;
+  for (const d of devices) {
+    if (!d.reportedVersion) {
+      skipped++;
+      continue;
+    }
+    const ids = byVersion.get(d.reportedVersion) ?? [];
+    ids.push(d.id);
+    byVersion.set(d.reportedVersion, ids);
+  }
+  for (const [version, deviceIds] of byVersion) {
+    await startRollout({ version, target: { kind: "devices", deviceIds } });
+  }
+  return { groups: byVersion.size, skipped };
+}
+
 // getAgentRollout fetches the operator's site-scoped rollout view from
 // GET /fleet/agent-rollout: roll-up counts plus per-device desired-vs-reported
 // state. Site scope is applied server-side (staff see the fleet).
