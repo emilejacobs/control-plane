@@ -16,6 +16,10 @@ locals {
     audit-mirror   = "uknomi-cp-audit-mirror-${data.aws_caller_identity.current.account_id}"
     command-output = "uknomi-cp-command-output-${data.aws_caller_identity.current.account_id}"
     agent-dist     = "uknomi-cp-agent-dist-${data.aws_caller_identity.current.account_id}"
+    # captures: the device→S3 binary-artifact store (#8, ADR-030 § 7). Prefixes
+    # snapshots/, audio/, transcripts/. Snapshots expire after 90 days
+    # (lifecycle below); audio + transcripts are kept indefinitely.
+    captures = "uknomi-cp-captures-${data.aws_caller_identity.current.account_id}"
   }
 }
 
@@ -73,4 +77,23 @@ resource "aws_s3_bucket_public_access_block" "main" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+# Captures lifecycle (#8, ADR-030 § 7): snapshots are cheap, plentiful, and
+# only the latest matters operationally, so they expire after 90 days. Audio
+# recordings + their transcripts are evidence-grade and never auto-expire (no
+# rule covering those prefixes).
+resource "aws_s3_bucket_lifecycle_configuration" "captures" {
+  bucket = aws_s3_bucket.main["captures"].id
+
+  rule {
+    id     = "expire-snapshots-90d"
+    status = "Enabled"
+    filter {
+      prefix = "snapshots/"
+    }
+    expiration {
+      days = 90
+    }
+  }
 }

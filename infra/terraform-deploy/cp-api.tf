@@ -76,6 +76,10 @@ resource "aws_ecs_task_definition" "cp_api" {
         # the agent.update envelope with the command-signing key.
         { name = "AGENT_DIST_BUCKET", value = aws_s3_bucket.main["agent-dist"].bucket },
         { name = "CP_COMMAND_SIGNING_SECRET_ID", value = "uknomi/cp/command-signing-key" },
+        # Captures read surface (#8): enables GET /captures/{id}/url to presign
+        # downloads from the captures bucket. Unsetting it disables that route
+        # (the list route keeps serving rows).
+        { name = "CAPTURES_BUCKET", value = aws_s3_bucket.main["captures"].bucket },
       ], local.db_environment)
 
       secrets = [
