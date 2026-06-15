@@ -13,6 +13,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/envelope"
+	"github.com/emilejacobs/control-plane/internal/protocol/camerasnapshot"
 	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
 	"github.com/emilejacobs/control-plane/internal/protocol/upload"
 )
@@ -140,6 +141,8 @@ func (i *CmdResultIngester) Handle(ctx context.Context, r CmdResult) error {
 		return i.handleUploadRequest(ctx, r, log)
 	case upload.TypeComplete:
 		return i.handleUploadComplete(ctx, r, log)
+	case "camera.snapshot":
+		return i.handleCameraSnapshot(ctx, r, log)
 	default:
 		// Other cmd types are valid envelopes but not in scope here;
 		// Phase 3 will add per-type handlers. Silently ignored so the
@@ -441,6 +444,57 @@ func (i *CmdResultIngester) handleUploadComplete(ctx context.Context, r CmdResul
 		"capture_id", c.ID,
 		"kind", c.Kind,
 		"s3_key", c.S3Key,
+	)
+	return nil
+}
+
+// handleCameraSnapshot indexes a snapshot capture from a camera.snapshot ACK
+// (#8 Slice B). camera.snapshot embeds the presigned PUT in the command, so by
+// the time the agent ACKs the bytes are already in S3 — CP just records the row.
+// A failure ACK is logged, not retried (the dashboard surfaces no fresh shot).
+func (i *CmdResultIngester) handleCameraSnapshot(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	if !i.capturesEnabled() {
+		log.Warn("camera.snapshot ignored — captures pipeline not configured", "device_id", r.DeviceID)
+		return nil
+	}
+	if !r.Success {
+		code, message := "", ""
+		if r.Error != nil {
+			code, message = r.Error.Code, r.Error.Message
+		}
+		log.Warn("camera.snapshot ACK failure",
+			"device_id", r.DeviceID,
+			"correlation_id", r.CorrelationID,
+			"error_code", code,
+			"error_message", message,
+		)
+		return nil
+	}
+
+	var res camerasnapshot.Result
+	if err := json.Unmarshal(r.Result.Result, &res); err != nil {
+		return sqsconsumer.Poison(err)
+	}
+	if res.S3Key == "" {
+		return sqsconsumer.Poison(errors.New("camera.snapshot ACK missing s3_key"))
+	}
+
+	c, err := i.Captures.InsertCapture(ctx, registry.CaptureInput{
+		DeviceID:    r.DeviceID,
+		Kind:        upload.KindSnapshot,
+		S3Key:       res.S3Key,
+		ContentType: camerasnapshot.ContentType,
+		SizeBytes:   res.SizeBytes,
+		Metadata:    map[string]any{"camera_id": res.CameraID},
+	})
+	if err != nil {
+		return err
+	}
+	log.Info("snapshot captured",
+		"device_id", r.DeviceID,
+		"capture_id", c.ID,
+		"camera_id", res.CameraID,
+		"s3_key", res.S3Key,
 	)
 	return nil
 }
