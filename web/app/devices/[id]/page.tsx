@@ -81,7 +81,20 @@ export default function DevicePage() {
   const [scanCorrelationId, setScanCorrelationId] = useState<string | null>(
     null,
   );
+  // True while the POST /network-scan is in flight (before a correlation_id
+  // comes back) — distinct from the poll phase below. scanError surfaces a
+  // failed POST inline instead of failing silently (#12).
+  const [scanPosting, setScanPosting] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const networkScan = useNetworkScan(id, scanCorrelationId);
+  // The scan is "in flight" from the click until the poll reports done/error:
+  // the POST round-trip, the pre-first-poll gap, and every pending poll. Drives
+  // the button's disabled/"Scanning…" affordance (#12).
+  const scanInFlight =
+    scanPosting ||
+    (scanCorrelationId !== null &&
+      networkScan.data?.status !== "done" &&
+      networkScan.data?.status !== "error");
 
   async function handleCameraSubmit(input: {
     label: string;
@@ -99,9 +112,23 @@ export default function DevicePage() {
     void queryClient.invalidateQueries({ queryKey: ["device", id, "cameras"] });
   }
 
-  async function handleScanNetwork() {
-    const { correlationId } = await postNetworkScan(id, {});
-    setScanCorrelationId(correlationId);
+  // handleScanNetwork kicks off (or re-runs) a LAN scan. An empty cidr means
+  // auto-detect; a non-empty one overrides the subnet (#12). The POST is
+  // wrapped so a failure surfaces inline rather than silently swallowing the
+  // click.
+  async function handleScanNetwork(cidr?: string) {
+    setScanError(null);
+    setScanPosting(true);
+    try {
+      const { correlationId } = await postNetworkScan(id, cidr ? { cidr } : {});
+      setScanCorrelationId(correlationId);
+    } catch (e) {
+      setScanError(
+        e instanceof Error ? e.message : "Failed to start network scan",
+      );
+    } finally {
+      setScanPosting(false);
+    }
   }
 
   // Cert "pill" tone derived from days remaining — mirrors the band logic
@@ -343,7 +370,9 @@ export default function DevicePage() {
                 onAddCamera={() => setCameraDialog({ mode: "add" })}
                 onEditCamera={(c) => setCameraDialog({ mode: "edit", camera: c })}
                 onDeleteCamera={(c) => setCameraDialog({ mode: "delete", camera: c })}
-                onScanNetwork={handleScanNetwork}
+                onScanNetwork={() => handleScanNetwork()}
+                scanInFlight={scanInFlight}
+                scanError={scanError}
                 onVerifyAngle={(c) =>
                   window.open(edgePreviewURL(d, c.cameraId), "_blank", "noopener")
                 }
@@ -368,14 +397,15 @@ export default function DevicePage() {
                 onClose={() => setCameraDialog(null)}
               />
             )}
-            {scanCorrelationId && networkScan.data && (
+            {scanCorrelationId && (
               <NetworkScanModal
-                scan={networkScan.data}
+                scan={networkScan.data ?? null}
                 onClose={() => setScanCorrelationId(null)}
                 onAddCamera={(ip) => {
                   setScanCorrelationId(null);
                   setCameraDialog({ mode: "add", prefillIp: ip });
                 }}
+                onRescan={(cidr) => handleScanNetwork(cidr)}
               />
             )}
 
