@@ -274,3 +274,86 @@ func TestDeviceGetReportsOnline(t *testing.T) {
 		t.Errorf("last_seen_ago_seconds should still reflect the recent last_seen: got %v", ago)
 	}
 }
+
+// TestRegistryReconcileStalePresence is the fix for the stuck-online bug: a
+// device that dies ungracefully (no IoT "disconnected" event) and is missed by
+// the in-memory sweeper (cp-ingest restarted since its last heartbeat) sits at
+// is_online=true forever while last_seen goes stale. ReconcileStalePresence is
+// the DB-backed backstop — it flips is_online=false for rows whose last_seen
+// AND presence_changed_at are both older than the cutoff, leaving healthy and
+// just-reconnected devices alone.
+func TestRegistryReconcileStalePresence(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-5 * time.Minute)
+	old := now.Add(-1 * time.Hour)    // well before the cutoff
+	fresh := now.Add(-30 * time.Second) // after the cutoff
+
+	// A — stuck online: last heartbeat an hour ago, never disconnected.
+	stuck := enrollForTest(t, srv, "mac-stuck", "11111111-1111-1111-1111-111111111111")
+	if err := srv.Registry.UpdateLastSeen(ctx, stuck, old); err != nil {
+		t.Fatalf("stuck UpdateLastSeen: %v", err)
+	}
+	// B — healthy: heartbeated 30s ago.
+	healthy := enrollForTest(t, srv, "mac-healthy", "22222222-2222-2222-2222-222222222222")
+	if err := srv.Registry.UpdateLastSeen(ctx, healthy, fresh); err != nil {
+		t.Fatalf("healthy UpdateLastSeen: %v", err)
+	}
+	// C — just reconnected: old last_seen, but a fresh presence transition
+	// (lifecycle "connected") it hasn't heartbeated against yet. Must NOT be
+	// swept — the presence_changed_at guard protects it until it heartbeats.
+	recon := enrollForTest(t, srv, "mac-recon", "33333333-3333-3333-3333-333333333333")
+	if err := srv.Registry.UpdateLastSeen(ctx, recon, old); err != nil {
+		t.Fatalf("recon UpdateLastSeen: %v", err)
+	}
+	if err := srv.Registry.SetPresence(ctx, recon, true, fresh); err != nil {
+		t.Fatalf("recon SetPresence: %v", err)
+	}
+
+	n, err := srv.Registry.ReconcileStalePresence(ctx, cutoff, now)
+	if err != nil {
+		t.Fatalf("ReconcileStalePresence: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("reconciled count: got %d want 1 (only the stuck device)", n)
+	}
+
+	assertOnline := func(id, label string, want bool) {
+		t.Helper()
+		dev, err := srv.Registry.GetByID(staffCtx(ctx), id)
+		if err != nil {
+			t.Fatalf("%s GetByID: %v", label, err)
+		}
+		if dev.IsOnline != want {
+			t.Errorf("%s is_online: got %v want %v", label, dev.IsOnline, want)
+		}
+	}
+	assertOnline(stuck, "stuck", false)   // flipped offline
+	assertOnline(healthy, "healthy", true) // untouched
+	assertOnline(recon, "recon", true)     // protected by the guard
+
+	// The stuck device's presence_changed_at advanced to `now` (the transition
+	// time), and last_seen is left untouched (still records its last contact).
+	dev, err := srv.Registry.GetByID(staffCtx(ctx), stuck)
+	if err != nil {
+		t.Fatalf("stuck GetByID: %v", err)
+	}
+	if dev.PresenceChangedAt == nil || !dev.PresenceChangedAt.Equal(now) {
+		t.Errorf("stuck presence_changed_at: got %v want %v", dev.PresenceChangedAt, now)
+	}
+	if dev.LastSeen == nil || !dev.LastSeen.Equal(old) {
+		t.Errorf("stuck last_seen should be untouched: got %v want %v", dev.LastSeen, old)
+	}
+
+	// Idempotent: a second pass finds nothing new (the device is already off).
+	n2, err := srv.Registry.ReconcileStalePresence(ctx, cutoff, now)
+	if err != nil {
+		t.Fatalf("second ReconcileStalePresence: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("second reconcile count: got %d want 0", n2)
+	}
+}

@@ -82,3 +82,29 @@ func TestPresenceSweeperRunStopsOnCancel(t *testing.T) {
 		t.Fatal("sweeper Run did not stop within 2s of ctx cancel")
 	}
 }
+
+// TestPresenceSweeperRunsDBBackstop locks the stuck-online fix: every sweep
+// also runs the DB-backed reconcile with cutoff = now - StaleThreshold, so
+// orphaned devices the in-memory model never saw still get flipped offline.
+func TestPresenceSweeperRunsDBBackstop(t *testing.T) {
+	t0 := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	w := &fakePresenceWriter{reconcileN: 2}
+	sw := NewPresenceSweeper(presence.New(), w, SweeperConfig{
+		StaleThreshold: 5 * time.Minute,
+		Logger:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		Now:            fixedClock(t0),
+	})
+
+	sw.sweepOnce(context.Background())
+
+	if len(w.reconcileCalls) != 1 {
+		t.Fatalf("ReconcileStalePresence calls: got %d want 1", len(w.reconcileCalls))
+	}
+	c := w.reconcileCalls[0]
+	if !c.now.Equal(t0) {
+		t.Errorf("reconcile now: got %v want %v", c.now, t0)
+	}
+	if want := t0.Add(-5 * time.Minute); !c.staleBefore.Equal(want) {
+		t.Errorf("reconcile staleBefore: got %v want %v", c.staleBefore, want)
+	}
+}

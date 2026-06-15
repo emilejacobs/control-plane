@@ -17,16 +17,29 @@ type setPresenceCall struct {
 	at       time.Time
 }
 
-// fakePresenceWriter records every SetPresence call and returns its
-// configured error.
+type reconcileCall struct {
+	staleBefore time.Time
+	now         time.Time
+}
+
+// fakePresenceWriter records every SetPresence + ReconcileStalePresence call
+// and returns its configured error / count.
 type fakePresenceWriter struct {
-	err   error
-	calls []setPresenceCall
+	err            error
+	calls          []setPresenceCall
+	reconcileCalls []reconcileCall
+	reconcileN     int
+	reconcileErr   error
 }
 
 func (f *fakePresenceWriter) SetPresence(_ context.Context, deviceID string, online bool, at time.Time) error {
 	f.calls = append(f.calls, setPresenceCall{deviceID, online, at})
 	return f.err
+}
+
+func (f *fakePresenceWriter) ReconcileStalePresence(_ context.Context, staleBefore, now time.Time) (int, error) {
+	f.reconcileCalls = append(f.reconcileCalls, reconcileCall{staleBefore, now})
+	return f.reconcileN, f.reconcileErr
 }
 
 func TestLifecycleIngesterConnected(t *testing.T) {
