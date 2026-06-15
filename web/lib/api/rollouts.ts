@@ -16,6 +16,10 @@ export type RolloutState = "done" | "in_flight" | "rolled_back" | "untargeted";
 export interface RolloutDevice {
   id: string;
   hostname: string;
+  // The id of the assigned site, matching devices.site_id. The start panel
+  // builds its "Specific site" dropdown from these so the targeted id always
+  // matches ≥1 device (#64).
+  siteId: string | null;
   siteName: string | null;
   clientName: string | null;
   reportedVersion: string;
@@ -42,6 +46,7 @@ interface RolloutWire {
   devices: Array<{
     id: string;
     hostname: string;
+    site_id: string | null;
     site_name: string | null;
     client_name: string | null;
     reported_version: string;
@@ -180,6 +185,7 @@ export async function getAgentRollout(): Promise<AgentRollout> {
     devices: body.devices.map((d) => ({
       id: d.id,
       hostname: d.hostname,
+      siteId: d.site_id,
       siteName: d.site_name,
       clientName: d.client_name,
       reportedVersion: d.reported_version,
