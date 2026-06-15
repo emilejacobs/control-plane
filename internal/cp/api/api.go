@@ -71,6 +71,11 @@ type Deps struct {
 	AgentRolloutCatalog agentrollout.ManifestSource
 	AgentRolloutPusher  devices.UpdatePusher
 
+	// AgentVersionCatalog lists the published catalog versions that back the
+	// rollout target picker (GET /fleet/agent-versions, #42). Same agent-dist
+	// source as AgentRolloutCatalog; nil disables the route.
+	AgentVersionCatalog fleet.VersionCatalog
+
 	// Audit is the sink every state-mutating handler writes audit entries
 	// through. nil falls back to a discard Writer so tests that do not
 	// care about audit assertions can omit it.
@@ -233,6 +238,16 @@ func NewBuilderWith(d Deps) *Builder {
 		// slice, staff see the fleet; the mutating counterpart
 		// (POST /agent-rollouts, below) stays staff-only.
 		b.Get("/fleet/agent-rollout", requireAuth(onboarded(requireScope(fleet.NewAgentRollout(d.Registry)))))
+		// GET /fleet/agent-versions — published catalog versions for the
+		// rollout target picker (#42). Auth + TOTP but not staff-gated and
+		// not site-scoped (mirrors GET /sites): the version catalog is
+		// fleet-global, and operators see it to populate the picker; the
+		// rollout itself (POST /agent-rollouts) stays staff-only. Skipped
+		// when agent-dist isn't configured.
+		if d.AgentVersionCatalog != nil {
+			b.Get("/fleet/agent-versions",
+				requireAuth(onboarded(fleet.NewAgentVersions(d.AgentVersionCatalog))))
+		}
 		// Captures read surface (#8): per-device list + signed download URL.
 		// Site-scoped device reads. The URL route needs the presigner.
 		b.Get("/devices/{id}/captures", requireAuth(onboarded(requireScope(captureshttp.NewList(d.Registry)))))
