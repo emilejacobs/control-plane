@@ -25,6 +25,13 @@ interface Props {
   // post-scan correlation_id polling; the panel only renders the
   // button.
   onScanNetwork?: () => void;
+  // scanInFlight drives the button's immediate loading affordance (#12): the
+  // label flips to "Scanning…" and the button disables while a scan runs, so
+  // the click isn't a silent 20s no-op.
+  scanInFlight?: boolean;
+  // scanError surfaces a failed scan POST inline next to the button instead of
+  // failing silently (#12).
+  scanError?: string | null;
   // onVerifyAngle deep-links the operator to the on-device Edge UI's
   // /preview/<camera_id> page (issue #4, ADR-030 § 1, ADR-032). The
   // parent typically wires this to window.open(previewURL(c)). The
@@ -53,6 +60,8 @@ export function CamerasPanel({
   onEditCamera,
   onDeleteCamera,
   onScanNetwork,
+  scanInFlight,
+  scanError,
   onVerifyAngle,
   previewURL,
   lanURL,
@@ -87,16 +96,19 @@ export function CamerasPanel({
             <button
               type="button"
               onClick={onScanNetwork}
+              disabled={scanInFlight}
+              aria-busy={scanInFlight}
               style={{
                 padding: "4px 10px",
                 fontSize: 12.5,
                 background: "transparent",
                 border: "1px solid var(--line, #ccc)",
                 borderRadius: 4,
-                cursor: "pointer",
+                cursor: scanInFlight ? "not-allowed" : "pointer",
+                opacity: scanInFlight ? 0.6 : 1,
               }}
             >
-              Scan network
+              {scanInFlight ? "Scanning…" : "Scan network"}
             </button>
           )}
           {onAddCamera && (
@@ -117,6 +129,18 @@ export function CamerasPanel({
           )}
         </div>
       </div>
+      {scanError && (
+        <p
+          role="alert"
+          style={{
+            margin: "0 0 10px 0",
+            fontSize: 12.5,
+            color: "var(--red, #c00)",
+          }}
+        >
+          {scanError}
+        </p>
+      )}
       {cameras.length === 0 ? (
         <p className="muted" style={{ fontSize: 13, margin: 0 }}>
           No cameras configured yet. Use "Scan network" or "Add
