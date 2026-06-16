@@ -57,9 +57,10 @@ func TestConfigBackfillPublishes(t *testing.T) {
 		t.Errorf("snapshot_state_path: got %q", args.SnapshotStatePath)
 	}
 
-	// Idempotent replay: same key → no second publish.
-	if code := post(); code != http.StatusAccepted {
-		t.Fatalf("replay status: got %d want 202", code)
+	// Idempotent replay: same key → no second publish. Per the idempotency
+	// contract a replay returns 200 (the cached response), not the original 202.
+	if code := post(); code != http.StatusOK {
+		t.Fatalf("replay status: got %d want 200", code)
 	}
 	if pub.typeCount["config.backfill"] != 1 {
 		t.Errorf("config.backfill published %d times, want 1 (idempotent)", pub.typeCount["config.backfill"])
