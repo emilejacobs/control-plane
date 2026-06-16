@@ -122,8 +122,26 @@ func runInstall(args []string) {
 		WhisperDst: "/usr/local/etc/uknomi/whisper-models/ggml-medium.en-q5_0.bin",
 	})
 
-	// Uniform software first, then the agent core (binaries → enroll → daemon).
-	steps := append(software, install.PlanSteps(sys, plan)...)
+	colima := install.ColimaSteps(sys, install.ColimaConfig{
+		BrewUser:        *brewUser,
+		BrewPath:        *brewPath,
+		LaunchAgentPath: filepath.Join("/Users", *brewUser, "Library/LaunchAgents/com.uknomi.colima.plist"),
+		LaunchAgentPlist: install.ColimaLaunchAgentPlist(install.ColimaAgentConfig{
+			Label:      "com.uknomi.colima",
+			ColimaPath: filepath.Join(filepath.Dir(*brewPath), "colima"),
+			CPU:        2,
+			MemoryGiB:  4,
+			DiskGiB:    30,
+			MountDir:   "/usr/local/etc/plate-recognizer/stream",
+			StdoutPath: "/tmp/colima.log",
+			StderrPath: "/tmp/colima-error.log",
+		}),
+	})
+
+	// Uniform software + Colima first, then the agent core (binaries → enroll →
+	// daemon). The ALPR container is not started here — that awaits Commission.
+	steps := append(software, colima...)
+	steps = append(steps, install.PlanSteps(sys, plan)...)
 	runner := install.NewRunner(steps...).
 		WithLogf(func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
 	if err := runner.Run(context.Background()); err != nil {
