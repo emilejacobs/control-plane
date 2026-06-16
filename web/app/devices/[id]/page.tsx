@@ -30,6 +30,7 @@ import { ServicesPanel } from "../../../components/ServicesPanel";
 import { HealthPanel } from "../../../components/HealthPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
 import { SnapshotCadenceControl } from "../../../components/SnapshotCadenceControl";
+import { ALPRLicenseControl } from "../../../components/ALPRLicenseControl";
 import { CameraDialog } from "../../../components/CameraDialog";
 import { NetworkScanModal } from "../../../components/NetworkScanModal";
 import { EditServicesModal } from "../../../components/EditServicesModal";
@@ -365,7 +366,16 @@ export default function DevicePage() {
             <div style={{ height: 16 }} />
 
             <Card label="Cameras">
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  flexWrap: "wrap",
+                  gap: 16,
+                  marginBottom: 10,
+                }}
+              >
+                <ALPRLicenseControl deviceId={id} licenseSet={d.alprLicenseSet} />
                 <SnapshotCadenceControl deviceId={id} cadence={d.snapshotCadence} />
               </div>
               <CamerasPanel
