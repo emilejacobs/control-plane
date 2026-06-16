@@ -36,24 +36,50 @@ func renderEmail(d ingest.Digest) (subject, body string) {
 }
 
 // renderTeams produces the JSON payload posted to the Teams Workflows webhook.
-// A simple {"text": markdown} body is the lowest-common-denominator shape a
-// Power Automate "Post to a channel" flow accepts; the markdown groups new
-// alerts and recoveries.
+// The Power Automate "Workflows" trigger that replaced the legacy Office 365
+// incoming webhook expects an **adaptive-card attachment envelope**, not the
+// old {"text": …} connector body — it 202s any JSON, so the wrong shape posts
+// nothing to the channel. Each alert is one TextBlock, coloured Attention (new)
+// or Good (recovered).
 func renderTeams(d ingest.Digest) []byte {
 	openedTotal := len(d.Opened) + d.Truncated
-	var b strings.Builder
-	fmt.Fprintf(&b, "**uKnomi fleet:** %d new alert(s), %d recovered\n", openedTotal, len(d.Resolved))
+
+	body := []map[string]any{{
+		"type":   "TextBlock",
+		"text":   fmt.Sprintf("uKnomi fleet: %d new alert(s), %d recovered", openedTotal, len(d.Resolved)),
+		"weight": "Bolder",
+		"size":   "Medium",
+		"wrap":   true,
+	}}
 	for _, e := range d.Opened {
-		b.WriteString("\n🔴 " + describe(e))
+		body = append(body, textBlock("🔴 "+describe(e), "Attention"))
 	}
 	if d.Truncated > 0 {
-		fmt.Fprintf(&b, "\n🔴 …and %d more", d.Truncated)
+		body = append(body, textBlock(fmt.Sprintf("🔴 …and %d more", d.Truncated), "Attention"))
 	}
 	for _, e := range d.Resolved {
-		b.WriteString("\n🟢 " + describe(e))
+		body = append(body, textBlock("🟢 "+describe(e), "Good"))
 	}
-	payload, _ := json.Marshal(map[string]string{"text": b.String()})
+
+	card := map[string]any{
+		"type":    "AdaptiveCard",
+		"$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+		"version": "1.4",
+		"body":    body,
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"type": "message",
+		"attachments": []map[string]any{{
+			"contentType": "application/vnd.microsoft.card.adaptive",
+			"content":     card,
+		}},
+	})
 	return payload
+}
+
+// textBlock is one wrapped, coloured adaptive-card TextBlock.
+func textBlock(text, color string) map[string]any {
+	return map[string]any{"type": "TextBlock", "text": text, "wrap": true, "color": color}
 }
 
 // describe renders one alert event as a human line: kind, device (hostname or
