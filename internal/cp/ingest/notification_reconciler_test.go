@@ -248,3 +248,29 @@ func TestReconcileRetriesAfterDeliveryFailure(t *testing.T) {
 		t.Error("alert should be marked notified after the successful retry")
 	}
 }
+
+// Many new transitions in one tick coalesce into a single digest delivered
+// once — a site-wide outage is one message, not one per device.
+func TestReconcileCoalescesIntoOneDigest(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(
+		offline("dev-a", "mac-a"),
+		offline("dev-b", "mac-b"),
+		registry.UnhealthySignal{Kind: registry.UnhealthyServiceStopped, DeviceID: "dev-c", Subject: "alpr", Hostname: "mac-c"},
+	)
+	notifier := &fakeNotifier{}
+	r := newReconciler(store, notifier, now)
+
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+
+	calls := notifier.calls()
+	if len(calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1 (coalesced)", len(calls))
+	}
+	if len(calls[0].Opened) != 3 {
+		t.Fatalf("digest Opened = %d events, want 3", len(calls[0].Opened))
+	}
+}
