@@ -49,6 +49,9 @@ export async function getDevices(): Promise<DeviceSummary[]> {
   }));
 }
 
+// SnapshotCadence is the per-device scheduled-snapshot frequency (#9).
+export type SnapshotCadence = "off" | "daily" | "weekly";
+
 // Device is the full per-device record GET /devices/{id} returns — the
 // per-device view (Issue 18) renders it. siteName / clientName are null for
 // a device with no site assigned.
@@ -96,6 +99,9 @@ export interface Device {
   lanIp: string | null;
   tailscaleIp: string | null;
   tailscaleName: string | null;
+  // Phase 2 captures (#9): per-device scheduled-snapshot cadence; the
+  // device page renders it as a picker.
+  snapshotCadence: SnapshotCadence;
   // Phase 2: per-service state from the agent's last service-status
   // report. Empty array for a device that has never reported (the
   // dashboard distinguishes "no report yet" from a missing field).
@@ -330,6 +336,7 @@ interface DeviceWire {
   lan_ip: string | null;
   tailscale_ip: string | null;
   tailscale_name: string | null;
+  snapshot_cadence: SnapshotCadence;
   services: DeviceServiceWire[];
   service_config: ServiceConfigWire;
 }
@@ -378,6 +385,7 @@ export async function getDevice(id: string): Promise<Device> {
     lanIp: d.lan_ip ?? null,
     tailscaleIp: d.tailscale_ip ?? null,
     tailscaleName: d.tailscale_name ?? null,
+    snapshotCadence: d.snapshot_cadence ?? "weekly",
     services: (d.services ?? []).map((s) => ({
       name: s.name,
       state: s.state as DeviceService["state"],
@@ -639,4 +647,24 @@ export async function putServiceConfig(
   }
   const payload = (await res.json()) as { correlation_id: string };
   return { correlationId: payload.correlation_id };
+}
+
+// setSnapshotCadence updates a device's scheduled-snapshot cadence via
+// PUT /devices/{id}/snapshot-config (#9). CP persists it; the agent picks it up
+// via config.update (a later slice).
+export async function setSnapshotCadence(
+  id: string,
+  cadence: SnapshotCadence,
+): Promise<void> {
+  const res = await apiRequest(`/devices/${id}/snapshot-config`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({ cadence }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to update snapshot cadence");
+  }
 }

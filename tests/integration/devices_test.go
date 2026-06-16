@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
 // enrollForTest is a thin helper around POST /enrollments used by tests that
@@ -256,6 +258,58 @@ func TestRegistryListPopulatesSiteID(t *testing.T) {
 		t.Fatalf("unsited device %s not in List", unsitedID)
 	} else if unsited != nil {
 		t.Errorf("unsited device SiteID: got %v want nil", *unsited)
+	}
+}
+
+// Snapshot cadence (#9) defaults to weekly, round-trips through
+// SetSnapshotCadence + GetByID, and — guarding the List/GetByID scan drift —
+// is returned by List too, not just GetByID.
+func TestRegistrySnapshotCadenceRoundTrip(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	dev := enrollForTest(t, srv, "mac-cadence-01", "90000000-0000-0000-0000-000000000001")
+	scoped := staffCtx(ctx)
+
+	got, err := srv.Registry.GetByID(scoped, dev)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.SnapshotCadence != "weekly" {
+		t.Errorf("default cadence = %q, want weekly", got.SnapshotCadence)
+	}
+
+	if err := srv.Registry.SetSnapshotCadence(ctx, dev, "daily"); err != nil {
+		t.Fatalf("SetSnapshotCadence: %v", err)
+	}
+
+	got, err = srv.Registry.GetByID(scoped, dev)
+	if err != nil {
+		t.Fatalf("GetByID after set: %v", err)
+	}
+	if got.SnapshotCadence != "daily" {
+		t.Errorf("GetByID cadence = %q, want daily", got.SnapshotCadence)
+	}
+
+	devices, err := srv.Registry.List(scoped)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found bool
+	for _, d := range devices {
+		if d.ID == dev {
+			found = true
+			if d.SnapshotCadence != "daily" {
+				t.Errorf("List cadence = %q, want daily (scan drift?)", d.SnapshotCadence)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("device %s not in List", dev)
+	}
+
+	if err := srv.Registry.SetSnapshotCadence(ctx, "11111111-2222-3333-4444-555555555555", "off"); err != registry.ErrDeviceNotFound {
+		t.Errorf("SetSnapshotCadence(unknown) err = %v, want ErrDeviceNotFound", err)
 	}
 }
 

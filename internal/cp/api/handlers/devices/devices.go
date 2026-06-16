@@ -72,6 +72,9 @@ type response struct {
 	LanIP         *string `json:"lan_ip"`
 	TailscaleIP   *string `json:"tailscale_ip"`
 	TailscaleName *string `json:"tailscale_name"`
+	// SnapshotCadence is the per-device scheduled-snapshot frequency
+	// (off | daily | weekly, #9); the device page renders it as a picker.
+	SnapshotCadence string `json:"snapshot_cadence"`
 	// Services is the per-service state snapshot from the agent's last
 	// service-status report (Phase 2). Empty array (not null) for a
 	// device that has never reported — the dashboard distinguishes
@@ -254,6 +257,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		LanIP:                 dev.LanIP,
 		TailscaleIP:           dev.TailscaleIP,
 		TailscaleName:         dev.TailscaleName,
+		SnapshotCadence:       dev.SnapshotCadence,
 		Services:              services,
 		ServiceConfig:         serviceConfig,
 	})
