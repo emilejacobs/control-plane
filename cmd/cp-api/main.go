@@ -65,7 +65,10 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/captures"
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/iotprovisioner"
+	"github.com/emilejacobs/control-plane/internal/cp/commission"
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
+	"github.com/emilejacobs/control-plane/internal/cp/tailscale"
+	"github.com/google/uuid"
 	"github.com/emilejacobs/control-plane/internal/cp/operators"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
@@ -234,6 +237,29 @@ func run(logger *slog.Logger) error {
 		logger.Info("agent rollout surface disabled — AGENT_DIST_BUCKET unset")
 	}
 
+	// Commission surface (#91). Gated on TAILSCALE_API_SECRET_ID — a deploy
+	// before the Tailscale credential exists keeps serving with the route
+	// disabled. Reuses the cmd publisher to push cameras + the commission cmd.
+	var commissioner devices.Commissioner
+	if tsSecretID := os.Getenv("TAILSCALE_API_SECRET_ID"); tsSecretID != "" {
+		token, err := bootstrap.NewSecretsManagerLoader(smClient, tsSecretID).Load(ctx)
+		if err != nil {
+			logger.Error("load tailscale api credential", "error", err)
+			return err
+		}
+		tailnet := os.Getenv("TAILSCALE_TAILNET")
+		tags := csvEnv("TAILSCALE_DEVICE_TAGS")
+		if len(tags) == 0 {
+			tags = []string{"tag:edge-device"}
+		}
+		commissioner = commission.New(reg, tailscale.NewClient(token, tailnet), cmdPublisher,
+			commission.Config{Tailnet: tailnet, TailscaleTags: tags, TailscaleExpirySeconds: 3600},
+			func() string { return uuid.NewString() })
+		logger.Info("commission surface wired", "tailnet", tailnet)
+	} else {
+		logger.Info("commission surface disabled — TAILSCALE_API_SECRET_ID unset")
+	}
+
 	srv := &http.Server{
 		Addr: ":" + port,
 		Handler: api.NewRouter(api.Deps{
@@ -249,6 +275,7 @@ func run(logger *slog.Logger) error {
 			Logger:             logger,
 			CORSAllowedOrigins: csvEnv("CORS_ALLOWED_ORIGINS"),
 			CmdPublisher:       cmdPublisher,
+			Commissioner:       commissioner,
 			AgentRolloutCatalog: rolloutCatalog,
 			AgentRolloutPusher:  rolloutPusher,
 			AgentVersionCatalog: versionCatalog,
