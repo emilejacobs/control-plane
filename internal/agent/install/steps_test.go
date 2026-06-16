@@ -14,16 +14,23 @@ import (
 // and writes, and tracks launchd "loaded" state so the LaunchDaemon step's
 // IsDone/Apply round-trip is exercisable without a real host.
 type fakeSystem struct {
-	exists map[string]bool
-	wrote  map[string][]byte
-	copies map[string]string // dst -> src
-	runs   [][]string
-	loaded bool
-	runErr error
+	exists       map[string]bool
+	wrote        map[string][]byte
+	copies       map[string]string // dst -> src
+	runs         [][]string
+	loaded       bool
+	installed    map[string]bool // brew formulae present
+	installCount int             // brew install invocations
+	runErr       error
 }
 
 func newFakeSystem() *fakeSystem {
-	return &fakeSystem{exists: map[string]bool{}, wrote: map[string][]byte{}, copies: map[string]string{}}
+	return &fakeSystem{
+		exists:    map[string]bool{},
+		wrote:     map[string][]byte{},
+		copies:    map[string]string{},
+		installed: map[string]bool{},
+	}
 }
 
 func (f *fakeSystem) Exists(path string) (bool, error) { return f.exists[path], nil }
@@ -61,6 +68,27 @@ func (f *fakeSystem) Run(_ context.Context, name string, args ...string) error {
 		case "list":
 			if !f.loaded {
 				return errors.New("not loaded")
+			}
+		}
+	}
+	// Model `sudo -u <user> brew {list,install} <formula>` against the
+	// installed set; an install.sh-bearing command (Homebrew bootstrap) and
+	// anything else succeed.
+	if name == "sudo" {
+		for i, a := range args {
+			switch a {
+			case "install":
+				if i+1 < len(args) {
+					f.installed[args[i+1]] = true
+					f.installCount++
+					return nil
+				}
+			case "list":
+				formula := args[len(args)-1]
+				if !f.installed[formula] {
+					return errors.New("not installed")
+				}
+				return nil
 			}
 		}
 	}
