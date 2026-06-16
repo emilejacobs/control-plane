@@ -20,6 +20,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/agentupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/cameras"
 	"github.com/emilejacobs/control-plane/internal/handlers/camerasnapshot"
+	commissionhandler "github.com/emilejacobs/control-plane/internal/handlers/commission"
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
@@ -126,6 +127,12 @@ type Config struct {
 	// writes the `healthy` marker the wrapper promotes a candidate on.
 	// Empty (most tests, non-wrapper runs) disables both.
 	UpdateDir string
+
+	// AutoLoginUser is the non-root user Colima runs as (#89, ADR-038). The
+	// commission handler uses it to drive the ALPR container through the
+	// per-user runner; empty leaves tailnet-only commission working and ALPR
+	// unavailable.
+	AutoLoginUser string
 }
 
 type Transport interface {
@@ -280,6 +287,11 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		a.logTailReader = defaultLogTailReader{}
 	}
 	a.dispatcher.Register("log.tail", logtail.New(a.logTailReader))
+
+	// Commission handler (#91): join the tailnet with the minted key and, for
+	// ALPR devices, start the Plate Recognizer container via the per-user
+	// Colima runner. Always registered — every assigned device is commissioned.
+	a.dispatcher.Register("commission", commissionhandler.New(newCommissionApplier(cfg.AutoLoginUser)))
 
 	// Phase 2 Edge UI rework (issue #2): cameras.update handler.
 	// Registered when a cameras file path is configured. Empty path

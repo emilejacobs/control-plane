@@ -140,6 +140,7 @@ func runDaemon() {
 		ConfigPath:            *configPath,
 		CamerasPath:           cfg.CamerasPath,
 		SnapshotStatePath:     cfg.SnapshotStatePath,
+		AutoLoginUser:         cfg.AutoLoginUser,
 		// AGENT_DIR is exported by the resident wrapper
 		// (scripts/uknomi-agent-supervisor.sh). When present, the agent
 		// enables the signature-gated agent.update handler and writes the
