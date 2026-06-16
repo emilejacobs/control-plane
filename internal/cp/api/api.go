@@ -225,6 +225,11 @@ func NewBuilderWith(d Deps) *Builder {
 		b.PostNoIdem("/auth/totp/enroll", requireAuth(requirePwChanged(auth.NewTotpEnroll(d.AuthN, auditW))))
 		b.Get("/devices", requireAuth(onboarded(requireScope(devices.NewList(d.Registry)))))
 		b.Get("/devices/{id}", requireAuth(onboarded(requireScope(devices.NewGet(d.Registry)))))
+		// PUT /devices/{id}/snapshot-config — set the per-device scheduled-
+		// snapshot cadence (#9). DB-only this slice (no agent push yet), so it
+		// needs no CmdPublisher; same auth + TOTP + site scope as the reads.
+		b.Put("/devices/{id}/snapshot-config",
+			requireAuth(onboarded(requireScope(devices.NewSnapshotConfig(d.Registry)))))
 		// Phase 2 fleet health probes (issue #19): per-device probe
 		// snapshot. Read-only; same auth + TOTP + site scope as the
 		// other per-device reads.
