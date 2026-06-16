@@ -75,6 +75,10 @@ type response struct {
 	// SnapshotCadence is the per-device scheduled-snapshot frequency
 	// (off | daily | weekly, #9); the device page renders it as a picker.
 	SnapshotCadence string `json:"snapshot_cadence"`
+	// ALPRLicenseSet reports whether a per-device Plate Recognizer license is
+	// configured (#84). The license itself is a secret and is never returned —
+	// the device page shows only set/not-set and lets staff (re)enter it.
+	ALPRLicenseSet bool `json:"alpr_license_set"`
 	// Services is the per-service state snapshot from the agent's last
 	// service-status report (Phase 2). Empty array (not null) for a
 	// device that has never reported — the dashboard distinguishes
@@ -258,6 +262,7 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		TailscaleIP:           dev.TailscaleIP,
 		TailscaleName:         dev.TailscaleName,
 		SnapshotCadence:       dev.SnapshotCadence,
+		ALPRLicenseSet:        dev.ALPRLicenseSet,
 		Services:              services,
 		ServiceConfig:         serviceConfig,
 	})

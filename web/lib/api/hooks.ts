@@ -20,8 +20,9 @@ import {
   type CreateOperatorInput,
   type UpdateOperatorInput,
 } from "./operators";
-import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence } from "./devices";
+import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence, setALPRLicense } from "./devices";
 import type { SnapshotCadence } from "./devices";
+import { getPRTokenStatus, setPRToken } from "./settings";
 import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
 import { getFleetAlerts } from "./fleet";
 import {
@@ -246,6 +247,35 @@ export function useSetSnapshotCadence(deviceId: string) {
   return useMutation({
     mutationFn: (cadence: SnapshotCadence) => setSnapshotCadence(deviceId, cadence),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["device", deviceId] }),
+  });
+}
+
+// useSetALPRLicense stores a device's Plate Recognizer license (#84). On
+// success it invalidates the device record so the set/not-set badge updates.
+export function useSetALPRLicense(deviceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (license: string) => setALPRLicense(deviceId, license),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["device", deviceId] }),
+  });
+}
+
+// usePRTokenStatus reads whether the account-wide PR token is set (#84). The
+// raw token is never returned.
+export function usePRTokenStatus() {
+  return useQuery({
+    queryKey: ["pr-token-status"],
+    queryFn: getPRTokenStatus,
+  });
+}
+
+// useSetPRToken stores the account-wide PR token (#84). On success it
+// invalidates the status query so the card reflects "set".
+export function useSetPRToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => setPRToken(token),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-token-status"] }),
   });
 }
 

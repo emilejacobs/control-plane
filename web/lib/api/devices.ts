@@ -102,6 +102,10 @@ export interface Device {
   // Phase 2 captures (#9): per-device scheduled-snapshot cadence; the
   // device page renders it as a picker.
   snapshotCadence: SnapshotCadence;
+  // #84: whether a per-device Plate Recognizer license is configured. The
+  // license itself is a secret and is never sent to the dashboard — the
+  // device page shows set/not-set and lets staff (re)enter it.
+  alprLicenseSet: boolean;
   // Phase 2: per-service state from the agent's last service-status
   // report. Empty array for a device that has never reported (the
   // dashboard distinguishes "no report yet" from a missing field).
@@ -337,6 +341,7 @@ interface DeviceWire {
   tailscale_ip: string | null;
   tailscale_name: string | null;
   snapshot_cadence: SnapshotCadence;
+  alpr_license_set: boolean;
   services: DeviceServiceWire[];
   service_config: ServiceConfigWire;
 }
@@ -386,6 +391,7 @@ export async function getDevice(id: string): Promise<Device> {
     tailscaleIp: d.tailscale_ip ?? null,
     tailscaleName: d.tailscale_name ?? null,
     snapshotCadence: d.snapshot_cadence ?? "weekly",
+    alprLicenseSet: d.alpr_license_set ?? false,
     services: (d.services ?? []).map((s) => ({
       name: s.name,
       state: s.state as DeviceService["state"],
@@ -666,5 +672,22 @@ export async function setSnapshotCadence(
   });
   if (!res.ok) {
     throw new ApiError(res.status, "failed to update snapshot cadence");
+  }
+}
+
+// setALPRLicense stores a device's Plate Recognizer license (#84). The license
+// is a secret — write-only; the device read exposes only alprLicenseSet. CP
+// pushes it to the device at Commission.
+export async function setALPRLicense(id: string, license: string): Promise<void> {
+  const res = await apiRequest(`/devices/${id}/alpr-license`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({ license }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to update ALPR license");
   }
 }
