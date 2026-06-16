@@ -314,3 +314,34 @@ func TestReconcileCapsDigestButPersistsAll(t *testing.T) {
 		}
 	}
 }
+
+// An alert whose open notice never delivered (the send failed) and which then
+// clears before any retry is resolved silently — no recovery is announced for
+// an alert nobody was told about.
+func TestReconcileSilentlyResolvesNeverNotified(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(offline("dev-a", "mac-a"))
+	notifier := &fakeNotifier{failWith: errors.New("teams down")}
+	r := newReconciler(store, notifier, now)
+
+	// Tick 1: open recorded, send fails (never notified).
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	// Device recovers before any successful send; notifier is healthy again.
+	store.setSnapshot()
+	notifier.failWith = nil
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+
+	// The only notifier call was the failed tick-1 attempt; the silent resolve
+	// sends nothing.
+	if calls := notifier.calls(); len(calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1 (no recovery for never-notified)", len(calls))
+	}
+	if _, ok := store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""}); ok {
+		t.Error("never-notified alert should be silently resolved")
+	}
+}
