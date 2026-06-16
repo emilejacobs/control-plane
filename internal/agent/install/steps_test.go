@@ -71,6 +71,15 @@ func (f *fakeSystem) Run(_ context.Context, name string, args ...string) error {
 			}
 		}
 	}
+	// Model `curl -o <dst> <url>` as a download that makes dst exist.
+	if name == "curl" {
+		for i, a := range args {
+			if a == "-o" && i+1 < len(args) {
+				f.exists[args[i+1]] = true
+			}
+		}
+		return nil
+	}
 	// Model `sudo -u <user> brew {list,install} <formula>` against the
 	// installed set; an install.sh-bearing command (Homebrew bootstrap) and
 	// anything else succeed.
