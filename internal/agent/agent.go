@@ -25,10 +25,12 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
+	"github.com/emilejacobs/control-plane/internal/handlers/snapshotconfig"
 	"github.com/emilejacobs/control-plane/internal/probes"
 	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	"github.com/emilejacobs/control-plane/internal/service"
+	"github.com/emilejacobs/control-plane/internal/snapshotstate"
 	"github.com/emilejacobs/control-plane/internal/telemetry"
 )
 
@@ -106,6 +108,13 @@ type Config struct {
 	// it. Suggested default in the install module:
 	// /var/uknomi/agent-state/cameras.json.
 	CamerasPath string
+
+	// SnapshotStatePath is the absolute path to the agent's snapshot
+	// state file (#9): the persisted scheduled-snapshot cadence + per-
+	// camera next-fire times. When non-empty the agent registers the
+	// snapshot.config handler; the scheduler (a later slice) reads it.
+	// Suggested: /var/uknomi/agent-state/snapshot-state.json.
+	SnapshotStatePath string
 
 	// UpdateDir is the resident wrapper's on-disk update root (the
 	// wrapper exports it as AGENT_DIR; see scripts/uknomi-agent-supervisor.sh
@@ -278,6 +287,14 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 			newFFmpegSnapshotter(),
 			newHTTPUploader(),
 		))
+	}
+
+	// snapshot.config (#9): persist the per-device scheduled-snapshot cadence
+	// to the snapshot state file. Registered when the state path is set; the
+	// scheduler (a later slice) reads the persisted cadence.
+	if cfg.SnapshotStatePath != "" {
+		a.dispatcher.Register("snapshot.config",
+			snapshotconfig.New(snapshotstate.NewStore(cfg.SnapshotStatePath)))
 	}
 
 	// Phase 2 Edge UI rework (issue #3): network.scan handler.
