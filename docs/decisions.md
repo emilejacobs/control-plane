@@ -43,3 +43,6 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 033 | [Clients/sites taxonomy — daily mirror sync from upstream HTTP API](./adr/0033-clients-sites-taxonomy-sync.md) | Accepted (2026-05-26) — supersedes the direct-MySQL plan in memory `external_mysql_taxonomy` |
 | 034 | [Agent backend abstraction for an OS-agnostic command + probe surface](./adr/0034-agent-backend-abstraction-os-agnostic-surface.md) | Accepted (2026-05-28) |
 | 035 | [Agent fleet-update — push+reconcile delivery, resident-wrapper rollback, derived rollout](./adr/0035-agent-fleet-update-mechanism.md) | Accepted (2026-05-29) — refines ADR-013; corrects "Ed25519 in KMS" |
+| 036 | [CP-driven device lifecycle — Provision / Assign / Commission](./adr/0036-cp-driven-device-lifecycle.md) | Accepted (2026-06-15) — refines ADR-004; retires the two-phase install model |
+| 037 | [Install folded into the agent binary, delivered as a Mosyle-pushed signed pkg](./adr/0037-install-folded-into-agent-signed-pkg.md) | Accepted (2026-06-15) — extends ADR-017; refines ADR-004 |
+| 038 | [Colima replaces Docker Desktop; per-user VM, root agent drives via launchctl asuser](./adr/0038-colima-replaces-docker.md) | Accepted (2026-06-15) |
