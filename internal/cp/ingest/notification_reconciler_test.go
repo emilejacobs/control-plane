@@ -274,3 +274,43 @@ func TestReconcileCoalescesIntoOneDigest(t *testing.T) {
 		t.Fatalf("digest Opened = %d events, want 3", len(calls[0].Opened))
 	}
 }
+
+// The per-tick cap bounds how many opened alerts are enumerated; the overflow
+// is summarized as a Truncated count. Every alert is still opened + notified —
+// truncation only limits the digest's enumeration, not the bookkeeping.
+func TestReconcileCapsDigestButPersistsAll(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(
+		offline("dev-a", "mac-a"),
+		offline("dev-b", "mac-b"),
+		offline("dev-c", "mac-c"),
+	)
+	notifier := &fakeNotifier{}
+	r := ingest.NewNotificationReconciler(store, notifier, ingest.NotificationReconcilerConfig{
+		Cap: 2,
+		Now: func() time.Time { return now },
+	})
+
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+
+	calls := notifier.calls()
+	if len(calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(calls))
+	}
+	if len(calls[0].Opened) != 2 {
+		t.Errorf("enumerated Opened = %d, want 2 (capped)", len(calls[0].Opened))
+	}
+	if calls[0].Truncated != 1 {
+		t.Errorf("Truncated = %d, want 1", calls[0].Truncated)
+	}
+	// All three alerts must still be opened + notified despite the cap.
+	for _, id := range []string{"dev-a", "dev-b", "dev-c"} {
+		a, ok := store.get(alertKey{registry.UnhealthyOffline, id, ""})
+		if !ok || a.LastNotifiedAt == nil {
+			t.Errorf("%s not opened+notified (cap should not drop bookkeeping)", id)
+		}
+	}
+}
