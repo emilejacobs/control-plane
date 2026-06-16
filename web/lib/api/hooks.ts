@@ -20,7 +20,8 @@ import {
   type CreateOperatorInput,
   type UpdateOperatorInput,
 } from "./operators";
-import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan } from "./devices";
+import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence } from "./devices";
+import type { SnapshotCadence } from "./devices";
 import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
 import { getFleetAlerts } from "./fleet";
 import {
@@ -235,6 +236,16 @@ export function useNetworkScan(deviceId: string, correlationId: string | null) {
       if (data?.status === "done" || data?.status === "error") return false;
       return networkScanPollInterval;
     },
+  });
+}
+
+// useSetSnapshotCadence updates a device's scheduled-snapshot cadence (#9). On
+// success it invalidates the device record so the picker reflects the saved value.
+export function useSetSnapshotCadence(deviceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cadence: SnapshotCadence) => setSnapshotCadence(deviceId, cadence),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["device", deviceId] }),
   });
 }
 
