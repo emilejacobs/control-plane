@@ -12,6 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/iotdataplane v1.32.24
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.102.2
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
+	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.62.4
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -35,7 +36,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.18 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.25 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.25 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.62.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
