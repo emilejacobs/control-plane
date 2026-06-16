@@ -65,6 +65,13 @@ type Deps struct {
 	// continues to serve; tests that don't need the surface omit it).
 	CmdPublisher devices.CmdPublisher
 
+	// Commissioner runs the staff-only Commission action (#91): mint a
+	// per-device Tailscale key, gather the ALPR license + PR token, and push
+	// cameras + secrets to the device. nil disables POST
+	// /devices/{id}/commission — deploys before the Tailscale credential is
+	// configured keep serving.
+	Commissioner devices.Commissioner
+
 	// AgentRolloutCatalog reads signed release manifests from agent-dist
 	// and AgentRolloutPusher fans agent.update out to a device set
 	// (issue #40). Both nil disables POST /agent-rollouts — deploys that
@@ -351,6 +358,13 @@ func NewBuilderWith(d Deps) *Builder {
 			// device at Commission (#91), not here.
 			b.Put("/devices/{id}/alpr-license",
 				requireAuth(onboarded(requireStaff(devices.NewALPRLicensePut(d.Registry, auditW)))))
+			// POST /devices/{id}/commission — staff-only Commission (#91).
+			// Gated on a configured Commissioner (needs the Tailscale
+			// credential + the cmd publisher).
+			if d.Commissioner != nil {
+				b.Post("/devices/{id}/commission",
+					requireAuth(onboarded(requireStaff(devices.NewCommissionPost(d.Commissioner, auditW)))))
+			}
 		}
 		// DELETE /devices/{id} — staff-only device decommission (CP-side row
 		// removal; AWS IoT thing/cert teardown is out-of-band per the
