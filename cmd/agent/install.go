@@ -27,6 +27,10 @@ func runInstall(args []string) {
 	caFile := fs.String("ca-file", "", "path to the AWS IoT root CA PEM (required)")
 	agentSrc := fs.String("agent-src", "", "packaged agent binary (default: this executable)")
 	supervisorSrc := fs.String("supervisor-src", "", "packaged supervisor (default: alongside the agent binary)")
+	edgeUISrc := fs.String("edge-ui-src", "", "packaged edge-ui binary (default: alongside the agent binary)")
+	brewUser := fs.String("brew-user", "uknomi", "non-root user Homebrew + Colima run as")
+	brewPath := fs.String("brew-path", "/opt/homebrew/bin/brew", "brew binary path used for formula installs")
+	whisperURL := fs.String("whisper-url", defaultWhisperURL, "Whisper model download URL")
 	_ = fs.Parse(args)
 
 	bootstrapKey := os.Getenv("CP_BOOTSTRAP_KEY")
@@ -62,6 +66,10 @@ func runInstall(args []string) {
 	resolvedSupervisorSrc := *supervisorSrc
 	if resolvedSupervisorSrc == "" {
 		resolvedSupervisorSrc = filepath.Join(filepath.Dir(exe), "uknomi-agent-supervisor")
+	}
+	resolvedEdgeUISrc := *edgeUISrc
+	if resolvedEdgeUISrc == "" {
+		resolvedEdgeUISrc = filepath.Join(filepath.Dir(exe), "uknomi-edge-ui")
 	}
 
 	// Enrollment writes into the runtime dir; ensure it exists first.
@@ -103,10 +111,26 @@ func runInstall(args []string) {
 		}),
 	}
 
-	runner := install.BuildRunner(install.NewOSSystem(), plan).
+	sys := install.NewOSSystem()
+	software := install.SoftwareSteps(sys, install.SoftwareConfig{
+		BrewUser:   *brewUser,
+		BrewPath:   *brewPath,
+		Formulae:   []string{"ffmpeg", "tailscale", "nmap", "whisper-cpp"},
+		EdgeUISrc:  resolvedEdgeUISrc,
+		EdgeUIDst:  "/usr/local/bin/uknomi-edge-ui",
+		WhisperURL: *whisperURL,
+		WhisperDst: "/usr/local/etc/uknomi/whisper-models/ggml-medium.en-q5_0.bin",
+	})
+
+	// Uniform software first, then the agent core (binaries → enroll → daemon).
+	steps := append(software, install.PlanSteps(sys, plan)...)
+	runner := install.NewRunner(steps...).
 		WithLogf(func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
 	if err := runner.Run(context.Background()); err != nil {
 		fatalCLI("install failed: %v", err)
 	}
 	fmt.Println("install complete")
 }
+
+// defaultWhisperURL is the medium.en q5_0 GGML model used for #10 audio QA.
+const defaultWhisperURL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en-q5_0.bin"
