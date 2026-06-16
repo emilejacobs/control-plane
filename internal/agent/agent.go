@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/emilejacobs/control-plane/internal/captureupload"
 	"github.com/emilejacobs/control-plane/internal/dispatcher"
 	"github.com/emilejacobs/control-plane/internal/handlers/agentupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/cameras"
@@ -29,7 +30,9 @@ import (
 	"github.com/emilejacobs/control-plane/internal/probes"
 	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
+	"github.com/emilejacobs/control-plane/internal/protocol/upload"
 	"github.com/emilejacobs/control-plane/internal/service"
+	"github.com/emilejacobs/control-plane/internal/snapshotscheduler"
 	"github.com/emilejacobs/control-plane/internal/snapshotstate"
 	"github.com/emilejacobs/control-plane/internal/telemetry"
 )
@@ -158,6 +161,11 @@ type Agent struct {
 	probeBackend   probes.Backend
 	probePublisher *telemetry.ProbePublisher
 	probeDone      chan struct{}
+
+	// snapshotScheduler is the scheduled-snapshot loop (#9), set when both a
+	// snapshot state path and a cameras path are configured. Nil otherwise.
+	snapshotScheduler *snapshotscheduler.Scheduler
+	schedulerDone     chan struct{}
 
 	pubCancel context.CancelFunc
 	pubDone   chan struct{}
@@ -290,11 +298,28 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	}
 
 	// snapshot.config (#9): persist the per-device scheduled-snapshot cadence
-	// to the snapshot state file. Registered when the state path is set; the
-	// scheduler (a later slice) reads the persisted cadence.
+	// to the snapshot state file. Registered when the state path is set.
 	if cfg.SnapshotStatePath != "" {
-		a.dispatcher.Register("snapshot.config",
-			snapshotconfig.New(snapshotstate.NewStore(cfg.SnapshotStatePath)))
+		snapState := snapshotstate.NewStore(cfg.SnapshotStatePath)
+		a.dispatcher.Register("snapshot.config", snapshotconfig.New(snapState))
+
+		// Scheduled snapshots (#9 slice 3b): on the persisted cadence, capture
+		// each camera and upload via the generic handshake. The uploader runs
+		// in the scheduler goroutine (not a command handler), so it can await
+		// the upload.url grant — which the dispatcher routes to HandleGrant.
+		// Needs the cameras file to resolve RTSP URLs.
+		if cfg.CamerasPath != "" {
+			httpUp := newHTTPUploader()
+			uploader := captureupload.New(cfg.DeviceID, a.transport.Publish, httpUp.Put)
+			a.dispatcher.Register(upload.TypeURL, dispatcher.HandlerFunc(uploader.HandleGrant))
+			a.snapshotScheduler = snapshotscheduler.New(
+				newCamerasFileReader(cfg.CamerasPath),
+				newFFmpegSnapshotter(),
+				uploader,
+				snapState,
+				snapshotscheduler.WithLogger(a.logger),
+			)
+		}
 	}
 
 	// Phase 2 Edge UI rework (issue #3): network.scan handler.
@@ -487,6 +512,15 @@ func (a *Agent) Start() error {
 		}()
 	}
 
+	// Scheduled-snapshot loop (#9 slice 3b). Runs under pubCtx so Stop cancels it.
+	if a.snapshotScheduler != nil {
+		a.schedulerDone = make(chan struct{})
+		go func() {
+			defer close(a.schedulerDone)
+			a.snapshotScheduler.Run(pubCtx)
+		}()
+	}
+
 	// MQTT-session watchdog (#65). Only runs when the transport reports
 	// liveness — the production transport does; bare test fakes don't, so they
 	// see no behaviour change. On a confirmed wedge it signals WedgeDetected
@@ -587,6 +621,9 @@ func (a *Agent) Stop() error {
 		}
 		if a.probeDone != nil {
 			<-a.probeDone
+		}
+		if a.schedulerDone != nil {
+			<-a.schedulerDone
 		}
 		if a.watchdogDone != nil {
 			<-a.watchdogDone
