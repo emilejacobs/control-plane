@@ -294,6 +294,11 @@ func NewBuilderWith(d Deps) *Builder {
 		if d.CmdPublisher != nil {
 			b.Put("/devices/{id}/service-config",
 				requireAuth(onboarded(requireScope(devices.NewServiceConfigPut(d.Registry, d.CmdPublisher)))))
+			// POST /devices/{id}/config-backfill (#85) — staff-only push of
+			// install-time-only config fields (snapshot_state_path) to an
+			// already-enrolled device; takes effect on the agent's next restart.
+			b.Post("/devices/{id}/config-backfill",
+				requireAuth(onboarded(requireStaff(devices.NewConfigBackfill(d.Registry, d.CmdPublisher, auditW)))))
 			// Phase 2 slice 3: log-tail. POST initiates a tail request,
 			// publishes the log.tail cmd; GET polls the per-request row
 			// until status flips to done|error. Same CmdPublisher gate

@@ -21,6 +21,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/cameras"
 	"github.com/emilejacobs/control-plane/internal/handlers/camerasnapshot"
 	commissionhandler "github.com/emilejacobs/control-plane/internal/handlers/commission"
+	"github.com/emilejacobs/control-plane/internal/handlers/configbackfill"
 	"github.com/emilejacobs/control-plane/internal/handlers/configupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
@@ -402,6 +403,10 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		if cfg.ConfigPath != "" {
 			applier := NewConfigUpdateApplier(cfg.ConfigPath, a.serviceStatusCollector, a.serviceStatus)
 			a.dispatcher.Register("config.update", configupdate.New(applier))
+			// config.backfill (#85): persist install-time-only fields
+			// (snapshot_state_path) delivered to a device whose config predates
+			// them; takes effect on the next restart.
+			a.dispatcher.Register("config.backfill", configbackfill.New(NewConfigBackfillApplier(cfg.ConfigPath)))
 		}
 	}
 
