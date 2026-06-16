@@ -147,3 +147,27 @@ func (s *WhisperModelStep) Apply(ctx context.Context) error {
 	}
 	return nil
 }
+
+// SoftwareConfig parameterises the uniform software set installed on every Mac.
+type SoftwareConfig struct {
+	BrewUser   string   // non-root brew user, e.g. "uknomi"
+	BrewPath   string   // resolved brew binary, e.g. /opt/homebrew/bin/brew
+	Formulae   []string // ffmpeg, tailscale, nmap, whisper-cpp
+	EdgeUISrc  string   // packaged edge-ui binary
+	EdgeUIDst  string   // /usr/local/bin/uknomi-edge-ui
+	WhisperURL string
+	WhisperDst string
+}
+
+// SoftwareSteps returns the uniform software steps in order: Homebrew, the
+// formula set, the edge-ui binary, the whisper model (ADR-036 §2 — same on
+// every device; the CP activates capabilities later). Colima + docker CLI are
+// installed by the Colima slice (#89), not here.
+func SoftwareSteps(sys System, c SoftwareConfig) []Step {
+	return []Step{
+		&HomebrewStep{Sys: sys, User: c.BrewUser},
+		&BrewFormulaeStep{Sys: sys, User: c.BrewUser, BrewPath: c.BrewPath, Formulae: c.Formulae},
+		&EnsureFileStep{Sys: sys, StepName: "edge-ui-binary", Src: c.EdgeUISrc, Dst: c.EdgeUIDst, Mode: 0o755},
+		&WhisperModelStep{Sys: sys, URL: c.WhisperURL, Dst: c.WhisperDst},
+	}
+}

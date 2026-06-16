@@ -123,3 +123,63 @@ func TestWhisperModelStep(t *testing.T) {
 		t.Error("IsDone should be true after download")
 	}
 }
+
+// SoftwareSteps returns the uniform software steps in order, and a composed run
+// installs everything; once the post-install state holds, a fresh run is a
+// complete no-op (idempotent by inspection).
+func TestSoftwareStepsComposeIdempotent(t *testing.T) {
+	fs := newFakeSystem()
+	cfg := install.SoftwareConfig{
+		BrewUser:   "uknomi",
+		BrewPath:   "/opt/homebrew/bin/brew",
+		Formulae:   []string{"ffmpeg", "nmap"},
+		EdgeUISrc:  "/pkg/uknomi-edge-ui",
+		EdgeUIDst:  "/usr/local/bin/uknomi-edge-ui",
+		WhisperURL: "https://example.com/model.bin",
+		WhisperDst: "/usr/local/etc/uknomi/whisper-models/model.bin",
+	}
+	steps := install.SoftwareSteps(fs, cfg)
+
+	wantNames := []string{"homebrew", "brew-formulae", "edge-ui-binary", "whisper-model"}
+	if len(steps) != len(wantNames) {
+		t.Fatalf("step count: got %d want %d", len(steps), len(wantNames))
+	}
+	for i, s := range steps {
+		if s.Name() != wantNames[i] {
+			t.Errorf("step %d: got %q want %q", i, s.Name(), wantNames[i])
+		}
+	}
+
+	if err := install.NewRunner(steps...).Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if !fs.ran("install.sh") {
+		t.Error("homebrew not installed")
+	}
+	if !fs.installed["ffmpeg"] || !fs.installed["nmap"] {
+		t.Error("formulae not installed")
+	}
+	if fs.copies["/usr/local/bin/uknomi-edge-ui"] == "" {
+		t.Error("edge-ui not copied")
+	}
+	if !fs.exists["/usr/local/etc/uknomi/whisper-models/model.bin"] {
+		t.Error("whisper model not downloaded")
+	}
+
+	// Simulate the post-install state (brew now present) and re-run: no-op.
+	fs.exists["/opt/homebrew/bin/brew"] = true
+	fs.runs = nil
+	installsBefore := fs.installCount
+	if err := install.NewRunner(install.SoftwareSteps(fs, cfg)...).Run(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if fs.ran("install.sh") {
+		t.Error("homebrew re-installed on idempotent re-run")
+	}
+	if fs.installCount != installsBefore {
+		t.Errorf("formulae re-installed: %d new", fs.installCount-installsBefore)
+	}
+	if fs.ran("curl") {
+		t.Error("whisper re-downloaded on idempotent re-run")
+	}
+}

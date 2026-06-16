@@ -39,12 +39,12 @@ type Plan struct {
 	Plist     []byte
 }
 
-// BuildRunner assembles the ordered Provision: install the binaries, enroll
-// (writing the config), then write + load the LaunchDaemon last so the agent
-// only starts once its binaries and config are in place. #87 (hostconfig) and
-// #88 (software) / #89 (Colima) insert their steps ahead of enrollment.
-func BuildRunner(sys System, p Plan) *Runner {
-	return NewRunner(
+// PlanSteps returns the core Provision steps in order: install the binaries,
+// enroll (writing the config), then write + load the LaunchDaemon last so the
+// agent only starts once its binaries and config are in place. Callers prepend
+// SoftwareSteps (#88) and the hostconfig steps (#87) ahead of these.
+func PlanSteps(sys System, p Plan) []Step {
+	return []Step{
 		&InstallBinariesStep{
 			Sys:           sys,
 			AgentSrc:      p.AgentSrc,
@@ -63,5 +63,11 @@ func BuildRunner(sys System, p Plan) *Runner {
 			PlistPath: p.PlistPath,
 			Plist:     p.Plist,
 		},
-	)
+	}
+}
+
+// BuildRunner runs just the core Provision steps (PlanSteps). The install
+// subcommand composes SoftwareSteps + PlanSteps into one runner.
+func BuildRunner(sys System, p Plan) *Runner {
+	return NewRunner(PlanSteps(sys, p)...)
 }
