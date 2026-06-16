@@ -71,7 +71,7 @@ func runEnroll(args []string) {
 func defaultAgentConfig() config.Config {
 	return config.Config{
 		TelemetryInterval:     "30s",
-		ServiceAllowList:      []string{"com.uknomi.edge-ui", "com.tailscale.tailscaled"},
+		ServiceAllowList:      []string{"com.uknomi.edge-ui", "com.tailscale.tailscaled", "com.uknomi.colima"},
 		ServiceStatusInterval: "5m",
 		CamerasPath:           "/usr/local/etc/uknomi/cameras.json",
 		SnapshotStatePath:     "/var/uknomi/snapshot-state.json",
