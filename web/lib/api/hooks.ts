@@ -20,7 +20,7 @@ import {
   type CreateOperatorInput,
   type UpdateOperatorInput,
 } from "./operators";
-import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence, setALPRLicense } from "./devices";
+import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence, setALPRLicense, commissionDevice } from "./devices";
 import type { SnapshotCadence } from "./devices";
 import { getPRTokenStatus, setPRToken } from "./settings";
 import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
@@ -256,6 +256,16 @@ export function useSetALPRLicense(deviceId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (license: string) => setALPRLicense(deviceId, license),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["device", deviceId] }),
+  });
+}
+
+// useCommissionDevice triggers Commission on a device (#91). On success it
+// invalidates the device record so the page reflects the result.
+export function useCommissionDevice(deviceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => commissionDevice(deviceId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["device", deviceId] }),
   });
 }

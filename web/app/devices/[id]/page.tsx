@@ -31,6 +31,7 @@ import { HealthPanel } from "../../../components/HealthPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
 import { SnapshotCadenceControl } from "../../../components/SnapshotCadenceControl";
 import { ALPRLicenseControl } from "../../../components/ALPRLicenseControl";
+import { CommissionButton } from "../../../components/CommissionButton";
 import { CameraDialog } from "../../../components/CameraDialog";
 import { NetworkScanModal } from "../../../components/NetworkScanModal";
 import { EditServicesModal } from "../../../components/EditServicesModal";
@@ -255,6 +256,9 @@ export default function DevicePage() {
                     ],
                   ]}
                 />
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--line, #eee)" }}>
+                  <CommissionButton deviceId={id} assigned={d.siteId != null} />
+                </div>
               </Card>
             </div>
 

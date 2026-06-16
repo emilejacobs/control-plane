@@ -675,6 +675,19 @@ export async function setSnapshotCadence(
   }
 }
 
+// commissionDevice triggers Commission on an assigned device (#91): the CP
+// mints a Tailscale key, gathers the ALPR license/token, and pushes cameras +
+// the secrets to the device. 202 + correlation_id on success.
+export async function commissionDevice(id: string): Promise<void> {
+  const res = await apiRequest(`/devices/${id}/commission`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to commission device");
+  }
+}
+
 // setALPRLicense stores a device's Plate Recognizer license (#84). The license
 // is a secret — write-only; the device read exposes only alprLicenseSet. CP
 // pushes it to the device at Commission.
