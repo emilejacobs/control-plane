@@ -97,13 +97,15 @@ func (s *fakeAlertStore) get(k alertKey) (registry.OpenAlert, bool) {
 type fakeNotifier struct {
 	mu       sync.Mutex
 	digests  []ingest.Digest
+	configs  []ingest.NotifyConfig
 	failWith error
 }
 
-func (n *fakeNotifier) Notify(_ context.Context, d ingest.Digest) error {
+func (n *fakeNotifier) Notify(_ context.Context, d ingest.Digest, cfg ingest.NotifyConfig) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.digests = append(n.digests, d)
+	n.configs = append(n.configs, cfg)
 	return n.failWith
 }
 
@@ -113,9 +115,43 @@ func (n *fakeNotifier) calls() []ingest.Digest {
 	return append([]ingest.Digest(nil), n.digests...)
 }
 
+func (n *fakeNotifier) lastConfig() ingest.NotifyConfig {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.configs) == 0 {
+		return ingest.NotifyConfig{}
+	}
+	return n.configs[len(n.configs)-1]
+}
+
+// fakeConfigSource serves a settable NotificationConfig.
+type fakeConfigSource struct {
+	mu  sync.Mutex
+	cfg ingest.NotificationConfig
+}
+
+func (s *fakeConfigSource) Load(context.Context) (ingest.NotificationConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg, nil
+}
+
+func (s *fakeConfigSource) set(cfg ingest.NotificationConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = cfg
+}
+
 func newReconciler(s ingest.NotificationStore, n ingest.Notifier, now time.Time) *ingest.NotificationReconciler {
 	return ingest.NewNotificationReconciler(s, n, ingest.NotificationReconcilerConfig{
 		Now: func() time.Time { return now },
+	})
+}
+
+func newReconcilerWithConfig(s ingest.NotificationStore, n ingest.Notifier, cs ingest.ConfigSource, now time.Time) *ingest.NotificationReconciler {
+	return ingest.NewNotificationReconciler(s, n, ingest.NotificationReconcilerConfig{
+		ConfigSource: cs,
+		Now:          func() time.Time { return now },
 	})
 }
 
@@ -343,5 +379,72 @@ func TestReconcileSilentlyResolvesNeverNotified(t *testing.T) {
 	}
 	if _, ok := store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""}); ok {
 		t.Error("never-notified alert should be silently resolved")
+	}
+}
+
+// The reconciler reads channel config from the ConfigSource each tick and hands
+// it to the notifier, so an operator's edit reaches delivery without a redeploy.
+func TestReconcilePassesConfigToNotifier(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(offline("dev-a", "mac-a"))
+	notifier := &fakeNotifier{}
+	cs := &fakeConfigSource{}
+	cs.set(ingest.NotificationConfig{
+		Enabled: true,
+		NotifyConfig: ingest.NotifyConfig{
+			Recipients:      []string{"ops@example.com"},
+			TeamsWebhookURL: "https://hook.example/x",
+		},
+	})
+	r := newReconcilerWithConfig(store, notifier, cs, now)
+
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+
+	got := notifier.lastConfig()
+	if len(got.Recipients) != 1 || got.Recipients[0] != "ops@example.com" {
+		t.Errorf("recipients = %v", got.Recipients)
+	}
+	if got.TeamsWebhookURL != "https://hook.example/x" {
+		t.Errorf("webhook = %q", got.TeamsWebhookURL)
+	}
+}
+
+// When notifications are disabled, the reconciler sends nothing but still keeps
+// alert_state accurate: an owed alert is opened (not marked notified, so it
+// fires on re-enable) and a cleared alert is resolved with no recovery notice.
+func TestReconcileDisabledSkipsSendButKeepsState(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(offline("dev-a", "mac-a"))
+	notifier := &fakeNotifier{}
+	cs := &fakeConfigSource{}
+	cs.set(ingest.NotificationConfig{Enabled: false})
+	r := newReconcilerWithConfig(store, notifier, cs, now)
+
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+
+	if calls := notifier.calls(); len(calls) != 0 {
+		t.Fatalf("notifier calls = %d, want 0 while disabled", len(calls))
+	}
+	a, ok := store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""})
+	if !ok {
+		t.Fatal("owed alert should still be opened while disabled (bookkeeping)")
+	}
+	if a.LastNotifiedAt != nil {
+		t.Error("alert must NOT be marked notified while disabled — it fires on re-enable")
+	}
+
+	// Re-enable: the still-open, never-notified alert now fires.
+	cs.set(ingest.NotificationConfig{Enabled: true})
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if calls := notifier.calls(); len(calls) != 1 {
+		t.Fatalf("after re-enable notifier calls = %d, want 1", len(calls))
 	}
 }
