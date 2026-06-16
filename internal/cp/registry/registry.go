@@ -1123,6 +1123,38 @@ func (r *Registry) GetALPRLicense(ctx context.Context, deviceID string) (string,
 	return *license, nil
 }
 
+// SettingPlateRecognizerToken is the cp_settings key for the account-wide
+// Plate Recognizer token (#84, ADR-036 §5).
+const SettingPlateRecognizerToken = "plate_recognizer_token"
+
+// SetCPSetting upserts a CP-singleton setting (#84, migration 027). Values may
+// be secret — callers must not log them.
+func (r *Registry) SetCPSetting(ctx context.Context, key, value string) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO cp_settings (key, value, updated_at) VALUES ($1, $2, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+	`, key, value)
+	if err != nil {
+		return fmt.Errorf("set cp setting %q: %w", key, err)
+	}
+	return nil
+}
+
+// GetCPSetting returns a CP-singleton setting's value and whether it is set.
+// Commission reads the PR token through this; the API never returns the raw
+// value, only whether it is set.
+func (r *Registry) GetCPSetting(ctx context.Context, key string) (string, bool, error) {
+	var value string
+	err := r.pool.QueryRow(ctx, `SELECT value FROM cp_settings WHERE key = $1`, key).Scan(&value)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("get cp setting %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
 // RecordServiceConfigApplied stamps the (timestamp, correlation_id)
 // of a config.update ACK on the device row (Phase 2 slice 2). The
 // cp-ingest cmd-result handler calls this on every successful ACK;

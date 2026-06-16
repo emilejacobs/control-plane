@@ -20,6 +20,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/enrollment"
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/fleet"
 	operatorshttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/operators"
+	settingshttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/settings"
 	taxonomyhttp "github.com/emilejacobs/control-plane/internal/cp/api/handlers/taxonomy"
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
@@ -311,6 +312,11 @@ func NewBuilderWith(d Deps) *Builder {
 		// mutating; deactivate/reactivate are POST sub-routes (not DELETE) so
 		// the soft-delete semantics read clearly and stay auditable.
 		if d.Operators != nil {
+			// Account-wide Plate Recognizer token (#84) — staff-only. GET
+			// reports only whether it's set; PUT stores the secret (pushed to
+			// devices at Commission, #91).
+			b.Get("/settings/pr-token", requireAuth(onboarded(requireStaff(settingshttp.NewPRTokenGet(d.Registry)))))
+			b.Put("/settings/pr-token", requireAuth(onboarded(requireStaff(settingshttp.NewPRTokenPut(d.Registry, auditW)))))
 			b.Get("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewList(d.Operators)))))
 			b.Get("/operators/{id}", requireAuth(onboarded(requireStaff(operatorshttp.NewGet(d.Operators)))))
 			b.Post("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewCreate(d.Operators, auditW)))))
