@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../test/server";
@@ -46,7 +46,7 @@ describe("CameraSnapshot", () => {
     expect(img.src).toBe("https://s3.example/signed/snap-2.jpg");
   });
 
-  it("clicking the thumbnail opens a full-size lightbox; Escape closes it", async () => {
+  it("clicking the thumbnail opens the snapshot history modal", async () => {
     server.use(
       http.get(`${API_BASE}/devices/dev-1/captures`, () =>
         HttpResponse.json({
@@ -62,14 +62,9 @@ describe("CameraSnapshot", () => {
     await screen.findByRole("img", { name: /latest snapshot for cam1/i });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /enlarge snapshot for cam1/i }));
+    await userEvent.click(screen.getByRole("button", { name: /snapshot history for cam1/i }));
 
-    const dialog = await screen.findByRole("dialog", { name: /snapshot for cam1/i });
-    const full = within(dialog).getByRole("img", { name: /full size/i }) as HTMLImageElement;
-    expect(full.src).toBe("https://s3.example/signed/snap-2.jpg");
-
-    await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByRole("dialog", { name: /snapshot history for cam1/i })).toBeInTheDocument();
   });
 
   it("shows a placeholder when the camera has no snapshot", async () => {
