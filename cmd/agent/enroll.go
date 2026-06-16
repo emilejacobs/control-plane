@@ -31,22 +31,22 @@ func runEnroll(args []string) {
 	if bootstrapKey == "" && *bootstrapKeyFile != "" {
 		raw, err := os.ReadFile(*bootstrapKeyFile)
 		if err != nil {
-			fatalEnroll("read bootstrap key file: %v", err)
+			fatalCLI("read bootstrap key file: %v", err)
 		}
 		bootstrapKey = strings.TrimSpace(string(raw))
 	}
 	if bootstrapKey == "" {
-		fatalEnroll("bootstrap key required (--bootstrap-key-file or CP_BOOTSTRAP_KEY)")
+		fatalCLI("bootstrap key required (--bootstrap-key-file or CP_BOOTSTRAP_KEY)")
 	}
 	if *brokerURL == "" {
-		fatalEnroll("--broker-url is required")
+		fatalCLI("--broker-url is required")
 	}
 	if *caFile == "" {
-		fatalEnroll("--ca-file is required")
+		fatalCLI("--ca-file is required")
 	}
 	caPEM, err := os.ReadFile(*caFile)
 	if err != nil {
-		fatalEnroll("read CA file: %v", err)
+		fatalCLI("read CA file: %v", err)
 	}
 
 	res, err := enroll.Enroll(context.Background(), enroll.Params{
@@ -59,7 +59,7 @@ func runEnroll(args []string) {
 		Defaults:     defaultAgentConfig(),
 	})
 	if err != nil {
-		fatalEnroll("enrollment failed: %v", err)
+		fatalCLI("enrollment failed: %v", err)
 	}
 	fmt.Printf("enrolled: device_id=%s config=%s\n", res.DeviceID, res.ConfigPath)
 }
@@ -119,7 +119,7 @@ func productVersion() string {
 	return strings.TrimSpace(string(out))
 }
 
-func fatalEnroll(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "enroll: "+format+"\n", a...)
+func fatalCLI(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "uknomi-agent: "+format+"\n", a...)
 	os.Exit(1)
 }
