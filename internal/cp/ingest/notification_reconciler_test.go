@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -205,5 +206,45 @@ func TestReconcileResolvesClearedAlert(t *testing.T) {
 	}
 	if _, ok := store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""}); ok {
 		t.Error("alert should be resolved (no longer open)")
+	}
+}
+
+// A delivery failure leaves the alert un-notified: opened_at is recorded so the
+// detection time survives, but the next tick (with the notifier recovered)
+// re-detects it as owed and retries the notification.
+func TestReconcileRetriesAfterDeliveryFailure(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(offline("dev-a", "mac-a"))
+	notifier := &fakeNotifier{failWith: errors.New("teams 503")}
+	r := newReconciler(store, notifier, now)
+
+	// Tick 1: notify fails.
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first tick returned error (should be swallowed): %v", err)
+	}
+	a, ok := store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""})
+	if !ok {
+		t.Fatal("alert should be opened even when delivery fails")
+	}
+	if a.LastNotifiedAt != nil {
+		t.Error("alert must NOT be marked notified after a failed send")
+	}
+
+	// Tick 2: notifier recovers; the still-owed alert is retried.
+	notifier.failWith = nil
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	calls := notifier.calls()
+	if len(calls) != 2 {
+		t.Fatalf("notifier calls = %d, want 2 (fail + retry)", len(calls))
+	}
+	if len(calls[1].Opened) != 1 || calls[1].Opened[0].DeviceID != "dev-a" {
+		t.Fatalf("retry digest Opened = %+v", calls[1].Opened)
+	}
+	a, _ = store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""})
+	if a.LastNotifiedAt == nil {
+		t.Error("alert should be marked notified after the successful retry")
 	}
 }
