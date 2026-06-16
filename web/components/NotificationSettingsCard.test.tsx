@@ -63,4 +63,47 @@ describe("NotificationSettingsCard", () => {
       expect(body).toEqual({ enabled: false, email_recipients: ["a@x.com", "b@y.com"] }),
     );
   });
+
+  it("PUTs the Teams webhook to its write-only endpoint and never shows the value", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.get(`${API_BASE}/settings/notifications`, () =>
+        HttpResponse.json({
+          enabled: true,
+          email_recipients: [],
+          teams_webhook_set: true,
+          teams_webhook_preview: "default…powerplatform.com",
+        }),
+      ),
+      http.put(`${API_BASE}/settings/notifications/teams-webhook`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({});
+      }),
+    );
+    renderWithClient(<NotificationSettingsCard />);
+
+    const webhookInput = await screen.findByLabelText(/teams webhook url/i);
+    // Secret input — masked, and the stored value is not pre-filled.
+    expect(webhookInput).toHaveAttribute("type", "password");
+    expect(webhookInput).toHaveValue("");
+
+    await userEvent.type(webhookInput, "https://new.example/hook?sig=abc");
+    await userEvent.click(screen.getByRole("button", { name: /save webhook/i }));
+
+    await waitFor(() =>
+      expect(body).toEqual({ webhook_url: "https://new.example/hook?sig=abc" }),
+    );
+  });
+
+  it("hides for a non-staff operator (403)", async () => {
+    server.use(
+      http.get(`${API_BASE}/settings/notifications`, () =>
+        HttpResponse.json({ message: "staff only" }, { status: 403 }),
+      ),
+    );
+    renderWithClient(<NotificationSettingsCard />);
+    await waitFor(() =>
+      expect(screen.queryByText(/^notifications$/i)).not.toBeInTheDocument(),
+    );
+  });
 });
