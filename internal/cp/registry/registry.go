@@ -208,6 +208,12 @@ type Device struct {
 	// "rolled_back" when this equals DesiredAgentVersion on an un-converged
 	// device — it tried the desired version and reverted.
 	RolledBackVersion *string
+
+	// SnapshotCadence is the per-device scheduled-snapshot frequency
+	// (migration 025, #9): "off" | "daily" | "weekly", default "weekly". The
+	// agent's snapshot scheduler reads it (pushed via config.update in a later
+	// slice); the dashboard's device page lets staff change it.
+	SnapshotCadence string
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -227,7 +233,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
-		       devices.desired_agent_version, devices.rolled_back_version
+		       devices.desired_agent_version, devices.rolled_back_version,
+		       devices.snapshot_cadence
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -244,6 +251,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.AssetNumber,
 		&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
 		&d.DesiredAgentVersion, &d.RolledBackVersion,
+		&d.SnapshotCadence,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -271,7 +279,8 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       s.name AS site_name, c.name AS client_name,
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
-		       devices.desired_agent_version, devices.rolled_back_version
+		       devices.desired_agent_version, devices.rolled_back_version,
+		       devices.snapshot_cadence
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -296,6 +305,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.AssetNumber,
 			&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
 			&d.DesiredAgentVersion, &d.RolledBackVersion,
+			&d.SnapshotCadence,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -959,6 +969,34 @@ func (r *Registry) RecordRolledBackVersion(ctx context.Context, deviceID, versio
 // skipped, not an error — the returned count of stamped rows is the caller's
 // signal (the API layer rejects a target set that matched nothing). Last-wins
 // on re-target: canary promotion and abort are both just another set.
+// SnapshotCadences is the closed set of valid scheduled-snapshot cadences (#9),
+// mirroring the migration-025 CHECK constraint. ValidSnapshotCadence guards the
+// API before a write.
+var SnapshotCadences = map[string]bool{"off": true, "daily": true, "weekly": true}
+
+// ValidSnapshotCadence reports whether c is an accepted cadence.
+func ValidSnapshotCadence(c string) bool { return SnapshotCadences[c] }
+
+// SetSnapshotCadence updates a device's scheduled-snapshot cadence (#9). The
+// caller (the snapshot-config PUT) site-scopes via a prior GetByID; the cadence
+// string is validated by ValidSnapshotCadence before this runs. ErrDeviceNotFound
+// when the id matches no row.
+func (r *Registry) SetSnapshotCadence(ctx context.Context, deviceID, cadence string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices
+		SET snapshot_cadence = $2,
+		    updated_at        = now()
+		WHERE id = $1
+	`, deviceID, cadence)
+	if err != nil {
+		return fmt.Errorf("set snapshot cadence: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
 func (r *Registry) SetDesiredAgentVersion(ctx context.Context, deviceIDs []string, version string) (int, error) {
 	valid := make([]string, 0, len(deviceIDs))
 	for _, id := range deviceIDs {
