@@ -200,6 +200,15 @@ data "aws_iam_policy_document" "cp_ingest" {
     actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.main["captures"].arn}/*"]
   }
+  # Fleet notifications (#98/#99): the reconciler sends alert emails via SES v2.
+  # Scoped to SendEmail on any verified identity in this account; narrow to the
+  # specific identity ARN once the sender identity is chosen + verified (the
+  # operator prereq, ADR-039). Teams delivery is a plain HTTPS POST — no IAM.
+  statement {
+    sid       = "NotificationsSendEmail"
+    actions   = ["ses:SendEmail"]
+    resources = ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_ingest" {

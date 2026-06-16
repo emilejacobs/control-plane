@@ -102,3 +102,9 @@ variable "image_tag" {
   type        = string
   default     = "latest"
 }
+
+variable "notifications_from_address" {
+  description = "Verified SES sender identity for fleet-notification emails (#98/#99). Empty (the default) keeps the email channel off until an identity is verified + the SES account leaves the sandbox (ADR-039); Teams delivery works regardless off the webhook URL in cp_settings. Pass via -var notifications_from_address=alerts@example.com once verified."
+  type        = string
+  default     = ""
+}

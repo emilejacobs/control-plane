@@ -113,6 +113,15 @@ variable "captures_bucket" {
   default     = ""
 }
 
+# Fleet notifications (#98/#99). Empty default keeps the module applyable before
+# the SES sender identity is verified — cp-ingest skips the email channel when
+# unset (Teams still delivers off the webhook URL in cp_settings).
+variable "notifications_from_address" {
+  description = "Verified SES sender identity for fleet-notification emails. Empty disables the email channel."
+  type        = string
+  default     = ""
+}
+
 variable "desired_count" {
   description = "Number of cp-ingest tasks to run."
   type        = number
