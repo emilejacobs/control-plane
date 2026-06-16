@@ -24,6 +24,19 @@ import (
 var version string
 
 func main() {
+	// Subcommand dispatch. The daemon path is invoked as `uknomi-agent
+	// --config ...` (by the LaunchDaemon/supervisor), so anything starting
+	// with a flag falls through to runDaemon and the existing behaviour is
+	// preserved. `enroll` is the one-shot device-side enrollment (#82); the
+	// full `install` subcommand (ADR-037) lands with #86.
+	if len(os.Args) >= 2 && os.Args[1] == "enroll" {
+		runEnroll(os.Args[2:])
+		return
+	}
+	runDaemon()
+}
+
+func runDaemon() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
