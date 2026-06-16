@@ -229,6 +229,14 @@ func NewBuilderWith(d Deps) *Builder {
 		// normal access until the operator rotates.
 		onboarded := func(h http.Handler) http.Handler { return requireEnrolled(requirePwChanged(h)) }
 		requireStaff := middleware.RequireStaff()
+		// staffScoped gates a per-device action to staff AND injects the
+		// operator's SiteFilter (All for staff) — the same scope requireScope
+		// supplies the read routes. Device handlers verify existence through the
+		// site-scoped GetByID, which fails closed (→ 404 "device not found")
+		// when no scope is in context; a staff route that only ran requireStaff
+		// had none, so every staff device mutation 404'd. requireStaff stays
+		// outermost so a non-staff caller is rejected before any scope work.
+		staffScoped := func(h http.Handler) http.Handler { return requireStaff(requireScope(h)) }
 		b.PostNoIdem("/auth/password", requireAuth(auth.NewSetPassword(d.AuthN, auditW)))
 		b.PostNoIdem("/auth/totp/enroll", requireAuth(requirePwChanged(auth.NewTotpEnroll(d.AuthN, auditW))))
 		b.Get("/devices", requireAuth(onboarded(requireScope(devices.NewList(d.Registry)))))
@@ -298,7 +306,7 @@ func NewBuilderWith(d Deps) *Builder {
 			// install-time-only config fields (snapshot_state_path) to an
 			// already-enrolled device; takes effect on the agent's next restart.
 			b.Post("/devices/{id}/config-backfill",
-				requireAuth(onboarded(requireStaff(devices.NewConfigBackfill(d.Registry, d.CmdPublisher, auditW)))))
+				requireAuth(onboarded(staffScoped(devices.NewConfigBackfill(d.Registry, d.CmdPublisher, auditW)))))
 			// Phase 2 slice 3: log-tail. POST initiates a tail request,
 			// publishes the log.tail cmd; GET polls the per-request row
 			// until status flips to done|error. Same CmdPublisher gate
@@ -329,6 +337,12 @@ func NewBuilderWith(d Deps) *Builder {
 			// devices at Commission, #91).
 			b.Get("/settings/pr-token", requireAuth(onboarded(requireStaff(settingshttp.NewPRTokenGet(d.Registry)))))
 			b.Put("/settings/pr-token", requireAuth(onboarded(requireStaff(settingshttp.NewPRTokenPut(d.Registry, auditW)))))
+			// Fleet notification config (#96) — staff-only. Enable switch +
+			// recipient list via /settings/notifications; the write-only Teams
+			// webhook secret via its own endpoint.
+			b.Get("/settings/notifications", requireAuth(onboarded(requireStaff(settingshttp.NewNotificationsGet(d.Registry)))))
+			b.Put("/settings/notifications", requireAuth(onboarded(requireStaff(settingshttp.NewNotificationsPut(d.Registry, auditW)))))
+			b.Put("/settings/notifications/teams-webhook", requireAuth(onboarded(requireStaff(settingshttp.NewTeamsWebhookPut(d.Registry, auditW)))))
 			b.Get("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewList(d.Operators)))))
 			b.Get("/operators/{id}", requireAuth(onboarded(requireStaff(operatorshttp.NewGet(d.Operators)))))
 			b.Post("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewCreate(d.Operators, auditW)))))
@@ -357,25 +371,25 @@ func NewBuilderWith(d Deps) *Builder {
 			// device's site assignment + asset_number. The picker
 			// (GET /sites) is the read counterpart.
 			b.Put("/devices/{id}/deployment",
-				requireAuth(onboarded(requireStaff(devices.NewDeploymentPut(d.Registry, auditW)))))
+				requireAuth(onboarded(staffScoped(devices.NewDeploymentPut(d.Registry, auditW)))))
 			// PUT /devices/{id}/alpr-license — staff-only set of a device's
 			// Plate Recognizer license (#84). Stored secret; pushed to the
 			// device at Commission (#91), not here.
 			b.Put("/devices/{id}/alpr-license",
-				requireAuth(onboarded(requireStaff(devices.NewALPRLicensePut(d.Registry, auditW)))))
+				requireAuth(onboarded(staffScoped(devices.NewALPRLicensePut(d.Registry, auditW)))))
 			// POST /devices/{id}/commission — staff-only Commission (#91).
 			// Gated on a configured Commissioner (needs the Tailscale
 			// credential + the cmd publisher).
 			if d.Commissioner != nil {
 				b.Post("/devices/{id}/commission",
-					requireAuth(onboarded(requireStaff(devices.NewCommissionPost(d.Commissioner, auditW)))))
+					requireAuth(onboarded(staffScoped(devices.NewCommissionPost(d.Commissioner, auditW)))))
 			}
 		}
 		// DELETE /devices/{id} — staff-only device decommission (CP-side row
 		// removal; AWS IoT thing/cert teardown is out-of-band per the
 		// decommission runbook). Audited; child rows cascade.
 		b.Delete("/devices/{id}",
-			requireAuth(onboarded(requireStaff(devices.NewDelete(d.Registry, auditW)))))
+			requireAuth(onboarded(staffScoped(devices.NewDelete(d.Registry, auditW)))))
 		// POST /agent-rollouts — staff-only agent fleet-update (#40):
 		// stamp desired_agent_version on a target set + best-effort
 		// initial agent.update push to the online targets. Scope is
