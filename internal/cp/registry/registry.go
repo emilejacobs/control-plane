@@ -1127,6 +1127,16 @@ func (r *Registry) GetALPRLicense(ctx context.Context, deviceID string) (string,
 // Plate Recognizer token (#84, ADR-036 §5).
 const SettingPlateRecognizerToken = "plate_recognizer_token"
 
+// cp_settings keys for fleet notifications (#96), all read/written through
+// SetCPSetting/GetCPSetting. Enabled is "true"/"false"; Recipients is a JSON
+// string array; TeamsWebhookURL is a write-only secret — the API never returns
+// it raw, only whether it is set plus a host-only preview.
+const (
+	SettingNotificationsEnabled    = "notifications.enabled"
+	SettingNotificationsRecipients = "notifications.email_recipients"
+	SettingTeamsWebhookURL         = "notifications.teams_webhook_url"
+)
+
 // SetCPSetting upserts a CP-singleton setting (#84, migration 027). Values may
 // be secret — callers must not log them.
 func (r *Registry) SetCPSetting(ctx context.Context, key, value string) error {

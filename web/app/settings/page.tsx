@@ -4,6 +4,7 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { Topbar } from "../../components/ui/Topbar";
 import { TaxonomySettingsCard } from "../../components/TaxonomySettingsCard";
 import { PRTokenSettingsCard } from "../../components/PRTokenSettingsCard";
+import { NotificationSettingsCard } from "../../components/NotificationSettingsCard";
 
 // /settings — Phase 4 tenant-level configuration. The "Clients & Sites"
 // card (ADR-033 § 8) is the first concrete section; other cards (alarm
@@ -31,6 +32,7 @@ export default function SettingsPage() {
         </div>
         <TaxonomySettingsCard />
         <PRTokenSettingsCard />
+        <NotificationSettingsCard />
       </main>
     </RequireAuth>
   );

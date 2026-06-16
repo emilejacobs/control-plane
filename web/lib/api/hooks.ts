@@ -22,7 +22,13 @@ import {
 } from "./operators";
 import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence, setALPRLicense, commissionDevice } from "./devices";
 import type { SnapshotCadence } from "./devices";
-import { getPRTokenStatus, setPRToken } from "./settings";
+import {
+  getPRTokenStatus,
+  setPRToken,
+  getNotificationSettings,
+  setNotificationConfig,
+  setTeamsWebhook,
+} from "./settings";
 import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
 import { getFleetAlerts } from "./fleet";
 import {
@@ -286,6 +292,37 @@ export function useSetPRToken() {
   return useMutation({
     mutationFn: (token: string) => setPRToken(token),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-token-status"] }),
+  });
+}
+
+// useNotificationSettings reads the notification config — enable switch,
+// recipient list, and whether the Teams webhook is set (#96). The webhook
+// value is never returned.
+export function useNotificationSettings() {
+  return useQuery({
+    queryKey: ["notification-settings"],
+    queryFn: getNotificationSettings,
+  });
+}
+
+// useSetNotificationConfig writes the non-secret config (enabled + recipients).
+// On success it invalidates the settings query so the card reflects the save.
+export function useSetNotificationConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: { enabled: boolean; emailRecipients: string[] }) =>
+      setNotificationConfig(cfg.enabled, cfg.emailRecipients),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-settings"] }),
+  });
+}
+
+// useSetTeamsWebhook stores the write-only Teams webhook URL (#96). On success
+// it invalidates the settings query so the card reflects "configured".
+export function useSetTeamsWebhook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (webhookUrl: string) => setTeamsWebhook(webhookUrl),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-settings"] }),
   });
 }
 

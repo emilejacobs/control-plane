@@ -329,6 +329,12 @@ func NewBuilderWith(d Deps) *Builder {
 			// devices at Commission, #91).
 			b.Get("/settings/pr-token", requireAuth(onboarded(requireStaff(settingshttp.NewPRTokenGet(d.Registry)))))
 			b.Put("/settings/pr-token", requireAuth(onboarded(requireStaff(settingshttp.NewPRTokenPut(d.Registry, auditW)))))
+			// Fleet notification config (#96) — staff-only. Enable switch +
+			// recipient list via /settings/notifications; the write-only Teams
+			// webhook secret via its own endpoint.
+			b.Get("/settings/notifications", requireAuth(onboarded(requireStaff(settingshttp.NewNotificationsGet(d.Registry)))))
+			b.Put("/settings/notifications", requireAuth(onboarded(requireStaff(settingshttp.NewNotificationsPut(d.Registry, auditW)))))
+			b.Put("/settings/notifications/teams-webhook", requireAuth(onboarded(requireStaff(settingshttp.NewTeamsWebhookPut(d.Registry, auditW)))))
 			b.Get("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewList(d.Operators)))))
 			b.Get("/operators/{id}", requireAuth(onboarded(requireStaff(operatorshttp.NewGet(d.Operators)))))
 			b.Post("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewCreate(d.Operators, auditW)))))
