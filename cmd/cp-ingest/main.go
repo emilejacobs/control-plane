@@ -214,6 +214,11 @@ func run(logger *slog.Logger) error {
 	// UPSERT, not replace-all-per-device, by design).
 	deviceServicesSweeper := ingest.NewDeviceServicesSweeper(reg, ingest.DeviceServicesSweeperConfig{Logger: logger})
 
+	// Captures retention (#9): prune snapshot rows past the 90-day horizon so
+	// the index stays in step with the bucket's S3 lifecycle (which expires the
+	// objects on the same schedule). Default 6h cadence.
+	snapshotSweeper := ingest.NewSnapshotSweeper(reg, ingest.SnapshotSweeperConfig{Logger: logger})
+
 	// Optional service-status consumer (Phase 2). Skipped silently if
 	// the env vars aren't set yet — lets the code deploy before
 	// Terraform provisions the queue.
@@ -300,7 +305,7 @@ func run(logger *slog.Logger) error {
 	// then wait for a clean drain. The consumers report drain errors; the
 	// sweeper does not.
 	var wg sync.WaitGroup
-	workers := 5 // heartbeat + lifecycle + presence sweeper + log-tail sweeper + device-services sweeper
+	workers := 6 // heartbeat + lifecycle + presence sweeper + log-tail sweeper + device-services sweeper + snapshot sweeper
 	if serviceStatusConsumer != nil {
 		workers++
 	}
@@ -317,6 +322,7 @@ func run(logger *slog.Logger) error {
 	go func() { defer wg.Done(); sweeper.Run(ctx) }()
 	go func() { defer wg.Done(); logTailSweeper.Run(ctx) }()
 	go func() { defer wg.Done(); deviceServicesSweeper.Run(ctx) }()
+	go func() { defer wg.Done(); snapshotSweeper.Run(ctx) }()
 	if serviceStatusConsumer != nil {
 		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
 	}

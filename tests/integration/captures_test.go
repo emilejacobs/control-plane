@@ -7,9 +7,58 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
+
+// Snapshot retention (#9 slice 4): DeleteSnapshotsOlderThan prunes snapshot
+// rows past the cutoff only — recent snapshots and other kinds survive.
+func TestRegistryDeleteSnapshotsOlderThan(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	srv := newTestServer(t, ctx)
+	dev := enrollForTest(t, srv, "mac-retention-01", "a0000000-0000-0000-0000-000000000001")
+
+	if _, err := srv.Registry.InsertCapture(ctx, registry.CaptureInput{
+		DeviceID: dev, Kind: "snapshot", S3Key: "snapshots/" + dev + "/a.jpg",
+		ContentType: "image/jpeg", SizeBytes: 1,
+	}); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := srv.Registry.InsertCapture(ctx, registry.CaptureInput{
+		DeviceID: dev, Kind: "audio", S3Key: "audio/" + dev + "/a.wav",
+		ContentType: "audio/wav", SizeBytes: 1,
+	}); err != nil {
+		t.Fatalf("insert audio: %v", err)
+	}
+
+	// A past cutoff deletes nothing — the rows are recent.
+	n, err := srv.Registry.DeleteSnapshotsOlderThan(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("delete (past cutoff): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("past-cutoff delete removed %d, want 0", n)
+	}
+
+	// A future cutoff deletes the snapshot but not the audio.
+	n, err = srv.Registry.DeleteSnapshotsOlderThan(ctx, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("delete (future cutoff): %v", err)
+	}
+	if n != 1 {
+		t.Errorf("future-cutoff delete removed %d, want 1 (snapshot only)", n)
+	}
+
+	remaining, err := srv.Registry.ListCaptures(staffCtx(ctx), dev, "")
+	if err != nil {
+		t.Fatalf("ListCaptures: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Kind != "audio" {
+		t.Errorf("remaining captures = %+v, want only the audio row", remaining)
+	}
+}
 
 // TestRegistryCaptureStore — the #8 capture index round-trips: InsertCapture
 // persists a row (server-assigned id + created_at, metadata jsonb);

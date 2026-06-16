@@ -811,6 +811,22 @@ func (r *Registry) GetCapture(ctx context.Context, id string) (Capture, error) {
 	return scanCapture(rows)
 }
 
+// DeleteSnapshotsOlderThan prunes snapshot capture rows older than cutoff (#9
+// retention). The captures bucket's S3 lifecycle expires the objects on the
+// same 90-day horizon; this keeps the index in step so the history view never
+// lists a row whose object has already been deleted. System context (a
+// cp-ingest sweeper), not site-scoped. Returns the number deleted.
+func (r *Registry) DeleteSnapshotsOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM device_captures
+		WHERE kind = 'snapshot' AND created_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale snapshots: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func scanCapture(rows pgx.Rows) (Capture, error) {
 	var c Capture
 	var md []byte
