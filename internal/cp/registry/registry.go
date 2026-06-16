@@ -214,6 +214,14 @@ type Device struct {
 	// agent's snapshot scheduler reads it (pushed via config.update in a later
 	// slice); the dashboard's device page lets staff change it.
 	SnapshotCadence string
+
+	// ALPRLicenseSet reports whether a per-device Plate Recognizer license is
+	// configured (migration 026, #84). The license itself is a secret and is
+	// deliberately NOT carried on Device — reads expose only
+	// `alpr_license IS NOT NULL` so the dashboard shows set/not-set without the
+	// value ever leaving the CP. Commission reads the raw value via
+	// GetALPRLicense; staff sets it via SetALPRLicense.
+	ALPRLicenseSet bool
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -234,7 +242,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
 		       devices.desired_agent_version, devices.rolled_back_version,
-		       devices.snapshot_cadence
+		       devices.snapshot_cadence,
+		       (devices.alpr_license IS NOT NULL) AS alpr_license_set
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -252,6 +261,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
 		&d.DesiredAgentVersion, &d.RolledBackVersion,
 		&d.SnapshotCadence,
+		&d.ALPRLicenseSet,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -280,7 +290,8 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       devices.asset_number,
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
 		       devices.desired_agent_version, devices.rolled_back_version,
-		       devices.snapshot_cadence
+		       devices.snapshot_cadence,
+		       (devices.alpr_license IS NOT NULL) AS alpr_license_set
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -306,6 +317,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.LanIP, &d.TailscaleIP, &d.TailscaleName,
 			&d.DesiredAgentVersion, &d.RolledBackVersion,
 			&d.SnapshotCadence,
+			&d.ALPRLicenseSet,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -1069,6 +1081,46 @@ func (r *Registry) SetServiceConfig(ctx context.Context, deviceID string, allowL
 		return ErrDeviceNotFound
 	}
 	return nil
+}
+
+// SetALPRLicense stores the per-device Plate Recognizer license (#84, ADR-036
+// §5). The value is a secret — never logged; reads for the dashboard expose
+// only ALPRLicenseSet. Commission reads the raw value via GetALPRLicense.
+func (r *Registry) SetALPRLicense(ctx context.Context, deviceID, license string) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE devices SET alpr_license = $2, updated_at = now() WHERE id = $1
+	`, deviceID, license)
+	if err != nil {
+		return fmt.Errorf("set alpr license: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// GetALPRLicense returns the raw per-device Plate Recognizer license, or "" if
+// none is set. Used only by Commission (#91) to push the license to the device;
+// never surfaced through the device read path.
+func (r *Registry) GetALPRLicense(ctx context.Context, deviceID string) (string, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return "", ErrDeviceNotFound
+	}
+	var license *string
+	err := r.pool.QueryRow(ctx, `SELECT alpr_license FROM devices WHERE id = $1`, deviceID).Scan(&license)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrDeviceNotFound
+		}
+		return "", fmt.Errorf("get alpr license: %w", err)
+	}
+	if license == nil {
+		return "", nil
+	}
+	return *license, nil
 }
 
 // RecordServiceConfigApplied stamps the (timestamp, correlation_id)

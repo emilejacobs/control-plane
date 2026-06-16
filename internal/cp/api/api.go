@@ -340,6 +340,11 @@ func NewBuilderWith(d Deps) *Builder {
 			// (GET /sites) is the read counterpart.
 			b.Put("/devices/{id}/deployment",
 				requireAuth(onboarded(requireStaff(devices.NewDeploymentPut(d.Registry, auditW)))))
+			// PUT /devices/{id}/alpr-license — staff-only set of a device's
+			// Plate Recognizer license (#84). Stored secret; pushed to the
+			// device at Commission (#91), not here.
+			b.Put("/devices/{id}/alpr-license",
+				requireAuth(onboarded(requireStaff(devices.NewALPRLicensePut(d.Registry, auditW)))))
 		}
 		// DELETE /devices/{id} — staff-only device decommission (CP-side row
 		// removal; AWS IoT thing/cert teardown is out-of-band per the
