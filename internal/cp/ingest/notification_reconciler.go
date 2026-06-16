@@ -44,11 +44,36 @@ func (d Digest) Empty() bool {
 	return len(d.Opened) == 0 && len(d.Resolved) == 0 && d.Truncated == 0
 }
 
-// Notifier delivers a digest. Implementations fan out to the configured
-// channels (#98); the reconciler treats a returned error as a delivery failure
-// and leaves the affected alerts un-notified so the next tick retries.
+// NotifyConfig is the per-send channel config the reconciler hands the notifier
+// each tick, sourced from the settings store — so the notifier holds no config
+// state. An empty Recipients or TeamsWebhookURL means that channel is skipped.
+type NotifyConfig struct {
+	Recipients      []string
+	TeamsWebhookURL string
+}
+
+// Notifier delivers a digest over the channels named in cfg. Implementations
+// fan out to email + Teams (#98); the reconciler treats a returned error as a
+// delivery failure and leaves the affected alerts un-notified so the next tick
+// retries.
 type Notifier interface {
-	Notify(ctx context.Context, d Digest) error
+	Notify(ctx context.Context, d Digest, cfg NotifyConfig) error
+}
+
+// NotificationConfig is the full notification config read from settings each
+// tick: the master enable switch plus the channel config.
+type NotificationConfig struct {
+	Enabled bool
+	NotifyConfig
+}
+
+// ConfigSource loads the current notification config from the settings store.
+// Read every tick so an operator's edit applies without a redeploy. A nil
+// ConfigSource makes the reconciler always-enabled with empty channel config
+// (the #97 default, before settings were wired). *notify.SettingsConfigSource
+// satisfies it.
+type ConfigSource interface {
+	Load(ctx context.Context) (NotificationConfig, error)
 }
 
 // NotificationReconciler diffs the live fleet-unhealthy snapshot against the
@@ -57,12 +82,13 @@ type Notifier interface {
 // still-unhealthy signal produces nothing because its alert is already open
 // and notified).
 type NotificationReconciler struct {
-	store    NotificationStore
-	notifier Notifier
-	log      *slog.Logger
-	interval time.Duration
-	cap      int
-	now      func() time.Time
+	store     NotificationStore
+	notifier  Notifier
+	configSrc ConfigSource
+	log       *slog.Logger
+	interval  time.Duration
+	cap       int
+	now       func() time.Time
 }
 
 // NotificationReconcilerConfig tunes a NotificationReconciler. All fields
@@ -70,8 +96,11 @@ type NotificationReconciler struct {
 type NotificationReconcilerConfig struct {
 	Interval time.Duration // tick interval; default 1 min
 	Cap      int           // max opened events enumerated per digest; default 25
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// ConfigSource supplies the enable switch + channel config each tick. nil
+	// means always-enabled with empty channel config (#97 default).
+	ConfigSource ConfigSource
+	Logger       *slog.Logger
+	Now          func() time.Time
 }
 
 func NewNotificationReconciler(store NotificationStore, notifier Notifier, cfg NotificationReconcilerConfig) *NotificationReconciler {
@@ -91,7 +120,7 @@ func NewNotificationReconciler(store NotificationStore, notifier Notifier, cfg N
 	if now == nil {
 		now = time.Now
 	}
-	return &NotificationReconciler{store: store, notifier: notifier, log: log, interval: interval, cap: capN, now: now}
+	return &NotificationReconciler{store: store, notifier: notifier, configSrc: cfg.ConfigSource, log: log, interval: interval, cap: capN, now: now}
 }
 
 // Run reconciles on every interval tick until ctx is cancelled.
@@ -132,6 +161,15 @@ func openIdentity(a registry.OpenAlert) alertIdentity {
 // deterministically.
 func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 	now := r.now()
+
+	cfg := NotificationConfig{Enabled: true}
+	if r.configSrc != nil {
+		loaded, err := r.configSrc.Load(ctx)
+		if err != nil {
+			return err
+		}
+		cfg = loaded
+	}
 
 	snapshot, err := r.store.FleetUnhealthy(ctx)
 	if err != nil {
@@ -179,6 +217,24 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 		}
 	}
 
+	// Disabled (paused): keep alert_state accurate but send nothing. Owed
+	// alerts are opened (no mark-notified) so they fire on re-enable; cleared
+	// alerts are resolved with no recovery notice. Only the send is gated.
+	if !cfg.Enabled {
+		for _, s := range owed {
+			if err := r.store.OpenAlert(ctx, s.Kind, s.DeviceID, s.Subject, now); err != nil {
+				r.log.Error("open alert failed (disabled)", "device_id", s.DeviceID, "err", err)
+			}
+		}
+		for _, a := range recovered {
+			if err := r.store.ResolveAlert(ctx, a.Kind, a.DeviceID, a.Subject, now); err != nil {
+				r.log.Error("resolve alert failed (disabled)", "device_id", a.DeviceID, "err", err)
+			}
+		}
+		r.log.Info("notify.tick", "enabled", false, "owed", len(owed), "resolved", len(recovered))
+		return nil
+	}
+
 	digest := Digest{}
 	for i, s := range owed {
 		if i < r.cap {
@@ -196,7 +252,7 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 		return nil
 	}
 
-	if err := r.notifier.Notify(ctx, digest); err != nil {
+	if err := r.notifier.Notify(ctx, digest, cfg.NotifyConfig); err != nil {
 		// Delivery failed: record opened_at for brand-new alerts so the
 		// detection time is captured, but do NOT mark them notified and do NOT
 		// resolve the recovered ones — the next tick re-detects both and
