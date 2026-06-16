@@ -9,10 +9,11 @@
 #   placeholder. The real key is set out-of-band with
 #   `aws secretsmanager put-secret-value` and rotated the same way (~6-month
 #   cadence, manual today). ignore_changes keeps Terraform from reverting it.
-# - CI read access is the GitHub-OIDC role in edge-install-ci.tf, scoped to
-#   GetSecretValue on this one secret ARN. (The legacy static-principal
-#   bootstrap_ci role for the never-deployed mac-mini-rollout CI was retired
-#   with #93.)
+# - CI read access is the GitHub-OIDC role in terraform-deploy/edge-install-ci.tf
+#   (kept in that stable shared-infra root so it doesn't drag in this root's
+#   per-device `device_id`), scoped to GetSecretValue on this one secret ARN.
+#   (The legacy static-principal bootstrap_ci role for the never-deployed
+#   mac-mini-rollout CI was retired with #93.)
 
 resource "aws_secretsmanager_secret" "bootstrap_key" {
   name        = "uknomi/cp/bootstrap-key"

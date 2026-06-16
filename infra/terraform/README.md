@@ -1,6 +1,6 @@
 # Terraform — IoT Core root (Phase 0 + #01 + #10)
 
-This root codifies the IoT Core resources for the Phase 0 spike and the bootstrap-key plumbing from #10: one shared policy, one thing+cert per device (parameterised by `device_id`), the `uknomi/cp/bootstrap-key` Secrets Manager secret, and the GitHub-OIDC role (`edge-install-ci.tf`) the `uknomi-edge-install` pkg CI assumes to read it (#90).
+This root codifies the IoT Core resources for the Phase 0 spike and the bootstrap-key plumbing from #10: one shared policy, one thing+cert per device (parameterised by `device_id`), and the `uknomi/cp/bootstrap-key` Secrets Manager secret. (The CI role that reads that secret lives in `terraform-deploy/edge-install-ci.tf`, #90 — kept out of this per-device root so it doesn't require a `device_id`.)
 
 State lives on S3 with DynamoDB locking — see [§ State backend bootstrap](#state-backend-bootstrap) for the one-time setup.
 
