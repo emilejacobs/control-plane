@@ -24,8 +24,3 @@ output "bootstrap_key_secret_arn" {
   description = "ARN of the bootstrap-key secret. cp-api reads it via CP_BOOTSTRAP_SECRET_ID (default name uknomi/cp/bootstrap-key)."
   value       = aws_secretsmanager_secret.bootstrap_key.arn
 }
-
-output "bootstrap_ci_role_arn" {
-  description = "ARN of the role the mac-mini-rollout CI assumes to read the bootstrap key at build time."
-  value       = aws_iam_role.bootstrap_ci.arn
-}
