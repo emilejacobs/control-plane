@@ -150,3 +150,25 @@ func TestReconcileFiresNewAlertOnce(t *testing.T) {
 		t.Error("alert not marked notified")
 	}
 }
+
+// A signal that stays unhealthy is notified only once — the second tick finds
+// it already open + notified and produces no further notification.
+func TestReconcileStillUnhealthyIsSilent(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(offline("dev-a", "mac-a"))
+	notifier := &fakeNotifier{}
+	r := newReconciler(store, notifier, now)
+
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	// Same snapshot, next tick: nothing new.
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+
+	if calls := notifier.calls(); len(calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1 (no repeat)", len(calls))
+	}
+}
