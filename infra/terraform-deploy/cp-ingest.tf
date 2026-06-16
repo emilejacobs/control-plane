@@ -142,6 +142,12 @@ module "cp_ingest" {
   # indexing against the captures bucket.
   captures_bucket = aws_s3_bucket.main["captures"].bucket
 
+  # Fleet notifications (#98/#99): the verified SES sender identity. Empty until
+  # the operator verifies an identity + exits the SES sandbox (ADR-039); the
+  # reconciler then sends email, and Teams already works off the webhook URL in
+  # cp_settings.
+  notifications_from_address = var.notifications_from_address
+
   desired_count = 1
 
   tags = var.tags
