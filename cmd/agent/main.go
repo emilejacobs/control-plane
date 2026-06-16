@@ -29,9 +29,15 @@ func main() {
 	// with a flag falls through to runDaemon and the existing behaviour is
 	// preserved. `enroll` is the one-shot device-side enrollment (#82); the
 	// full `install` subcommand (ADR-037) lands with #86.
-	if len(os.Args) >= 2 && os.Args[1] == "enroll" {
-		runEnroll(os.Args[2:])
-		return
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "install":
+			runInstall(os.Args[2:])
+			return
+		case "enroll":
+			runEnroll(os.Args[2:])
+			return
+		}
 	}
 	runDaemon()
 }
