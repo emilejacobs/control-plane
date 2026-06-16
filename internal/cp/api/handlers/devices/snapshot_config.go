@@ -6,8 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/envelope"
+	snapshotconfigproto "github.com/emilejacobs/control-plane/internal/protocol/snapshotconfig"
 )
 
 // SnapshotConfigStore is the persistence slice the snapshot-config PUT needs.
@@ -20,15 +24,19 @@ type SnapshotConfigStore interface {
 
 // === PUT /devices/{id}/snapshot-config ===
 
-// SnapshotConfigHandler sets a device's scheduled-snapshot cadence (#9). It
-// persists the cadence on the device row; the agent learns it via config.update
-// (wired in a later slice with the scheduler), so this slice is CP-side only.
+// SnapshotConfigHandler sets a device's scheduled-snapshot cadence (#9):
+// persists it on the device row and pushes a snapshot.config cmd so the agent's
+// scheduler picks it up. A nil publisher persists only (no push) — keeps tests
+// without the downward channel simple.
 type SnapshotConfigHandler struct {
-	store SnapshotConfigStore
+	store     SnapshotConfigStore
+	publisher CmdPublisher
+	newCmdID  func() string
+	now       func() time.Time
 }
 
-func NewSnapshotConfig(store SnapshotConfigStore) *SnapshotConfigHandler {
-	return &SnapshotConfigHandler{store: store}
+func NewSnapshotConfig(store SnapshotConfigStore, publisher CmdPublisher) *SnapshotConfigHandler {
+	return &SnapshotConfigHandler{store: store, publisher: publisher, newCmdID: newRandomID, now: time.Now}
 }
 
 func (h *SnapshotConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +75,29 @@ func (h *SnapshotConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Push the new cadence to the agent so the scheduler picks it up. Best-
+	// effort relative to the persisted row: an offline device gets it on the
+	// next set (or a future reconcile). A publish error is surfaced so the
+	// operator knows the agent didn't receive it.
+	if h.publisher != nil {
+		correlationID := cplog.CorrelationIDFromContext(r.Context())
+		if correlationID == "" {
+			correlationID = h.newCmdID()
+		}
+		args, _ := json.Marshal(snapshotconfigproto.Args{Cadence: body.Cadence})
+		cmdBytes, _ := json.Marshal(envelope.Command{
+			Type:          "snapshot.config",
+			CorrelationID: correlationID,
+			CommandID:     h.newCmdID(),
+			Args:          args,
+			IssuedAt:      h.now().UTC(),
+		})
+		if err := h.publisher.Publish(r.Context(), "devices/"+id+"/cmd", cmdBytes); err != nil {
+			http.Error(w, "cadence saved but downstream publish failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

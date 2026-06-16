@@ -2,6 +2,7 @@ package devices_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 )
 
 type snapshotConfigStore struct {
@@ -37,7 +39,8 @@ func (s *snapshotConfigStore) SetSnapshotCadence(_ context.Context, deviceID, ca
 
 func TestSnapshotConfigPutHappyPath(t *testing.T) {
 	store := &snapshotConfigStore{known: map[string]bool{"dev-abc": true}}
-	h := devices.NewSnapshotConfig(store)
+	pub := &cmdPublisher{}
+	h := devices.NewSnapshotConfig(store, pub)
 
 	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/snapshot-config",
 		strings.NewReader(`{"cadence":"daily"}`))
@@ -51,11 +54,29 @@ func TestSnapshotConfigPutHappyPath(t *testing.T) {
 	if store.cadence["dev-abc"] != "daily" {
 		t.Errorf("persisted cadence = %q, want daily", store.cadence["dev-abc"])
 	}
+	// Pushed snapshot.config to the agent cmd topic carrying the cadence.
+	if len(pub.calls) != 1 || pub.calls[0].topic != "devices/dev-abc/cmd" {
+		t.Fatalf("publish calls = %+v", pub.calls)
+	}
+	var cmd envelope.Command
+	if err := json.Unmarshal(pub.calls[0].payload, &cmd); err != nil {
+		t.Fatalf("cmd: %v", err)
+	}
+	if cmd.Type != "snapshot.config" {
+		t.Errorf("cmd type = %q, want snapshot.config", cmd.Type)
+	}
+	var args struct {
+		Cadence string `json:"cadence"`
+	}
+	_ = json.Unmarshal(cmd.Args, &args)
+	if args.Cadence != "daily" {
+		t.Errorf("cmd cadence = %q, want daily", args.Cadence)
+	}
 }
 
 func TestSnapshotConfigPutRejectsBadCadence(t *testing.T) {
 	store := &snapshotConfigStore{known: map[string]bool{"dev-abc": true}}
-	h := devices.NewSnapshotConfig(store)
+	h := devices.NewSnapshotConfig(store, &cmdPublisher{})
 
 	req := httptest.NewRequest(http.MethodPut, "/devices/dev-abc/snapshot-config",
 		strings.NewReader(`{"cadence":"hourly"}`))
@@ -72,7 +93,7 @@ func TestSnapshotConfigPutRejectsBadCadence(t *testing.T) {
 }
 
 func TestSnapshotConfigPutUnknownDevice(t *testing.T) {
-	h := devices.NewSnapshotConfig(&snapshotConfigStore{known: map[string]bool{}})
+	h := devices.NewSnapshotConfig(&snapshotConfigStore{known: map[string]bool{}}, &cmdPublisher{})
 	req := httptest.NewRequest(http.MethodPut, "/devices/missing/snapshot-config",
 		strings.NewReader(`{"cadence":"weekly"}`))
 	req.SetPathValue("id", "missing")
