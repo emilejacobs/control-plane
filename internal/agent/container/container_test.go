@@ -2,6 +2,7 @@ package container_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -14,7 +15,8 @@ import (
 type fakeRunner struct {
 	calls  [][]string
 	output map[string]string
-	err    error
+	err    error                      // blanket error for every call
+	errFor func(call []string) error  // per-command error (e.g. image absent)
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -22,6 +24,11 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	f.calls = append(f.calls, call)
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.errFor != nil {
+		if e := f.errFor(call); e != nil {
+			return nil, e
+		}
 	}
 	return []byte(f.output[strings.Join(call, " ")]), nil
 }
@@ -99,5 +106,58 @@ func TestLogs(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "plate ABC123") {
 		t.Errorf("logs output: got %q", out)
+	}
+}
+
+// EnsureImage pulls the image only when it isn't already present.
+func TestEnsureImagePullsWhenAbsent(t *testing.T) {
+	fr := &fakeRunner{errFor: func(call []string) error {
+		if strings.Contains(strings.Join(call, " "), "image inspect") {
+			return errors.New("no such image")
+		}
+		return nil
+	}}
+	m := container.New(fr, sampleConfig())
+	if err := m.EnsureImage(context.Background()); err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	if !fr.ran("docker pull platerecognizer/alpr-stream:arm") {
+		t.Errorf("image not pulled; calls=%v", fr.calls)
+	}
+}
+
+func TestEnsureImageSkipsWhenPresent(t *testing.T) {
+	fr := &fakeRunner{} // image inspect succeeds → present
+	m := container.New(fr, sampleConfig())
+	if err := m.EnsureImage(context.Background()); err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	if fr.ran("docker pull") {
+		t.Errorf("should not pull when image present; calls=%v", fr.calls)
+	}
+}
+
+// StartALPR ensures the image is present before creating the container.
+func TestStartALPRPullsImageFirst(t *testing.T) {
+	pulled := false
+	fr := &fakeRunner{errFor: func(call []string) error {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "image inspect") && !pulled {
+			return errors.New("no such image")
+		}
+		if strings.Contains(joined, "docker pull") {
+			pulled = true
+		}
+		return nil
+	}}
+	m := container.New(fr, sampleConfig())
+	if err := m.StartALPR(context.Background(), "LIC", "TOK"); err != nil {
+		t.Fatalf("StartALPR: %v", err)
+	}
+	if !fr.ran("docker pull") {
+		t.Error("StartALPR should pull a missing image before running")
+	}
+	if !fr.ran("docker run") {
+		t.Error("container not created")
 	}
 }

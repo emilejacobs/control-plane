@@ -42,6 +42,14 @@ func New(run UserRunner, cfg Config) *Manager {
 // The license is consumed only here — at Commission — per ADR-036 §2. Any prior
 // container is removed first so the call is repeatable.
 func (m *Manager) StartALPR(ctx context.Context, licenseKey, token string) error {
+	// Ensure the image is present first. It is pulled lazily here, at first
+	// Commission, rather than during install: Colima needs the user's GUI
+	// session (auto-login), which may not exist yet when the root pkg
+	// postinstall runs (ADR-038).
+	if err := m.EnsureImage(ctx); err != nil {
+		return err
+	}
+
 	// Best-effort removal of a stale container; ignore the error (none to remove).
 	_, _ = m.run.Run(ctx, "docker", "rm", "-f", m.cfg.ContainerName)
 
@@ -77,4 +85,17 @@ func (m *Manager) Logs(ctx context.Context, lines int) ([]byte, error) {
 		return nil, fmt.Errorf("docker logs %s: %w", m.cfg.ContainerName, err)
 	}
 	return out, nil
+}
+
+// EnsureImage pulls the ALPR image when it isn't already present locally.
+// Idempotent: `docker image inspect` succeeds when the image exists, so a
+// re-run is a no-op.
+func (m *Manager) EnsureImage(ctx context.Context) error {
+	if _, err := m.run.Run(ctx, "docker", "image", "inspect", m.cfg.Image); err == nil {
+		return nil
+	}
+	if _, err := m.run.Run(ctx, "docker", "pull", m.cfg.Image); err != nil {
+		return fmt.Errorf("docker pull %s: %w", m.cfg.Image, err)
+	}
+	return nil
 }
