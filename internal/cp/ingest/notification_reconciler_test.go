@@ -172,3 +172,38 @@ func TestReconcileStillUnhealthyIsSilent(t *testing.T) {
 		t.Fatalf("notifier calls = %d, want 1 (no repeat)", len(calls))
 	}
 }
+
+// When a notified alert clears (gone from the snapshot), the next tick queues a
+// recovery in the digest's Resolved section and resolves the alert_state row.
+func TestReconcileResolvesClearedAlert(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(offline("dev-a", "mac-a"))
+	notifier := &fakeNotifier{}
+	r := newReconciler(store, notifier, now)
+
+	// Tick 1: open + notify the offline alert.
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	// Device recovers: snapshot is now empty.
+	store.setSnapshot()
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+
+	calls := notifier.calls()
+	if len(calls) != 2 {
+		t.Fatalf("notifier calls = %d, want 2 (open + recover)", len(calls))
+	}
+	recover := calls[1]
+	if len(recover.Resolved) != 1 || recover.Resolved[0].DeviceID != "dev-a" {
+		t.Fatalf("recovery digest Resolved = %+v", recover.Resolved)
+	}
+	if len(recover.Opened) != 0 {
+		t.Errorf("recovery digest should have no Opened, got %+v", recover.Opened)
+	}
+	if _, ok := store.get(alertKey{registry.UnhealthyOffline, "dev-a", ""}); ok {
+		t.Error("alert should be resolved (no longer open)")
+	}
+}

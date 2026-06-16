@@ -146,6 +146,10 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 	for _, a := range openRows {
 		openByID[openIdentity(a)] = a
 	}
+	snapshotByID := make(map[alertIdentity]struct{}, len(snapshot))
+	for _, s := range snapshot {
+		snapshotByID[signalIdentity(s)] = struct{}{}
+	}
 
 	// "Owed" = a snapshot signal with no open row yet, or one whose open row
 	// has never been notified (a prior send failed). Both need a notification.
@@ -157,6 +161,24 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 		}
 	}
 
+	// Open rows no longer in the snapshot have cleared. A row that was actually
+	// notified gets a recovery notice; one that was never notified (its open
+	// notice never sent before it cleared) is resolved silently — we don't
+	// announce a recovery for an alert nobody heard about.
+	var recovered []registry.OpenAlert
+	for _, a := range openRows {
+		if _, inSnap := snapshotByID[openIdentity(a)]; inSnap {
+			continue
+		}
+		if a.LastNotifiedAt != nil {
+			recovered = append(recovered, a)
+		} else {
+			if err := r.store.ResolveAlert(ctx, a.Kind, a.DeviceID, a.Subject, now); err != nil {
+				r.log.Error("silent resolve failed", "device_id", a.DeviceID, "err", err)
+			}
+		}
+	}
+
 	digest := Digest{}
 	for i, s := range owed {
 		if i < r.cap {
@@ -165,6 +187,9 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 			digest.Truncated++
 		}
 	}
+	for _, a := range recovered {
+		digest.Resolved = append(digest.Resolved, eventFromOpen(a))
+	}
 
 	if digest.Empty() {
 		r.log.Info("notify.tick", "opened", 0, "resolved", 0)
@@ -172,13 +197,15 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 	}
 
 	if err := r.notifier.Notify(ctx, digest); err != nil {
-		// Delivery failed: still record opened_at for brand-new alerts so the
-		// detection time is captured, but do NOT mark them notified — the next
-		// tick re-detects them as owed and retries.
+		// Delivery failed: record opened_at for brand-new alerts so the
+		// detection time is captured, but do NOT mark them notified and do NOT
+		// resolve the recovered ones — the next tick re-detects both and
+		// retries (at-least-once).
 		for _, s := range owed {
 			_ = r.store.OpenAlert(ctx, s.Kind, s.DeviceID, s.Subject, now)
 		}
-		r.log.Error("notify.tick delivery failed", "owed", len(owed), "err", err)
+		r.log.Error("notify.tick delivery failed",
+			"owed", len(owed), "recovered", len(recovered), "err", err)
 		return nil
 	}
 
@@ -191,7 +218,12 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 			r.log.Error("mark notified failed", "device_id", s.DeviceID, "err", err)
 		}
 	}
-	r.log.Info("notify.tick", "opened", len(owed), "resolved", 0, "truncated", digest.Truncated)
+	for _, a := range recovered {
+		if err := r.store.ResolveAlert(ctx, a.Kind, a.DeviceID, a.Subject, now); err != nil {
+			r.log.Error("resolve alert failed", "device_id", a.DeviceID, "err", err)
+		}
+	}
+	r.log.Info("notify.tick", "opened", len(owed), "resolved", len(recovered), "truncated", digest.Truncated)
 	return nil
 }
 
@@ -202,5 +234,16 @@ func eventFromSignal(s registry.UnhealthySignal) AlertEvent {
 		Subject:  s.Subject,
 		Hostname: s.Hostname,
 		SiteName: s.SiteName,
+	}
+}
+
+// eventFromOpen renders a recovery event from a resolved alert_state row. The
+// open row carries no hostname (it was not joined), so recovery events name the
+// device by id + subject — enough to identify what cleared.
+func eventFromOpen(a registry.OpenAlert) AlertEvent {
+	return AlertEvent{
+		Kind:     a.Kind,
+		DeviceID: a.DeviceID,
+		Subject:  a.Subject,
 	}
 }
