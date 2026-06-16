@@ -37,6 +37,13 @@ type Config struct {
 	// module retain the pre-Phase-2-Edge-UI shape.
 	CamerasPath string `json:"cameras_path,omitempty"`
 
+	// SnapshotStatePath is the on-disk location for the agent's snapshot
+	// state file (#9): persisted scheduled-snapshot cadence + per-camera
+	// next-fire times. Empty / absent disables the snapshot.config handler
+	// (and the scheduler) — devices not yet provisioned for scheduled
+	// snapshots retain the prior shape.
+	SnapshotStatePath string `json:"snapshot_state_path,omitempty"`
+
 	// ProbeInterval is parsed with time.ParseDuration (e.g. "5m"). It
 	// sets the cadence of the Phase 2 fleet-health-probes reporter
 	// (issue #19). Empty defaults to 5 minutes.
