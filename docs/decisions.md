@@ -46,3 +46,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 036 | [CP-driven device lifecycle — Provision / Assign / Commission](./adr/0036-cp-driven-device-lifecycle.md) | Accepted (2026-06-15) — refines ADR-004; retires the two-phase install model |
 | 037 | [Install folded into the agent binary, delivered as a Mosyle-pushed signed pkg](./adr/0037-install-folded-into-agent-signed-pkg.md) | Accepted (2026-06-15) — extends ADR-017; refines ADR-004 |
 | 038 | [Colima replaces Docker Desktop; per-user VM, root agent drives via launchctl asuser](./adr/0038-colima-replaces-docker.md) | Accepted (2026-06-15) |
+| 039 | [Outbound fleet notifications — cp-ingest reconciler, alert_state dedupe, SES + Teams](./adr/0039-outbound-fleet-notifications.md) | Accepted (2026-06-16) |

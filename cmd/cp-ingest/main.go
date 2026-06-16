@@ -38,6 +38,13 @@
 //	                           upload.request (presign a PUT + publish
 //	                           upload.url) and upload.complete (index the row).
 //	                           Unset = those message types are ignored.
+//	NOTIFICATIONS_FROM_ADDRESS  Verified SES sender identity for fleet
+//	                           notification emails (#98/#99). When set, the
+//	                           notification reconciler can send email via SES;
+//	                           unset = email channel skipped (Teams still works
+//	                           off the webhook URL in cp_settings). The
+//	                           reconciler always runs and self-gates on the
+//	                           cp_settings enable switch + configured channels.
 //
 // SERVICE_STATUS_* are optional so a deploy that lands the code before
 // Terraform provisions the queue does not crash. When both are set, the
@@ -60,6 +67,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -70,6 +78,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/iotpublisher"
+	"github.com/emilejacobs/control-plane/internal/cp/notify"
 	"github.com/emilejacobs/control-plane/internal/cp/presence"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
@@ -219,6 +228,35 @@ func run(logger *slog.Logger) error {
 	// objects on the same schedule). Default 6h cadence.
 	snapshotSweeper := ingest.NewSnapshotSweeper(reg, ingest.SnapshotSweeperConfig{Logger: logger})
 
+	// Fleet notifications (#98/#99): a reconciler that diffs the fleet-unhealthy
+	// snapshot against alert_state each tick and sends transition-only digests
+	// over the channels configured in cp_settings (enable switch, recipients,
+	// webhook URL — read each tick, so it self-gates with no deploy flag). The
+	// SES email channel is wired only when NOTIFICATIONS_FROM_ADDRESS (the
+	// verified SES sender identity) is set; until then email is skipped and only
+	// the Teams channel (webhook URL from settings) can deliver. Always started:
+	// with notifications disabled (the default) it just keeps alert_state
+	// accurate and sends nothing.
+	var emailSender notify.EmailSender
+	if from := os.Getenv("NOTIFICATIONS_FROM_ADDRESS"); from != "" {
+		var sesOpts []func(*sesv2.Options)
+		if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
+			sesOpts = append(sesOpts, func(o *sesv2.Options) { o.BaseEndpoint = aws.String(endpoint) })
+		}
+		emailSender = notify.NewSESEmailSender(sesv2.NewFromConfig(awsCfg, sesOpts...), from)
+		logger.Info("notification email channel wired", "from", from)
+	} else {
+		logger.Info("notification email channel disabled — NOTIFICATIONS_FROM_ADDRESS unset")
+	}
+	notificationReconciler := ingest.NewNotificationReconciler(
+		reg,
+		notify.NewFanOut(emailSender, notify.NewHTTPWebhookPoster(nil)),
+		ingest.NotificationReconcilerConfig{
+			ConfigSource: notify.NewSettingsConfigSource(reg),
+			Logger:       logger,
+		},
+	)
+
 	// Optional service-status consumer (Phase 2). Skipped silently if
 	// the env vars aren't set yet — lets the code deploy before
 	// Terraform provisions the queue.
@@ -305,7 +343,7 @@ func run(logger *slog.Logger) error {
 	// then wait for a clean drain. The consumers report drain errors; the
 	// sweeper does not.
 	var wg sync.WaitGroup
-	workers := 6 // heartbeat + lifecycle + presence sweeper + log-tail sweeper + device-services sweeper + snapshot sweeper
+	workers := 7 // heartbeat + lifecycle + presence sweeper + log-tail sweeper + device-services sweeper + snapshot sweeper + notification reconciler
 	if serviceStatusConsumer != nil {
 		workers++
 	}
@@ -323,6 +361,7 @@ func run(logger *slog.Logger) error {
 	go func() { defer wg.Done(); logTailSweeper.Run(ctx) }()
 	go func() { defer wg.Done(); deviceServicesSweeper.Run(ctx) }()
 	go func() { defer wg.Done(); snapshotSweeper.Run(ctx) }()
+	go func() { defer wg.Done(); notificationReconciler.Run(ctx) }()
 	if serviceStatusConsumer != nil {
 		go func() { defer wg.Done(); errs <- serviceStatusConsumer.Run(ctx) }()
 	}

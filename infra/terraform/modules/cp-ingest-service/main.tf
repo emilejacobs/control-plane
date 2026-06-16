@@ -70,6 +70,11 @@ resource "aws_ecs_task_definition" "this" {
         # (the cmd-result consumer ignores those types); set to the captures
         # bucket to enable presign-PUT + row indexing.
         { name = "CAPTURES_BUCKET", value = var.captures_bucket },
+        # Fleet notifications (#98/#99). Empty skips the SES email channel until
+        # the sender identity is verified; Teams still delivers off the webhook
+        # URL in cp_settings. The reconciler runs regardless and self-gates on
+        # the cp_settings enable switch.
+        { name = "NOTIFICATIONS_FROM_ADDRESS", value = var.notifications_from_address },
       ]
 
       # The DB password is injected from the RDS-managed master secret's
