@@ -117,9 +117,10 @@ func TestCommissionFanOut(t *testing.T) {
 		t.Errorf("ALPR: got %+v", args.ALPR)
 	}
 
-	// Idempotent replay: same key → no second publish.
-	if code := post(); code != http.StatusAccepted {
-		t.Fatalf("replay status: got %d want 202", code)
+	// Idempotent replay: same key → no second publish. Per the idempotency
+	// contract a replay returns 200 (the cached response), not the original 202.
+	if code := post(); code != http.StatusOK {
+		t.Fatalf("replay status: got %d want 200", code)
 	}
 	if pub.typeCount["commission"] != 1 {
 		t.Errorf("commission published %d times across replay, want 1 (idempotent)", pub.typeCount["commission"])
