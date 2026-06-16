@@ -59,8 +59,9 @@ operator has configured in **Settings → Notifications**:
 
 - **Email**, sent directly via **Amazon SES** to the recipient list typed into Settings. Adding or
   removing a recipient is just editing the list — no subscription/confirmation flow.
-- **MS Teams**, by POSTing to the **Workflows incoming-webhook** URL held in Settings (seeded with
-  the already-provisioned default, replaceable by staff).
+- **MS Teams**, by POSTing to the **Workflows incoming-webhook** URL held in Settings. Staff paste the
+  already-provisioned URL once via the Settings card (it is a signed bearer secret, so it is not
+  committed to git — see Implementation Decisions).
 
 Each channel can be independently empty (no recipients / no webhook) — that channel is simply skipped.
 The reconciler reads this config from the CP-settings store **each tick**, so edits take effect without
@@ -102,8 +103,9 @@ Reuse the #84 CP-singleton settings pattern (`registry.SetCPSetting`/`GetCPSetti
 settings:
 - **`notifications.teams_webhook_url`** — the Teams Workflows webhook. A **secret**, handled exactly
   like the PR token: `PUT` sets it, `GET` reports only whether it is set (plus a non-sensitive masked
-  preview, e.g. host only); never returned in full, never logged, never in an audit payload. **Seeded
-  by a DB migration** with the already-provisioned default URL so Teams works on first deploy.
+  preview, host only); never returned in full, never logged, never in an audit payload. **Not seeded
+  in git** — the URL is a signed bearer credential, so committing it to a migration would leak it into
+  history. Staff paste the provisioned default once via the Settings card after deploy.
 - **`notifications.email_recipients`** — the recipient list (a small JSON array / newline list of
   addresses). **Not secret**: `GET` returns the actual list so the UI can render and edit it; `PUT`
   replaces it. Validated as well-formed addresses on write.
@@ -236,8 +238,8 @@ first-class part of the feature). Wiring in `main.go` and the Terraform are not 
   signal is "newly opened" (the table starts empty) and will fire in one digest. This is acceptable
   (it's an accurate snapshot of current state) but worth calling out so it isn't mistaken for a storm
   bug. The per-tick cap protects the worst case; staff can also leave `enabled=false` until ready.
-- **Default Teams webhook** is seeded by migration so Teams works immediately; staff can replace it in
-  Settings. It is a signed bearer URL — hence the secret/write-only handling.
+- **Default Teams webhook** is a signed bearer URL — hence the secret/write-only handling — so it is
+  not committed to git. Staff paste the provisioned URL once via the Settings card after deploy.
 - **SES sandbox:** until the account is moved to production, SES only delivers to verified addresses;
   this is the one operator prereq and should be done before relying on email.
 - **At-least-once, not exactly-once:** a delivery that succeeds at the channel but fails before the row
@@ -248,7 +250,8 @@ first-class part of the feature). Wiring in `main.go` and the Terraform are not 
   notifier service would duplicate all of that for v1's narrow scope.
 - **ADR-039** should be written when these slices land, formalizing the outbound-egress surface.
 - **Slicing:** natural tracer-bullet order is (1) `alert_state` table + registry methods + system
-  fleet-unhealthy read; (2) notification settings (store keys + seed migration + handlers + Settings
-  card); (3) reconcile diff with a fake notifier — proves transition logic end-to-end; (4) SES notifier
+  fleet-unhealthy read; (2) notification settings (store keys + handlers + Settings card; webhook
+  entered by staff, not seeded); (3) reconcile diff with a fake notifier — proves transition logic
+  end-to-end; (4) SES notifier
   + Teams notifier + fan-out, reading config from settings; (5) `main.go` wiring + Terraform + the ADR.
   Run `to-issues` on this PRD to cut them.
