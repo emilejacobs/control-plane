@@ -3,6 +3,8 @@ package install
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 // DefaultHomebrewInstall is the non-interactive Homebrew bootstrap command. Run
@@ -93,4 +95,55 @@ func (s *BrewFormulaeStep) Apply(ctx context.Context) error {
 // non-zero when it isn't.
 func (s *BrewFormulaeStep) present(ctx context.Context, formula string) bool {
 	return s.Sys.Run(ctx, "sudo", "-u", s.User, s.BrewPath, "list", "--formula", formula) == nil
+}
+
+// EnsureFileStep copies a packaged file to a destination when absent — used for
+// the edge-ui binary (the agent + supervisor have their own InstallBinariesStep).
+// Idempotent by inspection (destination exists).
+type EnsureFileStep struct {
+	Sys      System
+	StepName string
+	Src      string
+	Dst      string
+	Mode     os.FileMode
+}
+
+func (s *EnsureFileStep) Name() string { return s.StepName }
+
+func (s *EnsureFileStep) IsDone(_ context.Context) (bool, error) {
+	return s.Sys.Exists(s.Dst)
+}
+
+func (s *EnsureFileStep) Apply(_ context.Context) error {
+	if err := s.Sys.MkdirAll(filepath.Dir(s.Dst), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(s.Dst), err)
+	}
+	if err := s.Sys.CopyFile(s.Src, s.Dst, s.Mode); err != nil {
+		return fmt.Errorf("copy %s: %w", s.StepName, err)
+	}
+	return nil
+}
+
+// WhisperModelStep downloads the Whisper model when absent. Bundled on every
+// device (disk only) so #10 audio QA has it; idempotent by inspection.
+type WhisperModelStep struct {
+	Sys System
+	URL string
+	Dst string // e.g. /usr/local/etc/uknomi/whisper-models/ggml-medium.en-q5_0.bin
+}
+
+func (s *WhisperModelStep) Name() string { return "whisper-model" }
+
+func (s *WhisperModelStep) IsDone(_ context.Context) (bool, error) {
+	return s.Sys.Exists(s.Dst)
+}
+
+func (s *WhisperModelStep) Apply(ctx context.Context) error {
+	if err := s.Sys.MkdirAll(filepath.Dir(s.Dst), 0o755); err != nil {
+		return fmt.Errorf("mkdir whisper model dir: %w", err)
+	}
+	if err := s.Sys.Run(ctx, "curl", "-fsSL", "-o", s.Dst, s.URL); err != nil {
+		return fmt.Errorf("download whisper model: %w", err)
+	}
+	return nil
 }

@@ -71,3 +71,55 @@ func TestBrewFormulaeStep(t *testing.T) {
 		t.Errorf("installs run: got %d want 1 (only the missing nmap)", fs2.installCount)
 	}
 }
+
+// EnsureFileStep copies a packaged file when the destination is absent, and is
+// a no-op once present.
+func TestEnsureFileStep(t *testing.T) {
+	fs := newFakeSystem()
+	step := &install.EnsureFileStep{
+		Sys:      fs,
+		StepName: "edge-ui-binary",
+		Src:      "/pkg/uknomi-edge-ui",
+		Dst:      "/usr/local/bin/uknomi-edge-ui",
+		Mode:     0o755,
+	}
+	if step.Name() != "edge-ui-binary" {
+		t.Errorf("Name: got %q", step.Name())
+	}
+	if done, _ := step.IsDone(context.Background()); done {
+		t.Fatal("IsDone should be false before copy")
+	}
+	if err := step.Apply(context.Background()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if fs.copies["/usr/local/bin/uknomi-edge-ui"] != "/pkg/uknomi-edge-ui" {
+		t.Errorf("edge-ui not copied: %v", fs.copies)
+	}
+	if done, _ := step.IsDone(context.Background()); !done {
+		t.Error("IsDone should be true after copy")
+	}
+}
+
+// WhisperModelStep downloads the model when absent (curl -o), and skips once
+// the file is present.
+func TestWhisperModelStep(t *testing.T) {
+	fs := newFakeSystem()
+	const dst = "/usr/local/etc/uknomi/whisper-models/ggml-medium.en-q5_0.bin"
+	step := &install.WhisperModelStep{
+		Sys: fs,
+		URL: "https://example.com/ggml-medium.en-q5_0.bin",
+		Dst: dst,
+	}
+	if done, _ := step.IsDone(context.Background()); done {
+		t.Fatal("IsDone should be false before download")
+	}
+	if err := step.Apply(context.Background()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !fs.ran("curl") || !fs.ran(dst) || !fs.ran("https://example.com/ggml-medium.en-q5_0.bin") {
+		t.Errorf("curl download not invoked correctly; runs=%v", fs.runs)
+	}
+	if done, _ := step.IsDone(context.Background()); !done {
+		t.Error("IsDone should be true after download")
+	}
+}
