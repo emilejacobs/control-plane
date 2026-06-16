@@ -135,6 +135,7 @@ jobs:
               - 'internal/envelope/**'
               - 'cmd/cp-ingest/**'
               - 'internal/cp/ingest/**'
+              - 'internal/cp/notify/**'
               - 'internal/cp/presence/**'
               - 'internal/cp/sqsconsumer/**'
             audit-mirror:
