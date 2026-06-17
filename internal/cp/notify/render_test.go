@@ -9,6 +9,67 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 )
 
+// A camera_offline alert renders the CAMERA OFFLINE label, the device-name CP
+// link, and the camera LABEL (not the raw camera_id) as the subject, with the
+// site — in both the Teams card and the email body.
+func TestRenderCameraOfflineLine(t *testing.T) {
+	site := "Acme Downtown"
+	d := ingest.Digest{
+		Opened: []ingest.AlertEvent{{
+			Kind:     registry.UnhealthyCameraOffline,
+			DeviceID: "dev-a",
+			Subject:  "cam1", // stable identity (camera_id)
+			Label:    "Drive-thru",
+			Hostname: "mac-a",
+			SiteName: &site,
+		}},
+	}
+
+	// Teams adaptive card.
+	var env struct {
+		Attachments []struct {
+			Content struct {
+				Body []struct {
+					Text string `json:"text"`
+				} `json:"body"`
+			} `json:"content"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(renderTeams(d, "https://cp.test"), &env); err != nil {
+		t.Fatalf("teams payload not valid JSON: %v", err)
+	}
+	var card strings.Builder
+	for _, b := range env.Attachments[0].Content.Body {
+		card.WriteString(b.Text + "\n")
+	}
+	teams := card.String()
+	if !strings.Contains(teams, "CAMERA OFFLINE") {
+		t.Errorf("teams missing CAMERA OFFLINE label:\n%s", teams)
+	}
+	if !strings.Contains(teams, "[mac-a](https://cp.test/devices/dev-a)") {
+		t.Errorf("teams missing device-name CP link:\n%s", teams)
+	}
+	if !strings.Contains(teams, "Drive-thru") {
+		t.Errorf("teams should show the camera label:\n%s", teams)
+	}
+	if strings.Contains(teams, "· cam1") {
+		t.Errorf("teams should show the label, not the raw camera_id:\n%s", teams)
+	}
+	if !strings.Contains(teams, "(Acme Downtown)") {
+		t.Errorf("teams missing site:\n%s", teams)
+	}
+
+	// Email body.
+	_, body := renderEmail(d, "https://cp.test")
+	if !strings.Contains(body, "CAMERA OFFLINE") || !strings.Contains(body, "Drive-thru") ||
+		!strings.Contains(body, "https://cp.test/devices/dev-a") || !strings.Contains(body, "(Acme Downtown)") {
+		t.Errorf("email body missing camera-offline content:\n%s", body)
+	}
+	if strings.Contains(body, "· cam1") {
+		t.Errorf("email should show the label, not the raw camera_id:\n%s", body)
+	}
+}
+
 // renderTeams must emit the MS Teams Workflows adaptive-card envelope —
 // {"type":"message","attachments":[{contentType: adaptive, content: card}]} —
 // not the legacy {"text":...} connector shape. The Workflows trigger 202s any
