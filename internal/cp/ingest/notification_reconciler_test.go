@@ -168,6 +168,47 @@ func offline(deviceID, hostname string) registry.UnhealthySignal {
 	return registry.UnhealthySignal{Kind: registry.UnhealthyOffline, DeviceID: deviceID, Hostname: hostname}
 }
 
+func cameraOffline(deviceID, hostname, cameraID, label string) registry.UnhealthySignal {
+	return registry.UnhealthySignal{
+		Kind:     registry.UnhealthyCameraOffline,
+		DeviceID: deviceID,
+		Subject:  cameraID,
+		Label:    label,
+		Hostname: hostname,
+	}
+}
+
+// A camera_offline signal flows through the reconciler unchanged: it fires once,
+// keyed on (camera_offline, device_id, camera_id), and the digest carries the
+// camera label for rendering.
+func TestReconcileFiresCameraOfflineOnce(t *testing.T) {
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	store := newFakeAlertStore()
+	store.setSnapshot(cameraOffline("dev-a", "mac-a", "cam1", "Drive-thru"))
+	notifier := &fakeNotifier{}
+	r := newReconciler(store, notifier, now)
+
+	if err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+
+	calls := notifier.calls()
+	if len(calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(calls))
+	}
+	if len(calls[0].Opened) != 1 {
+		t.Fatalf("digest Opened = %+v", calls[0].Opened)
+	}
+	ev := calls[0].Opened[0]
+	if ev.Subject != "cam1" || ev.Label != "Drive-thru" {
+		t.Errorf("digest event subject/label: got %q/%q want cam1/Drive-thru", ev.Subject, ev.Label)
+	}
+	// Identity is keyed on the camera_id subject, not the label.
+	if _, ok := store.get(alertKey{registry.UnhealthyCameraOffline, "dev-a", "cam1"}); !ok {
+		t.Fatal("camera alert not opened under (camera_offline, dev-a, cam1)")
+	}
+}
+
 // A brand-new unhealthy signal fires exactly once: the notifier sees it in the
 // digest's Opened section and the store records it opened + notified.
 func TestReconcileFiresNewAlertOnce(t *testing.T) {

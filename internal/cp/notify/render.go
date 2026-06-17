@@ -105,17 +105,28 @@ func describePlain(e ingest.AlertEvent, baseURL string) string {
 }
 
 // joinAlert assembles "kind · <device> · subject (site)" given an already-
-// formatted device token (plain name or Markdown link).
+// formatted device token (plain name or Markdown link). The subject slot
+// prefers the operator-friendly Label (the camera label for camera_offline)
+// over the raw Subject (the camera_id) when one is set.
 func joinAlert(e ingest.AlertEvent, device string) string {
 	parts := []string{kindLabel(e.Kind), device}
-	if e.Subject != "" {
-		parts = append(parts, e.Subject)
+	if subj := subjectLabel(e); subj != "" {
+		parts = append(parts, subj)
 	}
 	line := strings.Join(parts, " · ")
 	if e.SiteName != nil && *e.SiteName != "" {
 		line += " (" + *e.SiteName + ")"
 	}
 	return line
+}
+
+// subjectLabel is the human-facing subject token: the Label when set (camera
+// label for camera_offline), otherwise the raw Subject.
+func subjectLabel(e ingest.AlertEvent) string {
+	if e.Label != "" {
+		return e.Label
+	}
+	return e.Subject
 }
 
 // deviceLabel is the device's hostname, falling back to its id.
@@ -142,6 +153,8 @@ func kindLabel(k registry.UnhealthyKind) string {
 		return "SERVICE STOPPED"
 	case registry.UnhealthyProbeRed:
 		return "PROBE RED"
+	case registry.UnhealthyCameraOffline:
+		return "CAMERA OFFLINE"
 	default:
 		return string(k)
 	}
