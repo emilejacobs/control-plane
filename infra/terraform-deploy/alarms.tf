@@ -212,6 +212,26 @@ resource "aws_cloudwatch_metric_alarm" "health_probes_dlq" {
   tags = { Name = "uknomi-cp-health-probes-dlq" }
 }
 
+resource "aws_cloudwatch_metric_alarm" "camera_status_dlq" {
+  alarm_name          = "uknomi-cp-camera-status-dlq"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  alarm_description   = "Camera-status ingest DLQ is non-empty (#113 camera observability pipeline)."
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+
+  dimensions = {
+    QueueName = "uknomi-cp-camera-status-dlq"
+  }
+
+  tags = { Name = "uknomi-cp-camera-status-dlq" }
+}
+
 # ── Log-derived alarms (Issue 21) ───────────────────────────────────────────
 # Each pairs an aws_cloudwatch_log_metric_filter (JSON-pattern over the
 # service's structured slog stream) with an aws_cloudwatch_metric_alarm.

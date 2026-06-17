@@ -67,6 +67,7 @@ const (
 	defaultTelemetryInterval     = 30 * time.Second
 	defaultServiceStatusInterval = 5 * time.Minute
 	defaultProbeInterval         = 5 * time.Minute
+	defaultCameraProbeInterval   = 5 * time.Minute
 	// The MQTT-session watchdog (#65) declares a wedge when no publish has
 	// succeeded for staleAfter (~10 missed 30s heartbeats), checked every
 	// interval.
@@ -90,6 +91,13 @@ type Config struct {
 	// reporter (issue #19); it runs whenever a probe backend is supplied
 	// via WithProbeBackend. Defaults to 5 minutes when unset.
 	ProbeInterval time.Duration
+
+	// CameraProbeInterval is the cadence for the camera-status RTSP
+	// reachability reporter (#113); it runs whenever CamerasPath is set.
+	// Defaults to 5 minutes when unset. Minutes-scale on purpose — the
+	// probe is far cheaper than a live view but still shells ffmpeg per
+	// camera, so the cadence stays slow.
+	CameraProbeInterval time.Duration
 
 	// WatchdogStaleAfter / WatchdogInterval tune the MQTT-session watchdog
 	// (#65). If no publish succeeds within WatchdogStaleAfter, the agent
@@ -170,6 +178,14 @@ type Agent struct {
 	probePublisher *telemetry.ProbePublisher
 	probeDone      chan struct{}
 
+	// cameraReach + cameraStatus are set whenever CamerasPath is
+	// configured (#113 camera-status probe). cameraReach defaults to the
+	// ffmpeg reachability check; WithCameraReachability overrides it in
+	// tests. Both stay nil when no cameras path is configured.
+	cameraReach      telemetry.Reachability
+	cameraStatus     *telemetry.CameraStatusPublisher
+	cameraStatusDone chan struct{}
+
 	// snapshotScheduler is the scheduled-snapshot loop (#9), set when both a
 	// snapshot state path and a cameras path are configured. Nil otherwise.
 	snapshotScheduler *snapshotscheduler.Scheduler
@@ -209,6 +225,14 @@ func WithLogger(l *slog.Logger) Option {
 
 func WithProbeBackend(b probes.Backend) Option {
 	return func(a *Agent) { a.probeBackend = b }
+}
+
+// WithCameraReachability overrides the camera-status RTSP reachability
+// check (#113). Production defaults to newFFmpegReachability (shells a
+// short ffmpeg probe); tests inject a fake so they can drive online/
+// offline without real cameras or ffmpeg on PATH.
+func WithCameraReachability(r telemetry.Reachability) Option {
+	return func(a *Agent) { a.cameraReach = r }
 }
 
 func WithServiceBackend(b service.Backend) Option {
@@ -433,6 +457,35 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 		}
 	}
 
+	// Camera-status probe (#113). Runs whenever a cameras path is
+	// configured (the same gate as cameras.update / the snapshot
+	// scheduler) — it reads the same agent-managed cameras.json to know
+	// which cameras to probe. Reachability defaults to the ffmpeg check
+	// unless a test injected one via WithCameraReachability.
+	if cfg.CamerasPath != "" {
+		if a.cameraReach == nil {
+			a.cameraReach = newFFmpegReachability()
+		}
+		cameraInterval := cfg.CameraProbeInterval
+		if cameraInterval <= 0 {
+			cameraInterval = defaultCameraProbeInterval
+		}
+		camCollector := &telemetry.CameraStatusCollector{
+			DeviceID: cfg.DeviceID,
+			Cameras:  newCamerasFileReader(cfg.CamerasPath).Cameras,
+			Reach:    a.cameraReach,
+			Now:      time.Now,
+			Logger:   a.logger,
+		}
+		a.cameraStatus = &telemetry.CameraStatusPublisher{
+			Interval:  cameraInterval,
+			DeviceID:  cfg.DeviceID,
+			Collect:   camCollector.Collect,
+			Transport: transport,
+			Logger:    a.logger,
+		}
+	}
+
 	return a, nil
 }
 
@@ -526,6 +579,13 @@ func (a *Agent) Start() error {
 		go func() {
 			defer close(a.probeDone)
 			a.probePublisher.Run(pubCtx)
+		}()
+	}
+	if a.cameraStatus != nil {
+		a.cameraStatusDone = make(chan struct{})
+		go func() {
+			defer close(a.cameraStatusDone)
+			a.cameraStatus.Run(pubCtx)
 		}()
 	}
 
@@ -638,6 +698,9 @@ func (a *Agent) Stop() error {
 		}
 		if a.probeDone != nil {
 			<-a.probeDone
+		}
+		if a.cameraStatusDone != nil {
+			<-a.cameraStatusDone
 		}
 		if a.schedulerDone != nil {
 			<-a.schedulerDone

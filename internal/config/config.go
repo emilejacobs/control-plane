@@ -49,6 +49,12 @@ type Config struct {
 	// (issue #19). Empty defaults to 5 minutes.
 	ProbeInterval string `json:"probe_interval,omitempty"`
 
+	// CameraProbeInterval is parsed with time.ParseDuration (e.g. "5m").
+	// It sets the cadence of the camera-status RTSP reachability reporter
+	// (#113); runs whenever cameras_path is set. Empty defaults to 5
+	// minutes.
+	CameraProbeInterval string `json:"camera_probe_interval,omitempty"`
+
 	// AutoLoginUser is the user the device is expected to auto-login as
 	// (e.g. "uknomi"); the auto_login / gui_session probes compare the
 	// observed state against it. Empty disables those probes' user match.

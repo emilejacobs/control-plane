@@ -19,6 +19,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/agent"
 	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
+	"github.com/emilejacobs/control-plane/internal/protocol/camerastatus"
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	protologtail "github.com/emilejacobs/control-plane/internal/protocol/logtail"
 	protonetworkscan "github.com/emilejacobs/control-plane/internal/protocol/networkscan"
@@ -29,6 +30,62 @@ import (
 type stubProbeBackend struct{ results []healthprobes.Result }
 
 func (s stubProbeBackend) Collect(_ context.Context) []healthprobes.Result { return s.results }
+
+// stubReachability implements telemetry.Reachability with a fixed answer.
+type stubReachability struct{ up bool }
+
+func (s stubReachability) Reachable(_ context.Context, _ string) bool { return s.up }
+
+// The agent runs the camera-status probe when a cameras path is set,
+// publishing a debounced Report on devices/{id}/camera-status. A
+// reachable camera is reported online on the first tick.
+func TestAgentPublishesCameraStatus(t *testing.T) {
+	cert := writeTestCert(t, time.Now().Add(time.Hour))
+	tr := newFakeTransport()
+
+	camsPath := filepath.Join(t.TempDir(), "cameras.json")
+	camsJSON := `{"cameras":[{"camera_id":"cam1","label":"Drive-thru","rtsp_url":"rtsp://a","is_lpr":false}]}`
+	if err := os.WriteFile(camsPath, []byte(camsJSON), 0o600); err != nil {
+		t.Fatalf("write cameras.json: %v", err)
+	}
+
+	a, err := agent.New(agent.Config{
+		CertPath:            cert,
+		DeviceID:            "dev-001",
+		Version:             "0.1.0",
+		CamerasPath:         camsPath,
+		CameraProbeInterval: 5 * time.Millisecond,
+	}, tr, agent.WithCameraReachability(stubReachability{up: true}))
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	topic := "devices/dev-001/camera-status"
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(tr.publishedOn(topic)) > 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	publishes := tr.publishedOn(topic)
+	if len(publishes) == 0 {
+		t.Fatalf("no camera-status publish within 1s on %s", topic)
+	}
+	var report camerastatus.Report
+	if err := json.Unmarshal(publishes[0], &report); err != nil {
+		t.Fatalf("payload not a valid Report: %v", err)
+	}
+	if report.DeviceID != "dev-001" || len(report.Cameras) != 1 ||
+		report.Cameras[0].CameraID != "cam1" || report.Cameras[0].Status != camerastatus.StatusOnline {
+		t.Errorf("unexpected report: %+v", report)
+	}
+}
 
 func TestAgentPublishesHealthProbes(t *testing.T) {
 	cert := writeTestCert(t, time.Now().Add(time.Hour))

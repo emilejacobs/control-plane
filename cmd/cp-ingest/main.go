@@ -22,6 +22,8 @@
 //	SERVICE_STATUS_DLQ_URL     SQS URL of the service-status DLQ (Phase 2)
 //	CMD_RESULT_QUEUE_URL       SQS URL of the cmd-result queue (Phase 2 slice 2)
 //	CMD_RESULT_DLQ_URL         SQS URL of the cmd-result DLQ (Phase 2 slice 2)
+//	CAMERA_STATUS_QUEUE_URL    SQS URL of the camera-status queue (#113)
+//	CAMERA_STATUS_DLQ_URL      SQS URL of the camera-status DLQ (#113)
 //	SERVICE_STATUS_DLQ_URL     dead-letter queue for service-status (Phase 2)
 //	AGENT_DIST_BUCKET          S3 bucket holding the signed agent release
 //	                           catalog (issue #40). When set, the heartbeat +
@@ -84,6 +86,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 	"github.com/emilejacobs/control-plane/internal/cp/storage"
 	"github.com/emilejacobs/control-plane/internal/protocol/cmdsign"
+	"github.com/emilejacobs/control-plane/internal/protocol/camerastatus"
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 )
@@ -297,6 +300,23 @@ func run(logger *slog.Logger) error {
 		)
 	}
 
+	// Optional camera-status consumer (#113 camera observability). Skipped
+	// silently until Terraform provisions the queue, same posture as the
+	// service-status / health-probes consumers above.
+	var cameraStatusConsumer *sqsconsumer.Consumer[camerastatus.Report]
+	cameraStatusQueueURL := os.Getenv("CAMERA_STATUS_QUEUE_URL")
+	cameraStatusDLQURL := os.Getenv("CAMERA_STATUS_DLQ_URL")
+	if cameraStatusQueueURL != "" && cameraStatusDLQURL != "" {
+		csIngester := ingest.NewCameraStatusIngester(reg, nil)
+		// Surface unknown-camera log lines (skipped, not poisoned).
+		csIngester.Logger = logger
+		cameraStatusConsumer = sqsconsumer.NewConsumer[camerastatus.Report](
+			sqsClient,
+			csIngester.Handle,
+			sqsconsumer.Config{QueueURL: cameraStatusQueueURL, DLQURL: cameraStatusDLQURL, Logger: logger, Audit: auditW},
+		)
+	}
+
 	// Optional cmd-result consumer (Phase 2 slice 2). Routes config.update
 	// ACKs to the registry's RecordServiceConfigApplied. Skipped silently
 	// while the queue / IoT Rule are being provisioned, same posture as
@@ -341,7 +361,9 @@ func run(logger *slog.Logger) error {
 		"health_probes_queue", healthProbesQueueURL,
 		"health_probes_enabled", healthProbeConsumer != nil,
 		"cmd_result_queue", cmdResultQueueURL,
-		"cmd_result_enabled", cmdResultConsumer != nil)
+		"cmd_result_enabled", cmdResultConsumer != nil,
+		"camera_status_queue", cameraStatusQueueURL,
+		"camera_status_enabled", cameraStatusConsumer != nil)
 
 	// Run all consumers + the sweeper until the signal context is cancelled,
 	// then wait for a clean drain. The consumers report drain errors; the
@@ -355,6 +377,9 @@ func run(logger *slog.Logger) error {
 		workers++
 	}
 	if cmdResultConsumer != nil {
+		workers++
+	}
+	if cameraStatusConsumer != nil {
 		workers++
 	}
 	errs := make(chan error, workers)
@@ -374,6 +399,9 @@ func run(logger *slog.Logger) error {
 	}
 	if cmdResultConsumer != nil {
 		go func() { defer wg.Done(); errs <- cmdResultConsumer.Run(ctx) }()
+	}
+	if cameraStatusConsumer != nil {
+		go func() { defer wg.Done(); errs <- cameraStatusConsumer.Run(ctx) }()
 	}
 	wg.Wait()
 	close(errs)
