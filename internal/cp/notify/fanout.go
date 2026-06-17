@@ -32,24 +32,27 @@ type WebhookPoster interface {
 type FanOut struct {
 	email   EmailSender
 	webhook WebhookPoster
+	// baseURL is the dashboard origin used to build clickable device links in
+	// the digests (e.g. https://control.uknomi.com). Empty omits the links.
+	baseURL string
 }
 
-func NewFanOut(email EmailSender, webhook WebhookPoster) *FanOut {
-	return &FanOut{email: email, webhook: webhook}
+func NewFanOut(email EmailSender, webhook WebhookPoster, baseURL string) *FanOut {
+	return &FanOut{email: email, webhook: webhook, baseURL: baseURL}
 }
 
 func (f *FanOut) Notify(ctx context.Context, d ingest.Digest, cfg ingest.NotifyConfig) error {
 	var errs []error
 
 	if len(cfg.Recipients) > 0 && f.email != nil {
-		subject, body := renderEmail(d)
+		subject, body := renderEmail(d, f.baseURL)
 		if err := f.email.Send(ctx, cfg.Recipients, subject, body); err != nil {
 			errs = append(errs, fmt.Errorf("email: %w", err))
 		}
 	}
 
 	if cfg.TeamsWebhookURL != "" && f.webhook != nil {
-		if err := f.webhook.Post(ctx, cfg.TeamsWebhookURL, renderTeams(d)); err != nil {
+		if err := f.webhook.Post(ctx, cfg.TeamsWebhookURL, renderTeams(d, f.baseURL)); err != nil {
 			errs = append(errs, fmt.Errorf("teams: %w", err))
 		}
 	}

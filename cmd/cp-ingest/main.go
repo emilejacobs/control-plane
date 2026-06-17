@@ -248,9 +248,13 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Info("notification email channel disabled — NOTIFICATIONS_FROM_ADDRESS unset")
 	}
+	dashboardURL := os.Getenv("DASHBOARD_BASE_URL")
+	if dashboardURL == "" {
+		dashboardURL = "https://control.uknomi.com"
+	}
 	notificationReconciler := ingest.NewNotificationReconciler(
 		reg,
-		notify.NewFanOut(emailSender, notify.NewHTTPWebhookPoster(nil)),
+		notify.NewFanOut(emailSender, notify.NewHTTPWebhookPoster(nil), dashboardURL),
 		ingest.NotificationReconcilerConfig{
 			ConfigSource: notify.NewSettingsConfigSource(reg),
 			Logger:       logger,
