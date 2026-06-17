@@ -9,8 +9,34 @@
 // yet. Empty array shows a placeholder rather than an empty table so
 // "no cameras configured" is distinguishable from a fetch failure.
 import type { Camera } from "../lib/api/devices";
-import { Pill } from "./ui/Pill";
+import { Pill, type PillTone } from "./ui/Pill";
 import { CameraSnapshot } from "./CameraSnapshot";
+import { formatAgo } from "../lib/ago";
+
+// statusTone mirrors HealthPanel.tsx's toneFor: online → green,
+// offline → red, unknown → neutral (a distinct "not yet probed" look,
+// not a false online/offline).
+function statusTone(status: Camera["status"]): PillTone {
+  switch (status) {
+    case "online":
+      return "green";
+    case "offline":
+      return "red";
+    default:
+      return "neutral";
+  }
+}
+
+function statusLabel(status: Camera["status"]): string {
+  switch (status) {
+    case "online":
+      return "Online";
+    case "offline":
+      return "Offline";
+    default:
+      return "Unknown";
+  }
+}
 
 interface Props {
   cameras: Camera[];
@@ -55,6 +81,11 @@ interface Props {
   // entirely. Devices that pre-date the issue-#14 rollout never
   // pass a lanURL.
   lanURL?: (camera: Camera) => string;
+  // now anchors the per-camera last-checked ago-string (mirrors
+  // HealthPanel). Defaults to the current instant so isolated tests
+  // and callers that don't thread a clock still render. The device
+  // page passes its shared ticking `now`.
+  now?: Date;
 }
 
 export function CamerasPanel({
@@ -70,6 +101,7 @@ export function CamerasPanel({
   onVerifyAngle,
   previewURL,
   lanURL,
+  now = new Date(),
 }: Props) {
   const pending = lastAppliedAt === null && cameras.length > 0;
 
@@ -160,6 +192,7 @@ export function CamerasPanel({
             <tr style={{ textAlign: "left", color: "var(--ink-2)" }}>
               <th style={{ padding: "6px 8px" }}>Label</th>
               <th style={{ padding: "6px 8px", width: 60 }}>LPR</th>
+              <th style={{ padding: "6px 8px", width: 160 }}>Status</th>
               <th style={{ padding: "6px 8px" }}>RTSP URL</th>
               {deviceId && <th style={{ padding: "6px 8px", width: 120 }}>Snapshot</th>}
               {(onEditCamera || onDeleteCamera || onVerifyAngle || lanURL) && (
@@ -176,6 +209,23 @@ export function CamerasPanel({
                 <td style={{ padding: "6px 8px" }}>{c.label}</td>
                 <td style={{ padding: "6px 8px" }}>
                   {c.isLpr && <Pill tone="green">LPR</Pill>}
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  <Pill tone={statusTone(c.status)}>
+                    {statusLabel(c.status)}
+                  </Pill>
+                  <div
+                    className="muted"
+                    style={{ fontSize: 11.5, marginTop: 2 }}
+                  >
+                    {c.lastCheckedAt ? (
+                      <time dateTime={c.lastCheckedAt}>
+                        {formatAgo(new Date(c.lastCheckedAt), now)}
+                      </time>
+                    ) : (
+                      <span>never checked</span>
+                    )}
+                  </div>
                 </td>
                 <td
                   className="mono"

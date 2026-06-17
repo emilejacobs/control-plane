@@ -125,6 +125,12 @@ export interface Camera {
   label: string;
   rtspUrl: string;
   isLpr: boolean;
+  // Camera observability (#112/#115): per-camera reachability status
+  // the agent probes. "unknown" until the first probe lands; both
+  // timestamps null while unknown.
+  status: "online" | "offline" | "unknown";
+  lastCheckedAt: string | null;
+  statusChangedAt: string | null;
 }
 
 // CamerasResponse is the GET /devices/{id}/cameras body. The
@@ -143,12 +149,30 @@ interface CameraWire {
   label: string;
   rtsp_url: string;
   is_lpr: boolean;
+  status: string;
+  last_checked_at: string | null;
+  status_changed_at: string | null;
 }
 
 interface CamerasResponseWire {
   cameras: CameraWire[];
   last_applied_at: string | null;
   last_applied_correlation_id: string | null;
+}
+
+// cameraFromWire maps a server camera row to the client Camera shape.
+// status is defensive — an absent/empty wire value becomes "unknown"
+// (e.g. POST/PUT echoes from before the agent's first probe).
+function cameraFromWire(c: CameraWire): Camera {
+  return {
+    cameraId: c.camera_id,
+    label: c.label,
+    rtspUrl: c.rtsp_url,
+    isLpr: c.is_lpr,
+    status: (c.status as Camera["status"]) || "unknown",
+    lastCheckedAt: c.last_checked_at ?? null,
+    statusChangedAt: c.status_changed_at ?? null,
+  };
 }
 
 // CameraInput is the request body for POST + PUT — camera_id is
@@ -169,7 +193,7 @@ export async function postCamera(deviceId: string, input: CameraInput): Promise<
     throw new ApiError(res.status, await res.text());
   }
   const d = (await res.json()) as CameraWire;
-  return { cameraId: d.camera_id, label: d.label, rtspUrl: d.rtsp_url, isLpr: d.is_lpr };
+  return cameraFromWire(d);
 }
 
 export async function putCamera(
@@ -186,7 +210,7 @@ export async function putCamera(
     throw new ApiError(res.status, await res.text());
   }
   const d = (await res.json()) as CameraWire;
-  return { cameraId: d.camera_id, label: d.label, rtspUrl: d.rtsp_url, isLpr: d.is_lpr };
+  return cameraFromWire(d);
 }
 
 export async function deleteCamera(deviceId: string, cameraId: string): Promise<void> {
@@ -249,12 +273,7 @@ export async function getCameras(deviceId: string): Promise<CamerasResponse> {
   }
   const d = (await res.json()) as CamerasResponseWire;
   return {
-    cameras: (d.cameras ?? []).map((c) => ({
-      cameraId: c.camera_id,
-      label: c.label,
-      rtspUrl: c.rtsp_url,
-      isLpr: c.is_lpr,
-    })),
+    cameras: (d.cameras ?? []).map(cameraFromWire),
     lastAppliedAt: d.last_applied_at,
     lastAppliedCorrelationId: d.last_applied_correlation_id,
   };
