@@ -23,6 +23,7 @@ type CameraStore interface {
 	GetByID(ctx context.Context, id string) (registry.Device, error)
 	InsertCamera(ctx context.Context, deviceID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
 	ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error)
+	ListCamerasWithStatus(ctx context.Context, deviceID string) ([]registry.CameraWithStatus, error)
 	UpdateCamera(ctx context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error)
 	DeleteCamera(ctx context.Context, deviceID, cameraID string) error
 	GetCamerasStatus(ctx context.Context, deviceID string) (registry.CamerasStatus, error)
@@ -150,13 +151,36 @@ func NewCameraList(store CameraStore) *CameraListHandler {
 }
 
 type cameraListResponse struct {
-	Cameras []cameras.Camera `json:"cameras"`
+	Cameras []cameraStatusJSON `json:"cameras"`
 	// LastAppliedAt is the timestamp of the most recent cameras.update
 	// ACK from the device. Null until the agent has ACKed at least
 	// once. Dashboard derives a "pending vs applied" badge from this
 	// + the most recent device_cameras.updated_at.
 	LastAppliedAt            *string `json:"last_applied_at"`
 	LastAppliedCorrelationID *string `json:"last_applied_correlation_id"`
+}
+
+// cameraStatusJSON is one camera in the GET response: the inventory
+// fields (flattened from cameras.Camera) plus the observed
+// reachability status (#112). status is online | offline | unknown;
+// last_checked_at / status_changed_at are null until the first probe
+// report. Kept on this read DTO rather than cameras.Camera so the
+// status-free wire type stays usable as the cameras.update push payload.
+type cameraStatusJSON struct {
+	cameras.Camera
+	Status          string  `json:"status"`
+	LastCheckedAt   *string `json:"last_checked_at"`
+	StatusChangedAt *string `json:"status_changed_at"`
+}
+
+// rfc3339Ptr formats a nullable timestamp as a UTC RFC3339 string
+// pointer, preserving null for absent values.
+func rfc3339Ptr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.UTC().Format(time.RFC3339)
+	return &s
 }
 
 func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -171,30 +195,31 @@ func (h *CameraListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	list, err := h.store.ListCameras(r.Context(), id)
+	list, err := h.store.ListCamerasWithStatus(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// Empty array, not null — dashboard distinguishes "no cameras"
 	// from "error".
-	if list == nil {
-		list = []cameras.Camera{}
+	out := make([]cameraStatusJSON, 0, len(list))
+	for _, c := range list {
+		out = append(out, cameraStatusJSON{
+			Camera:          c.Camera,
+			Status:          c.Status,
+			LastCheckedAt:   rfc3339Ptr(c.LastCheckedAt),
+			StatusChangedAt: rfc3339Ptr(c.StatusChangedAt),
+		})
 	}
 	status, err := h.store.GetCamerasStatus(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	var appliedAt *string
-	if status.LastAppliedAt != nil {
-		s := status.LastAppliedAt.UTC().Format(time.RFC3339)
-		appliedAt = &s
-	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cameraListResponse{
-		Cameras:                  list,
-		LastAppliedAt:            appliedAt,
+		Cameras:                  out,
+		LastAppliedAt:            rfc3339Ptr(status.LastAppliedAt),
 		LastAppliedCorrelationID: status.LastAppliedCorrelationID,
 	})
 }

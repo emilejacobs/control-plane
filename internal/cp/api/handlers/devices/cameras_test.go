@@ -37,6 +37,7 @@ type cameraStore struct {
 	inserts       []insertCall
 	insertErr     error
 	listing       map[string][]cameras.Camera
+	statusListing map[string][]registry.CameraWithStatus
 	listErr       error
 	updates       []updateCall
 	deletes       []deleteCall
@@ -90,6 +91,24 @@ func (s *cameraStore) ListCameras(_ context.Context, deviceID string) ([]cameras
 		return nil, s.listErr
 	}
 	return s.listing[deviceID], nil
+}
+
+func (s *cameraStore) ListCamerasWithStatus(_ context.Context, deviceID string) ([]registry.CameraWithStatus, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	if s.statusListing != nil {
+		if v, ok := s.statusListing[deviceID]; ok {
+			return v, nil
+		}
+	}
+	// Derive from the plain listing with a default "unknown" status so
+	// the List tests that only populate `listing` keep working.
+	var out []registry.CameraWithStatus
+	for _, c := range s.listing[deviceID] {
+		out = append(out, registry.CameraWithStatus{Camera: c, Status: "unknown"})
+	}
+	return out, nil
 }
 
 func (s *cameraStore) UpdateCamera(_ context.Context, deviceID, cameraID, label, rtspURL string, isLPR bool) (cameras.Camera, error) {
@@ -576,6 +595,80 @@ func TestCameraListSurfacesLastAppliedAt(t *testing.T) {
 	}
 	if got.LastAppliedCorrelationID == nil || *got.LastAppliedCorrelationID != corr {
 		t.Errorf("last_applied_correlation_id: got %v", got.LastAppliedCorrelationID)
+	}
+}
+
+// GET surfaces each camera's observed reachability status + last-checked
+// / status-changed timestamps (#112). A camera with no probe yet reads
+// "unknown" with null timestamps so a freshly-imported camera isn't
+// misreported.
+func TestCameraListSurfacesPerCameraStatus(t *testing.T) {
+	checked := time.Date(2026, 6, 17, 9, 0, 0, 0, time.UTC)
+	changed := time.Date(2026, 6, 17, 8, 45, 0, 0, time.UTC)
+	store := &cameraStore{
+		known: map[string]bool{"dev-abc": true},
+		statusListing: map[string][]registry.CameraWithStatus{
+			"dev-abc": {
+				{
+					Camera:          cameras.Camera{CameraID: "cam1", Label: "Drive-thru", RtspURL: "rtsp://a", IsLPR: true},
+					Status:          "offline",
+					LastCheckedAt:   &checked,
+					StatusChangedAt: &changed,
+				},
+				{
+					Camera: cameras.Camera{CameraID: "cam2", Label: "Entry", RtspURL: "rtsp://b"},
+					Status: "unknown",
+				},
+			},
+		},
+	}
+	h := devices.NewCameraList(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-abc/cameras", nil)
+	req.SetPathValue("id", "dev-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Cameras []struct {
+			CameraID        string  `json:"camera_id"`
+			IsLPR           bool    `json:"is_lpr"`
+			Status          string  `json:"status"`
+			LastCheckedAt   *string `json:"last_checked_at"`
+			StatusChangedAt *string `json:"status_changed_at"`
+		} `json:"cameras"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Cameras) != 2 {
+		t.Fatalf("cameras: got %d want 2", len(got.Cameras))
+	}
+	// cam1: offline, both timestamps surfaced as RFC3339. is_lpr still
+	// flattens through from the embedded Camera.
+	c1 := got.Cameras[0]
+	if c1.CameraID != "cam1" || !c1.IsLPR {
+		t.Errorf("cam1 inventory fields: id=%q is_lpr=%v", c1.CameraID, c1.IsLPR)
+	}
+	if c1.Status != "offline" {
+		t.Errorf("cam1 status: got %q want offline", c1.Status)
+	}
+	if c1.LastCheckedAt == nil || *c1.LastCheckedAt != "2026-06-17T09:00:00Z" {
+		t.Errorf("cam1 last_checked_at: got %v want 2026-06-17T09:00:00Z", c1.LastCheckedAt)
+	}
+	if c1.StatusChangedAt == nil || *c1.StatusChangedAt != "2026-06-17T08:45:00Z" {
+		t.Errorf("cam1 status_changed_at: got %v want 2026-06-17T08:45:00Z", c1.StatusChangedAt)
+	}
+	// cam2: unknown with null timestamps.
+	c2 := got.Cameras[1]
+	if c2.Status != "unknown" {
+		t.Errorf("cam2 status: got %q want unknown", c2.Status)
+	}
+	if c2.LastCheckedAt != nil || c2.StatusChangedAt != nil {
+		t.Errorf("cam2 timestamps should be null: checked=%v changed=%v", c2.LastCheckedAt, c2.StatusChangedAt)
 	}
 }
 
