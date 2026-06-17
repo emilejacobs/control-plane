@@ -6,12 +6,23 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/presence"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
 	"github.com/emilejacobs/control-plane/internal/cp/sqsconsumer"
 )
+
+// defaultReconcileCooldown bounds how often the reconnect reconcile re-pushes
+// agent.update to one device. A successful update restarts the agent, which
+// reconnects (another lifecycle "connected" event) before it can heartbeat its
+// new version — so without a cooldown the connect reconcile re-pushes on every
+// reconnect and loops a converging device. The window only needs to outlast
+// fetch + restart + the agent's first post-restart heartbeat (~30s telemetry
+// cadence); the heartbeat reconcile, gated on a freshly reported version, still
+// converges the device within it.
+const defaultReconcileCooldown = 2 * time.Minute
 
 // Lifecycle is the SQS payload for an IoT Core presence lifecycle event.
 // clientId is the MQTT client id, which for a device agent equals its
@@ -58,6 +69,14 @@ type LifecycleIngester struct {
 	Updates  UpdatePusher
 	// Logger receives reconcile failures. nil discards.
 	Logger *slog.Logger
+	// ReconcileCooldown is the minimum interval between reconnect-driven
+	// agent.update re-pushes to the same device (defaults to
+	// defaultReconcileCooldown). Prevents the connect reconcile from looping a
+	// converging device that restarts before it can heartbeat its new version.
+	ReconcileCooldown time.Duration
+
+	mu                sync.Mutex
+	lastReconcilePush map[string]time.Time
 }
 
 // NewLifecycleIngester builds the ingester. now defaults to time.Now.
@@ -120,11 +139,42 @@ func (i *LifecycleIngester) reconcile(ctx context.Context, ev Lifecycle) {
 	if desired == nil || *desired == reported {
 		return
 	}
+	// Cooldown: a device that just took an update reconnects (this event)
+	// before it can heartbeat its new version, so its stored reported version
+	// still reads stale here. Re-pushing on every such reconnect loops it.
+	// Skip if we re-pushed to this device within the cooldown; the heartbeat
+	// reconcile (gated on a fresh report) converges it meanwhile.
+	if !i.allowReconcilePush(ev.ClientID) {
+		i.logger().Info("reconcile push skipped — cooldown",
+			"device_id", ev.ClientID, "desired", *desired, "reported", reported)
+		return
+	}
 	if err := i.Updates.Push(ctx, ev.ClientID, *desired, ev.CorrelationID); err != nil {
 		i.logger().Warn("reconcile push on reconnect failed; heartbeats retry",
 			"device_id", ev.ClientID, "desired", *desired,
 			"reported", reported, "err", err)
 	}
+}
+
+// allowReconcilePush reports whether enough time has elapsed since the last
+// reconnect-driven re-push to deviceID to push again, recording now as the
+// latest push when it returns true. Concurrency-safe.
+func (i *LifecycleIngester) allowReconcilePush(deviceID string) bool {
+	cooldown := i.ReconcileCooldown
+	if cooldown <= 0 {
+		cooldown = defaultReconcileCooldown
+	}
+	now := i.now()
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.lastReconcilePush == nil {
+		i.lastReconcilePush = make(map[string]time.Time)
+	}
+	if last, ok := i.lastReconcilePush[deviceID]; ok && now.Sub(last) < cooldown {
+		return false
+	}
+	i.lastReconcilePush[deviceID] = now
+	return true
 }
 
 func (i *LifecycleIngester) logger() *slog.Logger {

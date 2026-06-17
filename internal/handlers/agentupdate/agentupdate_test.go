@@ -83,6 +83,41 @@ func TestApplyStagesCandidate(t *testing.T) {
 	}
 }
 
+// TestApplyIsIdempotentOnCurrentVersion — a manifest targeting the version the
+// agent is already running ACKs (Staged:false) WITHOUT fetching, staging, or
+// requesting a restart. This is what breaks CP's reconnect-reconcile loop: a
+// redundant re-push no longer restarts a converged agent.
+func TestApplyIsIdempotentOnCurrentVersion(t *testing.T) {
+	bin := []byte("does-not-matter-never-fetched")
+	raw, pub := signedManifestFor(t, bin) // manifest version is 1.4.0
+	fetched := false
+	h, dir := newHandler(t, pub, func(context.Context, string) ([]byte, error) {
+		fetched = true
+		return bin, nil
+	})
+	h.CurrentVersion = "1.4.0" // already on the target
+	staged := false
+	h.OnStaged = func() { staged = true }
+
+	res, err := h.Handle(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := res.(protoupdate.Result)
+	if got.Staged || got.Version != "1.4.0" {
+		t.Errorf("result = %+v, want {Version:1.4.0 Staged:false}", got)
+	}
+	if fetched {
+		t.Error("Fetch was called; an already-current update must not download")
+	}
+	if staged {
+		t.Error("OnStaged was called; an already-current update must not request a restart")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "candidate")); !os.IsNotExist(err) {
+		t.Error("a candidate was staged; an already-current update must stage nothing")
+	}
+}
+
 // TestApplyRejectsSha256Mismatch — fetched bytes whose digest ≠ the manifest's
 // are refused; nothing is staged.
 func TestApplyRejectsSha256Mismatch(t *testing.T) {
@@ -206,12 +241,13 @@ func TestApplyRejectsDowngrade(t *testing.T) {
 	}
 }
 
-// TestApplyAllowsSameAndNewerVersion — an equal or newer target stages
-// normally; the no-downgrade rule only blocks strictly-older targets.
-func TestApplyAllowsSameAndNewerVersion(t *testing.T) {
-	for _, current := range []string{"1.4.0", "1.3.0", "0.1.0"} {
+// TestApplyStagesNewerVersion — a strictly-newer target stages normally; the
+// no-downgrade rule only blocks strictly-older targets. (The equal-version case
+// is idempotent — see TestApplyIsIdempotentOnCurrentVersion.)
+func TestApplyStagesNewerVersion(t *testing.T) {
+	for _, current := range []string{"1.3.0", "0.1.0"} {
 		bin := []byte("candidate-" + current)
-		raw, pub := signedManifestFor(t, bin) // version 1.4.0
+		raw, pub := signedManifestFor(t, bin) // version 1.4.0 (newer than current)
 		h, _ := newHandler(t, pub, func(context.Context, string) ([]byte, error) { return bin, nil })
 		h.CurrentVersion = current
 

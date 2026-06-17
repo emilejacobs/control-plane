@@ -100,6 +100,18 @@ func (h *Handler) Handle(ctx context.Context, args json.RawMessage) (any, error)
 			fmt.Sprintf("refusing downgrade from %s to %s", h.CurrentVersion, m.Version))
 	}
 
+	// Idempotency: if the agent is already running the target version, ACK
+	// without fetching, staging, or restarting. Without this, CP's reconnect
+	// reconcile (which re-pushes off the device's last-stored reported version)
+	// drives an infinite stage→restart→reconnect loop: the agent restarts on
+	// each redundant push before it can heartbeat its new version, so CP never
+	// sees convergence. Checked before the fetch so a redundant push is cheap
+	// and — crucially — does NOT call OnStaged, so the agent keeps running and
+	// finally gets to ACK + heartbeat the converged version.
+	if h.CurrentVersion != "" && m.Version == h.CurrentVersion {
+		return protoupdate.Result{Version: m.Version, Staged: false}, nil
+	}
+
 	art, ok := m.ArtifactFor(h.GOOS, h.GOARCH)
 	if !ok {
 		return nil, envelope.NewCodedError(protoupdate.CodeUnsupportedPlatform,
