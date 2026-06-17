@@ -197,3 +197,18 @@ variable "cmd_result_dlq_url" {
   type        = string
   default     = ""
 }
+
+# Camera observability (#113). Empty defaults keep cp-ingest's
+# camera-status consumer disabled until the deploy root wires the new
+# sqs-ingest module + IoT Rule.
+variable "camera_status_queue_url" {
+  description = "SQS URL of the camera-status queue (sqs-ingest module output queue_url). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "camera_status_dlq_url" {
+  description = "SQS URL of the camera-status dead-letter queue (sqs-ingest module output dlq_url). Optional."
+  type        = string
+  default     = ""
+}
