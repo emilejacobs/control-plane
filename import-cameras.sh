@@ -32,6 +32,8 @@
 #   CP_PASSWORD  operator password                 (path B; prompted, silently, if unset)
 #   CP_TOTP      6-digit TOTP code                 (path B; prompted if unset)
 #   IPS_FILE     fleet IP list                     (default mac-tailnet-ips.txt; or pass as $1)
+#   SUDO_PW      uknomi sudo password               (prompted if unset; needed because
+#                                                    /var/uknomi/agent-config.json is root-only 0600)
 #   DRY_RUN=1    same as --dry-run
 #
 # ── Usage ───────────────────────────────────────────────────────────────────────────────────
@@ -95,6 +97,24 @@ unset CP_PASSWORD 2>/dev/null || true
 
 AUTH_HDR="Authorization: Bearer $CP_TOKEN"
 
+# ── Sudo password ───────────────────────────────────────────────────────────────────────────
+# agent-config.json is root-only (0600), so it's read with `sudo -S` (password
+# piped on ssh's own stdin, exactly like restart-fleet.sh). Set SUDO_PW in the
+# env to skip the prompt.
+: "${SUDO_PW:=}"
+[ -n "$SUDO_PW" ] || { read -rs -p "uknomi sudo password: " SUDO_PW; echo; }
+
+# ssh_sudo_cat <ip> <remote-path> — print a root-owned file's contents over ssh
+# via `sudo -S`. The password rides ssh's stdin (the printf pipe), which both
+# feeds sudo AND keeps ssh off the loop's IP-list fd. <remote-path> is a fixed
+# literal from this script (no untrusted input), so it's interpolated as-is.
+ssh_sudo_cat() {
+  # SC2029: $2 intentionally expands client-side — it's a fixed literal path
+  # from this script (no untrusted input), interpolated into the remote command.
+  # shellcheck disable=SC2029
+  printf '%s\n' "$SUDO_PW" | ssh "${SSH_OPTS[@]}" "uknomi@$1" "sudo -S -p '' cat $2" 2>/dev/null
+}
+
 # ── Counters ────────────────────────────────────────────────────────────────────────────────
 dev_ok=0; dev_fail=0
 cam_created=0; cam_updated=0; cam_skipped=0
@@ -104,18 +124,19 @@ cam_created=0; cam_updated=0; cam_skipped=0
 process_device() {
   local ip="$1"
 
-  # 1. device_id — try without sudo first (configs are usually world-readable JSON).
+  # 1. device_id — agent-config.json is root-only (0600), so read it via sudo.
   local agent_cfg device_id
-  agent_cfg=$(ssh "${SSH_OPTS[@]}" "uknomi@$ip" 'cat /var/uknomi/agent-config.json' 2>/dev/null) || {
-    echo "  ❌ unreachable or cannot read /var/uknomi/agent-config.json — SKIP"; return 1; }
+  agent_cfg=$(ssh_sudo_cat "$ip" /var/uknomi/agent-config.json) || {
+    echo "  ❌ unreachable, or sudo/read failed for /var/uknomi/agent-config.json — SKIP"; return 1; }
   device_id=$(printf '%s' "$agent_cfg" | jq -r '.device_id // empty' 2>/dev/null) || {
     echo "  ❌ agent-config.json is not valid JSON — SKIP"; return 1; }
   [ -n "$device_id" ] || { echo "  ❌ no .device_id in agent-config.json — SKIP"; return 1; }
   echo "  device_id: $device_id"
 
-  # 2. local cameras.
+  # 2. local cameras. cameras.json is world-readable (0644) today, but read it
+  # via sudo too so a device where the agent rewrote it 0600 still works.
   local cams_raw
-  cams_raw=$(ssh "${SSH_OPTS[@]}" "uknomi@$ip" 'cat /usr/local/etc/uknomi/cameras.json' 2>/dev/null) || {
+  cams_raw=$(ssh_sudo_cat "$ip" /usr/local/etc/uknomi/cameras.json) || {
     echo "  ⏭️  no /usr/local/etc/uknomi/cameras.json — SKIP"; return 0; }
 
   # Normalise both shapes to a clean array of {label, rtsp_url, is_lpr}; drop incomplete rows.
@@ -207,8 +228,10 @@ process_device() {
   return 0
 }
 
-# ── Main loop. Per-device errors are trapped so one bad device never aborts the run. ─────────
-while read -r ip || [ -n "$ip" ]; do
+# ── Main loop. The IP list is read on fd 3 (not stdin) so a subprocess in the
+# loop body — ssh, sudo — can never drain it off fd 0. Per-device errors are
+# trapped so one bad device never aborts the run. ────────────────────────────────────────────
+while read -r ip <&3 || [ -n "$ip" ]; do
   ip="${ip%%#*}"                       # strip inline comments
   ip="$(printf '%s' "$ip" | tr -d '[:space:]')"
   [ -z "$ip" ] && continue
@@ -218,7 +241,7 @@ while read -r ip || [ -n "$ip" ]; do
   else
     dev_fail=$((dev_fail + 1))
   fi
-done < "$IPS_FILE"
+done 3< "$IPS_FILE"
 
 # ── Summary ─────────────────────────────────────────────────────────────────────────────────
 echo "================================================================"
@@ -229,4 +252,4 @@ echo "Devices: $dev_ok processed, $dev_fail failed"
 echo "Cameras: $cam_created created, $cam_updated updated, $cam_skipped skipped"
 echo "================================================================"
 
-unset CP_TOKEN 2>/dev/null || true
+unset CP_TOKEN SUDO_PW 2>/dev/null || true
