@@ -68,6 +68,10 @@ command -v jq   >/dev/null || { echo "❌ jq not found"   >&2; exit 1; }
 [ -f "$IPS_FILE" ] || { echo "❌ IP list not found: $IPS_FILE" >&2; exit 1; }
 
 SSH_OPTS=(-o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+# Bound every CP API call so a stalled request (e.g. a server-side cameras.update
+# publish holding the response open) fails that one camera instead of hanging the
+# whole run. 15s to connect, 45s total per request.
+CURL_OPTS=(--connect-timeout 15 --max-time 45)
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "=== DRY RUN — no writes will be made (GETs for diffing only) ==="
@@ -86,7 +90,7 @@ if [ -z "${CP_TOKEN:-}" ]; then
 
   login_body=$(jq -nc --arg e "$CP_EMAIL" --arg p "$CP_PASSWORD" --arg t "$CP_TOTP" \
     '{email:$e, password:$p, totp_code:$t}')
-  login_resp=$(curl -fsS -X POST "$CP_API_URL/auth/login" \
+  login_resp=$(curl -fsS "${CURL_OPTS[@]}" -X POST "$CP_API_URL/auth/login" \
     -H 'Content-Type: application/json' -d "$login_body" 2>/dev/null) || {
       echo "❌ login failed (check email / password / TOTP)" >&2; exit 1; }
   CP_TOKEN=$(printf '%s' "$login_resp" | jq -r '.access_token // empty')
@@ -113,6 +117,29 @@ ssh_sudo_cat() {
   # from this script (no untrusted input), interpolated into the remote command.
   # shellcheck disable=SC2029
   printf '%s\n' "$SUDO_PW" | ssh "${SSH_OPTS[@]}" "uknomi@$1" "sudo -S -p '' cat $2" 2>/dev/null
+}
+
+# cp_write <METHOD> <url> <json-body> — authenticated write to the CP API. On a
+# 2xx returns 0; otherwise sets CP_WRITE_ERR to "HTTP <code>: <body-excerpt>"
+# (or "curl: <err>" for a transport failure) and returns 1, so callers can
+# surface the real reason instead of a bare "failed".
+CP_WRITE_ERR=""
+cp_write() {
+  local method="$1" url="$2" data="$3" out code body idem
+  CP_WRITE_ERR=""
+  # The CP API requires an Idempotency-Key on writes. A fresh key per request is
+  # fine: this script already prevents cross-run duplicates by GET-matching on
+  # label before it POSTs, so each write here is a genuinely new operation.
+  idem=$(uuidgen 2>/dev/null) || idem="import-${RANDOM}${RANDOM}-$(date +%s 2>/dev/null || echo 0)"
+  out=$(curl -sS "${CURL_OPTS[@]}" -X "$method" "$url" \
+        -H "$AUTH_HDR" -H 'Content-Type: application/json' -H "Idempotency-Key: $idem" \
+        -d "$data" -w $'\n%{http_code}' 2>&1) || { CP_WRITE_ERR="curl: ${out//$'\n'/ }"; return 1; }
+  code=${out##*$'\n'}
+  body=${out%$'\n'*}
+  case "$code" in
+    2[0-9][0-9]) return 0 ;;
+    *) CP_WRITE_ERR="HTTP $code: $(printf '%s' "$body" | tr '\n' ' ' | head -c 200)"; return 1 ;;
+  esac
 }
 
 # ── Counters ────────────────────────────────────────────────────────────────────────────────
@@ -167,7 +194,7 @@ process_device() {
 
   # 3. existing CP cameras for this device (for label-match upsert).
   local existing_resp existing
-  existing_resp=$(curl -fsS -H "$AUTH_HDR" "$CP_API_URL/devices/$device_id/cameras" 2>/dev/null) || {
+  existing_resp=$(curl -fsS "${CURL_OPTS[@]}" -H "$AUTH_HDR" "$CP_API_URL/devices/$device_id/cameras" 2>/dev/null) || {
     echo "  ❌ GET /devices/$device_id/cameras failed (auth/network/device not found) — SKIP"; return 1; }
   existing=$(printf '%s' "$existing_resp" | jq -c '.cameras // []' 2>/dev/null) || {
     echo "  ❌ unexpected GET cameras response — SKIP"; return 1; }
@@ -200,12 +227,11 @@ process_device() {
         cam_updated=$((cam_updated + 1))
         continue
       fi
-      if curl -fsS -X PUT "$CP_API_URL/devices/$device_id/cameras/$ex_id" \
-           -H "$AUTH_HDR" -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+      if cp_write PUT "$CP_API_URL/devices/$device_id/cameras/$ex_id" "$body"; then
         echo "  ✅ updated '$label' ($ex_id)"
         cam_updated=$((cam_updated + 1))
       else
-        echo "  ❌ PUT failed for '$label' ($ex_id)"
+        echo "  ❌ PUT failed for '$label' ($ex_id) — $CP_WRITE_ERR"
         cam_skipped=$((cam_skipped + 1))
       fi
     else
@@ -215,12 +241,11 @@ process_device() {
         cam_created=$((cam_created + 1))
         continue
       fi
-      if curl -fsS -X POST "$CP_API_URL/devices/$device_id/cameras" \
-           -H "$AUTH_HDR" -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+      if cp_write POST "$CP_API_URL/devices/$device_id/cameras" "$body"; then
         echo "  ✅ created '$label'"
         cam_created=$((cam_created + 1))
       else
-        echo "  ❌ POST failed for '$label'"
+        echo "  ❌ POST failed for '$label' — $CP_WRITE_ERR"
         cam_skipped=$((cam_skipped + 1))
       fi
     fi
