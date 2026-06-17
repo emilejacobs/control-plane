@@ -19,6 +19,10 @@ const (
 	// UnhealthyProbeRed — a device red on a health probe (yellow is excluded
 	// from notifications; it is dashboard-only).
 	UnhealthyProbeRed UnhealthyKind = "probe_red"
+	// UnhealthyCameraOffline — a camera whose reachability status is offline
+	// (#114, PRD #111). Subject is the camera_id (stable identity); the
+	// camera label rides separately in Label for the rendered alert line.
+	UnhealthyCameraOffline UnhealthyKind = "camera_offline"
 )
 
 // UnhealthySignal is one entry in the fleet-wide unhealthy snapshot. The
@@ -32,6 +36,11 @@ type UnhealthySignal struct {
 	Subject  string
 	Hostname string
 	SiteName *string
+	// Label is a human display name for the subject, used by rendering when
+	// the raw subject isn't operator-friendly. Currently the camera label for
+	// camera_offline signals; empty for the other kinds (which render the
+	// subject directly).
+	Label string
 }
 
 // FleetUnhealthy returns the whole fleet's current unhealthy signals — offline
@@ -43,24 +52,31 @@ type UnhealthySignal struct {
 func (r *Registry) FleetUnhealthy(ctx context.Context) ([]UnhealthySignal, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT 'offline' AS kind, d.id::text AS device_id, '' AS subject,
-		       d.hostname, s.name AS site_name
+		       d.hostname, s.name AS site_name, '' AS label
 		FROM devices d
 		LEFT JOIN sites s ON s.id = d.site_id
 		WHERE d.is_online = false
 		UNION ALL
 		SELECT 'service_stopped', d.id::text, ds.service_name,
-		       d.hostname, s.name
+		       d.hostname, s.name, ''
 		FROM device_services ds
 		JOIN devices d ON d.id = ds.device_id
 		LEFT JOIN sites s ON s.id = d.site_id
 		WHERE ds.state = 'stopped'
 		UNION ALL
 		SELECT 'probe_red', d.id::text, dhp.probe_name,
-		       d.hostname, s.name
+		       d.hostname, s.name, ''
 		FROM device_health_probes dhp
 		JOIN devices d ON d.id = dhp.device_id
 		LEFT JOIN sites s ON s.id = d.site_id
 		WHERE dhp.status = 'red'
+		UNION ALL
+		SELECT 'camera_offline', d.id::text, dc.camera_id,
+		       d.hostname, s.name, dc.label
+		FROM device_cameras dc
+		JOIN devices d ON d.id = dc.device_id
+		LEFT JOIN sites s ON s.id = d.site_id
+		WHERE dc.status = 'offline'
 		ORDER BY kind, hostname, subject
 	`)
 	if err != nil {
@@ -72,7 +88,7 @@ func (r *Registry) FleetUnhealthy(ctx context.Context) ([]UnhealthySignal, error
 	for rows.Next() {
 		var sig UnhealthySignal
 		var kind string
-		if err := rows.Scan(&kind, &sig.DeviceID, &sig.Subject, &sig.Hostname, &sig.SiteName); err != nil {
+		if err := rows.Scan(&kind, &sig.DeviceID, &sig.Subject, &sig.Hostname, &sig.SiteName, &sig.Label); err != nil {
 			return nil, fmt.Errorf("scan fleet unhealthy: %w", err)
 		}
 		sig.Kind = UnhealthyKind(kind)
@@ -100,6 +116,11 @@ type OpenAlert struct {
 	// SiteName is nil for an unassigned device.
 	Hostname string
 	SiteName *string
+	// Label is the camera label for a camera_offline row, joined from
+	// device_cameras so a recovery notice can name the camera the same way the
+	// fire did. Empty for other kinds, or for a camera deleted before recovery
+	// (render falls back to the subject/camera_id).
+	Label string
 }
 
 // LoadOpenAlerts returns every open alert_state row (resolved_at IS NULL). The
@@ -108,10 +129,13 @@ type OpenAlert struct {
 func (r *Registry) LoadOpenAlerts(ctx context.Context) ([]OpenAlert, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT a.kind, a.device_id::text, a.subject, a.opened_at, a.last_notified_at, a.notify_attempts,
-		       d.hostname, s.name AS site_name
+		       d.hostname, s.name AS site_name,
+		       COALESCE(dc.label, '') AS label
 		FROM alert_state a
 		JOIN devices d ON d.id = a.device_id
 		LEFT JOIN sites s ON s.id = d.site_id
+		LEFT JOIN device_cameras dc
+		       ON a.kind = 'camera_offline' AND dc.device_id = a.device_id AND dc.camera_id = a.subject
 		WHERE a.resolved_at IS NULL
 		ORDER BY a.kind, a.device_id, a.subject
 	`)
@@ -125,7 +149,7 @@ func (r *Registry) LoadOpenAlerts(ctx context.Context) ([]OpenAlert, error) {
 		var a OpenAlert
 		var kind string
 		if err := rows.Scan(&kind, &a.DeviceID, &a.Subject, &a.OpenedAt, &a.LastNotifiedAt, &a.NotifyAttempts,
-			&a.Hostname, &a.SiteName); err != nil {
+			&a.Hostname, &a.SiteName, &a.Label); err != nil {
 			return nil, fmt.Errorf("scan open alert: %w", err)
 		}
 		a.Kind = UnhealthyKind(kind)

@@ -27,6 +27,10 @@ type AlertEvent struct {
 	Subject  string
 	Hostname string
 	SiteName *string
+	// Label is an operator-friendly display name for the subject (the camera
+	// label for camera_offline); empty for kinds that render the subject
+	// directly. Rendering prefers it over Subject when set.
+	Label string
 }
 
 // Digest is the coalesced set of transitions found in one reconcile tick. It is
@@ -290,6 +294,7 @@ func eventFromSignal(s registry.UnhealthySignal) AlertEvent {
 		Subject:  s.Subject,
 		Hostname: s.Hostname,
 		SiteName: s.SiteName,
+		Label:    s.Label,
 	}
 }
 
@@ -303,5 +308,6 @@ func eventFromOpen(a registry.OpenAlert) AlertEvent {
 		Subject:  a.Subject,
 		Hostname: a.Hostname,
 		SiteName: a.SiteName,
+		Label:    a.Label,
 	}
 }
