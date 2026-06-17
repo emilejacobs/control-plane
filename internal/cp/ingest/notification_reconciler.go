@@ -294,12 +294,14 @@ func eventFromSignal(s registry.UnhealthySignal) AlertEvent {
 }
 
 // eventFromOpen renders a recovery event from a resolved alert_state row. The
-// open row carries no hostname (it was not joined), so recovery events name the
-// device by id + subject — enough to identify what cleared.
+// hostname + site are joined in by LoadOpenAlerts so a recovery names the device
+// the same way an opened alert does.
 func eventFromOpen(a registry.OpenAlert) AlertEvent {
 	return AlertEvent{
 		Kind:     a.Kind,
 		DeviceID: a.DeviceID,
 		Subject:  a.Subject,
+		Hostname: a.Hostname,
+		SiteName: a.SiteName,
 	}
 }

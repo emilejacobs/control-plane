@@ -59,7 +59,16 @@ func (s *fakeAlertStore) OpenAlert(_ context.Context, kind registry.UnhealthyKin
 	defer s.mu.Unlock()
 	k := alertKey{kind, deviceID, subject}
 	if _, ok := s.open[k]; !ok {
-		s.open[k] = registry.OpenAlert{Kind: kind, DeviceID: deviceID, Subject: subject, OpenedAt: at}
+		// Capture the device's hostname/site from the current snapshot, the way
+		// the real LoadOpenAlerts join does, so recoveries can name the device.
+		a := registry.OpenAlert{Kind: kind, DeviceID: deviceID, Subject: subject, OpenedAt: at}
+		for _, sig := range s.snapshot {
+			if sig.Kind == kind && sig.DeviceID == deviceID && sig.Subject == subject {
+				a.Hostname, a.SiteName = sig.Hostname, sig.SiteName
+				break
+			}
+		}
+		s.open[k] = a
 	}
 	return nil
 }
@@ -236,6 +245,11 @@ func TestReconcileResolvesClearedAlert(t *testing.T) {
 	recover := calls[1]
 	if len(recover.Resolved) != 1 || recover.Resolved[0].DeviceID != "dev-a" {
 		t.Fatalf("recovery digest Resolved = %+v", recover.Resolved)
+	}
+	// The recovery names the device by hostname (joined from the open row), not
+	// just the id — so the message reads "mac-a", not the uuid.
+	if recover.Resolved[0].Hostname != "mac-a" {
+		t.Errorf("recovery Hostname = %q, want %q", recover.Resolved[0].Hostname, "mac-a")
 	}
 	if len(recover.Opened) != 0 {
 		t.Errorf("recovery digest should have no Opened, got %+v", recover.Opened)
