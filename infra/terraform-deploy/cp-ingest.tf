@@ -97,6 +97,21 @@ module "sqs_health_probes" {
   tags = var.tags
 }
 
+module "sqs_camera_status" {
+  source = "../terraform/modules/sqs-ingest"
+
+  name          = "uknomi-cp-camera-status"
+  iot_rule_name = "uknomi_cp_camera_status"
+  # Agent publishes its camerastatus.Report payload on
+  # devices/{device_id}/camera-status (#113, PRD #111). The body already
+  # carries a correlation_id and device_id, so no topic-derived columns are
+  # needed. Cadence is minutes-scale (one report per device, far slower than
+  # a live view); module defaults are fine.
+  iot_sql = "SELECT * FROM 'devices/+/camera-status'"
+
+  tags = var.tags
+}
+
 # ── cp-ingest Fargate service ───────────────────────────────────────────────
 
 module "cp_ingest" {
@@ -124,6 +139,9 @@ module "cp_ingest" {
 
   cmd_result_queue_url = module.sqs_cmd_result.queue_url
   cmd_result_dlq_url   = module.sqs_cmd_result.dlq_url
+
+  camera_status_queue_url = module.sqs_camera_status.queue_url
+  camera_status_dlq_url   = module.sqs_camera_status.dlq_url
 
   # Postgres password from the RDS-managed master secret (issue #49); the
   # non-secret parts ride as plain env. No hand-synced db-dsn to go stale.

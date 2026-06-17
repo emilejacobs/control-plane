@@ -53,6 +53,10 @@ resource "aws_ecs_task_definition" "this" {
         # disables the consumer; populating both turns it on.
         { name = "CMD_RESULT_QUEUE_URL", value = var.cmd_result_queue_url },
         { name = "CMD_RESULT_DLQ_URL", value = var.cmd_result_dlq_url },
+        # Camera observability (#113). Same posture — empty disables the
+        # camera-status consumer; populating both turns it on.
+        { name = "CAMERA_STATUS_QUEUE_URL", value = var.camera_status_queue_url },
+        { name = "CAMERA_STATUS_DLQ_URL", value = var.camera_status_dlq_url },
         # Postgres connection (issue #49). Non-secret parts; the password is
         # injected separately from the RDS-managed secret below, and
         # cp-ingest builds the DSN in-process via storage.ResolveDSN.
