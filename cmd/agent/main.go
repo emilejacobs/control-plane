@@ -129,6 +129,16 @@ func runDaemon() {
 		probeInterval = d
 	}
 
+	var cameraProbeInterval time.Duration
+	if cfg.CameraProbeInterval != "" {
+		d, err := time.ParseDuration(cfg.CameraProbeInterval)
+		if err != nil {
+			logger.Error("parse camera_probe_interval", "value", cfg.CameraProbeInterval, "error", err)
+			os.Exit(1)
+		}
+		cameraProbeInterval = d
+	}
+
 	a, err := agent.New(agent.Config{
 		CertPath:              cfg.CertPath,
 		DeviceID:              cfg.DeviceID,
@@ -137,6 +147,7 @@ func runDaemon() {
 		ServiceAllowList:      cfg.ServiceAllowList,
 		ServiceStatusInterval: serviceStatusInterval,
 		ProbeInterval:         probeInterval,
+		CameraProbeInterval:   cameraProbeInterval,
 		ConfigPath:            *configPath,
 		CamerasPath:           cfg.CamerasPath,
 		SnapshotStatePath:     cfg.SnapshotStatePath,
