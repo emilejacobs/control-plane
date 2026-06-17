@@ -43,6 +43,14 @@ resource "aws_iot_policy" "agent" {
           # omitting it made the agent look healthy (heartbeats on
           # /telemetry still flow) while cp-ingest saw zero probe reports.
           "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/health-probes",
+          # Camera observability (#113): the agent's CameraStatusPublisher
+          # emits a camerastatus.Report on this topic every 5 minutes.
+          # MUST be listed here for the same reason as the two above — and
+          # because the agent publishes at QoS 1, an unauthorized publish
+          # can drop the MQTT connection, flapping the device offline (~5
+          # min after the agent 1.5.0 self-update, the camera-probe cadence)
+          # while SSH/Edge UI stay up. Roll agent 1.5.0 ONLY after applying.
+          "arn:aws:iot:*:*:topic/devices/$${iot:Connection.Thing.ThingName}/camera-status",
         ]
       },
       {
