@@ -1569,6 +1569,80 @@ func (r *Registry) DeleteCamera(ctx context.Context, deviceID, cameraID string) 
 	return nil
 }
 
+// CameraWithStatus is a camera inventory row plus its observed
+// reachability status, returned by ListCamerasWithStatus for the
+// device-page Cameras panel (#112, PRD #111). The plain cameras.Camera
+// wire type stays status-free on purpose: it doubles as the
+// cameras.update push payload to the agent (which runs
+// DisallowUnknownFields), so observed status must not ride along on
+// that downward config push.
+type CameraWithStatus struct {
+	cameras.Camera
+	Status          string
+	LastCheckedAt   *time.Time
+	StatusChangedAt *time.Time
+}
+
+// ListCamerasWithStatus returns deviceID's cameras with their observed
+// reachability status, in the same stable order as ListCameras (sorted
+// by created_at, tiebroken on camera_id). The cameras API read (the
+// panel) uses this; the agent push path uses the status-free
+// ListCameras. Empty slice for a device with no cameras.
+func (r *Registry) ListCamerasWithStatus(ctx context.Context, deviceID string) ([]CameraWithStatus, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT camera_id, label, rtsp_url, is_lpr, status, last_checked_at, status_changed_at
+		FROM device_cameras
+		WHERE device_id = $1
+		ORDER BY created_at, camera_id
+	`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("list cameras with status: %w", err)
+	}
+	defer rows.Close()
+
+	var list []CameraWithStatus
+	for rows.Next() {
+		var c CameraWithStatus
+		if err := rows.Scan(&c.CameraID, &c.Label, &c.RtspURL, &c.IsLPR, &c.Status, &c.LastCheckedAt, &c.StatusChangedAt); err != nil {
+			return nil, fmt.Errorf("scan camera with status: %w", err)
+		}
+		list = append(list, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate cameras with status: %w", err)
+	}
+	return list, nil
+}
+
+// UpdateCameraStatus records one camera's probe report (#113): it sets
+// status + last_checked_at to the report, and advances
+// status_changed_at only when the status value actually changes. An
+// idempotent re-report of the same status updates last_checked_at but
+// leaves status_changed_at untouched, so it tracks the last transition,
+// not the last probe. checkedAt is the report's observed time (not
+// now()), so a backlogged report stamps its true time. Returns
+// ErrCameraNotFound if no (deviceID, cameraID) row exists — the ingester
+// treats a camera the CP doesn't know about the way the other ingesters
+// treat an unknown device.
+func (r *Registry) UpdateCameraStatus(ctx context.Context, deviceID, cameraID, status string, checkedAt time.Time) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE device_cameras
+		SET last_checked_at   = $3,
+		    status_changed_at = CASE WHEN status IS DISTINCT FROM $4
+		                             THEN $3 ELSE status_changed_at END,
+		    status            = $4,
+		    updated_at        = now()
+		WHERE device_id = $1 AND camera_id = $2
+	`, deviceID, cameraID, checkedAt, status)
+	if err != nil {
+		return fmt.Errorf("update camera status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrCameraNotFound
+	}
+	return nil
+}
+
 // CamerasStatus mirrors the slice-2 ServiceConfig "applied" tracking
 // for the cameras.update flow: the dashboard reads LastAppliedAt +
 // LastAppliedCorrelationID to render a "pending vs applied" badge on
