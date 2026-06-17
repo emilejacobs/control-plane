@@ -64,7 +64,7 @@ func digestWith(opened, resolved int) ingest.Digest {
 func TestFanOutDispatchesBothChannels(t *testing.T) {
 	email := &fakeEmail{}
 	webhook := &fakeWebhook{}
-	f := notify.NewFanOut(email, webhook)
+	f := notify.NewFanOut(email, webhook, "https://cp.test")
 
 	err := f.Notify(context.Background(), digestWith(1, 0), ingest.NotifyConfig{
 		Recipients:      []string{"ops@example.com"},
@@ -95,7 +95,7 @@ func TestFanOutDispatchesBothChannels(t *testing.T) {
 func TestFanOutSkipsEmptyChannels(t *testing.T) {
 	email := &fakeEmail{}
 	webhook := &fakeWebhook{}
-	f := notify.NewFanOut(email, webhook)
+	f := notify.NewFanOut(email, webhook, "https://cp.test")
 
 	// Only email configured.
 	if err := f.Notify(context.Background(), digestWith(1, 0), ingest.NotifyConfig{Recipients: []string{"a@b.c"}}); err != nil {
@@ -119,7 +119,7 @@ func TestFanOutSkipsEmptyChannels(t *testing.T) {
 func TestFanOutPartialFailureStillSendsOther(t *testing.T) {
 	email := &fakeEmail{err: errors.New("ses down")}
 	webhook := &fakeWebhook{}
-	f := notify.NewFanOut(email, webhook)
+	f := notify.NewFanOut(email, webhook, "https://cp.test")
 
 	err := f.Notify(context.Background(), digestWith(1, 0), ingest.NotifyConfig{
 		Recipients:      []string{"a@b.c"},

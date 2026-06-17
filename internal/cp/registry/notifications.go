@@ -95,6 +95,11 @@ type OpenAlert struct {
 	OpenedAt       time.Time
 	LastNotifiedAt *time.Time
 	NotifyAttempts int
+	// Hostname and SiteName are joined from the device row so a recovery notice
+	// names the device the way an operator recognizes it (not the raw id).
+	// SiteName is nil for an unassigned device.
+	Hostname string
+	SiteName *string
 }
 
 // LoadOpenAlerts returns every open alert_state row (resolved_at IS NULL). The
@@ -102,10 +107,13 @@ type OpenAlert struct {
 // fire, recover, or leave alone.
 func (r *Registry) LoadOpenAlerts(ctx context.Context) ([]OpenAlert, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT kind, device_id::text, subject, opened_at, last_notified_at, notify_attempts
-		FROM alert_state
-		WHERE resolved_at IS NULL
-		ORDER BY kind, device_id, subject
+		SELECT a.kind, a.device_id::text, a.subject, a.opened_at, a.last_notified_at, a.notify_attempts,
+		       d.hostname, s.name AS site_name
+		FROM alert_state a
+		JOIN devices d ON d.id = a.device_id
+		LEFT JOIN sites s ON s.id = d.site_id
+		WHERE a.resolved_at IS NULL
+		ORDER BY a.kind, a.device_id, a.subject
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("query open alerts: %w", err)
@@ -116,7 +124,8 @@ func (r *Registry) LoadOpenAlerts(ctx context.Context) ([]OpenAlert, error) {
 	for rows.Next() {
 		var a OpenAlert
 		var kind string
-		if err := rows.Scan(&kind, &a.DeviceID, &a.Subject, &a.OpenedAt, &a.LastNotifiedAt, &a.NotifyAttempts); err != nil {
+		if err := rows.Scan(&kind, &a.DeviceID, &a.Subject, &a.OpenedAt, &a.LastNotifiedAt, &a.NotifyAttempts,
+			&a.Hostname, &a.SiteName); err != nil {
 			return nil, fmt.Errorf("scan open alert: %w", err)
 		}
 		a.Kind = UnhealthyKind(kind)

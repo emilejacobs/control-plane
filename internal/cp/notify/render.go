@@ -10,9 +10,9 @@ import (
 )
 
 // renderEmail produces the subject + plain-text body for a digest. The subject
-// summarizes counts; the body lists each opened alert and recovery so an
-// operator can triage from their inbox without opening the dashboard.
-func renderEmail(d ingest.Digest) (subject, body string) {
+// summarizes counts; the body lists each opened alert and recovery (with the
+// device's CP link) so an operator can triage from their inbox.
+func renderEmail(d ingest.Digest, baseURL string) (subject, body string) {
 	openedTotal := len(d.Opened) + d.Truncated
 	subject = fmt.Sprintf("uKnomi fleet: %d new alert(s), %d recovered", openedTotal, len(d.Resolved))
 
@@ -20,7 +20,7 @@ func renderEmail(d ingest.Digest) (subject, body string) {
 	if len(d.Opened) > 0 || d.Truncated > 0 {
 		b.WriteString("New alerts:\n")
 		for _, e := range d.Opened {
-			b.WriteString("  - " + describe(e) + "\n")
+			b.WriteString("  - " + describePlain(e, baseURL) + "\n")
 		}
 		if d.Truncated > 0 {
 			fmt.Fprintf(&b, "  - …and %d more\n", d.Truncated)
@@ -29,7 +29,7 @@ func renderEmail(d ingest.Digest) (subject, body string) {
 	if len(d.Resolved) > 0 {
 		b.WriteString("\nRecovered:\n")
 		for _, e := range d.Resolved {
-			b.WriteString("  - " + describe(e) + "\n")
+			b.WriteString("  - " + describePlain(e, baseURL) + "\n")
 		}
 	}
 	return subject, b.String()
@@ -41,7 +41,7 @@ func renderEmail(d ingest.Digest) (subject, body string) {
 // old {"text": …} connector body — it 202s any JSON, so the wrong shape posts
 // nothing to the channel. Each alert is one TextBlock, coloured Attention (new)
 // or Good (recovered).
-func renderTeams(d ingest.Digest) []byte {
+func renderTeams(d ingest.Digest, baseURL string) []byte {
 	openedTotal := len(d.Opened) + d.Truncated
 
 	body := []map[string]any{{
@@ -52,13 +52,13 @@ func renderTeams(d ingest.Digest) []byte {
 		"wrap":   true,
 	}}
 	for _, e := range d.Opened {
-		body = append(body, textBlock("🔴 "+describe(e), "Attention"))
+		body = append(body, textBlock("🔴 "+describeMarkdown(e, baseURL), "Attention"))
 	}
 	if d.Truncated > 0 {
 		body = append(body, textBlock(fmt.Sprintf("🔴 …and %d more", d.Truncated), "Attention"))
 	}
 	for _, e := range d.Resolved {
-		body = append(body, textBlock("🟢 "+describe(e), "Good"))
+		body = append(body, textBlock("🟢 "+describeMarkdown(e, baseURL), "Good"))
 	}
 
 	card := map[string]any{
@@ -82,13 +82,31 @@ func textBlock(text, color string) map[string]any {
 	return map[string]any{"type": "TextBlock", "text": text, "wrap": true, "color": color}
 }
 
-// describe renders one alert event as a human line: kind, device (hostname or
-// id), optional subject, optional site.
-func describe(e ingest.AlertEvent) string {
-	device := e.Hostname
-	if device == "" {
-		device = e.DeviceID
+// describeMarkdown renders one alert event for an adaptive-card TextBlock, with
+// the device name as a Markdown link to its CP page: kind · [name](url) ·
+// subject (site).
+func describeMarkdown(e ingest.AlertEvent, baseURL string) string {
+	device := deviceLabel(e)
+	if u := deviceURL(e, baseURL); u != "" {
+		device = "[" + device + "](" + u + ")"
 	}
+	return joinAlert(e, device)
+}
+
+// describePlain renders one alert event as a plain-text line (email), appending
+// the device's CP link so mail clients linkify it: kind · name · subject (site)
+// — url.
+func describePlain(e ingest.AlertEvent, baseURL string) string {
+	line := joinAlert(e, deviceLabel(e))
+	if u := deviceURL(e, baseURL); u != "" {
+		line += " — " + u
+	}
+	return line
+}
+
+// joinAlert assembles "kind · <device> · subject (site)" given an already-
+// formatted device token (plain name or Markdown link).
+func joinAlert(e ingest.AlertEvent, device string) string {
 	parts := []string{kindLabel(e.Kind), device}
 	if e.Subject != "" {
 		parts = append(parts, e.Subject)
@@ -98,6 +116,22 @@ func describe(e ingest.AlertEvent) string {
 		line += " (" + *e.SiteName + ")"
 	}
 	return line
+}
+
+// deviceLabel is the device's hostname, falling back to its id.
+func deviceLabel(e ingest.AlertEvent) string {
+	if e.Hostname != "" {
+		return e.Hostname
+	}
+	return e.DeviceID
+}
+
+// deviceURL is the device's CP page, or "" when no base URL is configured.
+func deviceURL(e ingest.AlertEvent, baseURL string) string {
+	if baseURL == "" || e.DeviceID == "" {
+		return ""
+	}
+	return strings.TrimRight(baseURL, "/") + "/devices/" + e.DeviceID
 }
 
 func kindLabel(k registry.UnhealthyKind) string {

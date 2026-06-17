@@ -36,7 +36,7 @@ func TestRenderTeamsAdaptiveCardEnvelope(t *testing.T) {
 			} `json:"content"`
 		} `json:"attachments"`
 	}
-	if err := json.Unmarshal(renderTeams(d), &env); err != nil {
+	if err := json.Unmarshal(renderTeams(d, "https://cp.test"), &env); err != nil {
 		t.Fatalf("payload is not valid JSON: %v", err)
 	}
 
@@ -59,10 +59,16 @@ func TestRenderTeamsAdaptiveCardEnvelope(t *testing.T) {
 		all.WriteString(b.Text + "\n")
 	}
 	text := all.String()
-	if !strings.Contains(text, "mac-a") {
-		t.Errorf("card body missing opened alert; got:\n%s", text)
+	// Both the opened and the recovered alert name the device by hostname
+	// (not the raw id) as a Markdown link to its CP page.
+	if !strings.Contains(text, "[mac-a](https://cp.test/devices/dev-a)") {
+		t.Errorf("opened alert missing device-name link; got:\n%s", text)
 	}
-	if !strings.Contains(text, "mac-b") || !strings.Contains(text, "alpr") {
-		t.Errorf("card body missing recovery; got:\n%s", text)
+	if !strings.Contains(text, "[mac-b](https://cp.test/devices/dev-b)") || !strings.Contains(text, "alpr") {
+		t.Errorf("recovery missing device-name link; got:\n%s", text)
+	}
+	// The raw id must not leak as the visible label when a hostname is known.
+	if strings.Contains(text, "🟢 SERVICE STOPPED · dev-b ·") {
+		t.Errorf("recovery shows id instead of hostname; got:\n%s", text)
 	}
 }
