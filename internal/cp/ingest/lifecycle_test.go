@@ -181,6 +181,46 @@ func TestLifecycleIngesterRepushesOnReconnectMismatch(t *testing.T) {
 	}
 }
 
+// Cooldown: a device that keeps reconnecting still reporting the stale version
+// (the loop signature: it restarts on each update before it can heartbeat the
+// new version) is re-pushed at most once per cooldown window — not on every
+// reconnect. This is what breaks the agent.update restart loop.
+func TestLifecycleIngesterReconcileCooldown(t *testing.T) {
+	desired := "v1.5.0"
+	now := time.Now()
+	clock := func() time.Time { return now }
+	// reported stays stale across every reconnect — the device never gets to
+	// report convergence, exactly the loop case.
+	versions := &fakeVersionReader{reported: "v1.4.0", desired: &desired}
+	push := &fakePusher{}
+	ing := NewLifecycleIngester(presence.New(), &fakePresenceWriter{}, clock)
+	ing.Versions = versions
+	ing.Updates = push
+	ing.ReconcileCooldown = time.Minute
+
+	connect := func() {
+		if err := ing.Handle(context.Background(), Lifecycle{
+			ClientID: "dev-1", EventType: "connected", CorrelationID: "c",
+		}); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	}
+
+	connect() // first reconnect → pushes
+	connect() // immediate reconnect → within cooldown → suppressed
+	connect()
+	if len(push.calls) != 1 {
+		t.Fatalf("rapid reconnects: pushes = %d, want 1 (cooldown suppresses the rest)", len(push.calls))
+	}
+
+	// Once the cooldown elapses and the device is still stale, push again.
+	now = now.Add(time.Minute + time.Second)
+	connect()
+	if len(push.calls) != 2 {
+		t.Fatalf("after cooldown elapsed: pushes = %d, want 2", len(push.calls))
+	}
+}
+
 // No push when the reconnecting device already runs the desired version, is
 // untargeted, or the event is a disconnect.
 func TestLifecycleIngesterNoPushCases(t *testing.T) {
