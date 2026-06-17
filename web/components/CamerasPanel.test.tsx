@@ -15,6 +15,9 @@ function cam(overrides: Partial<Camera> = {}): Camera {
     label: "Drive-thru",
     rtspUrl: "rtsp://user:pass@10.0.0.42:554/stream",
     isLpr: false,
+    status: "online",
+    lastCheckedAt: "2026-05-26T11:59:30Z",
+    statusChangedAt: null,
     ...overrides,
   };
 }
@@ -68,6 +71,66 @@ describe("CamerasPanel — populated state", () => {
     expect(
       screen.getByText(/rtsp:\/\/user:pass@10\.0\.0\.42\/stream/),
     ).toBeInTheDocument();
+  });
+});
+
+// Camera observability (#115): each row carries a per-camera status
+// badge (online/offline/unknown) plus a last-checked ago-string. The
+// unknown state must render distinctly and never invent a timestamp.
+describe("CamerasPanel — per-camera status badge (issue #115)", () => {
+  // Fixed clock so the ago-string is deterministic. cam()'s default
+  // lastCheckedAt is 30s before this instant.
+  const now = new Date("2026-05-26T12:00:00Z");
+
+  it("renders an Online badge + last-checked ago-string for an online camera", () => {
+    render(
+      <CamerasPanel
+        cameras={[cam({ label: "Drive-thru", status: "online" })]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        now={now}
+      />,
+    );
+    const table = screen.getByRole("table");
+    const row = within(table).getByRole("row", { name: /Drive-thru/ });
+    expect(within(row).getByText("Online")).toBeInTheDocument();
+    expect(within(row).getByText(/30 seconds ago/)).toBeInTheDocument();
+  });
+
+  it("renders an Offline badge for an offline camera", () => {
+    render(
+      <CamerasPanel
+        cameras={[cam({ label: "Drive-thru", status: "offline" })]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        now={now}
+      />,
+    );
+    const table = screen.getByRole("table");
+    const row = within(table).getByRole("row", { name: /Drive-thru/ });
+    const badge = within(row).getByText("Offline");
+    expect(badge).toBeInTheDocument();
+    // red tone — Pill renders the tone as a class.
+    expect(badge).toHaveClass("red");
+  });
+
+  it("renders an Unknown badge with no bogus timestamp when status is unknown / never probed", () => {
+    render(
+      <CamerasPanel
+        cameras={[
+          cam({ label: "Drive-thru", status: "unknown", lastCheckedAt: null }),
+        ]}
+        lastAppliedAt="2026-05-26T12:00:00Z"
+        now={now}
+      />,
+    );
+    const table = screen.getByRole("table");
+    const row = within(table).getByRole("row", { name: /Drive-thru/ });
+    const badge = within(row).getByText("Unknown");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveClass("neutral");
+    // No invented time: not an ago-string, not an "Invalid Date".
+    expect(within(row).queryByText(/ago/)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/Invalid Date/)).not.toBeInTheDocument();
+    expect(within(row).getByText(/never checked/i)).toBeInTheDocument();
   });
 });
 
