@@ -2,11 +2,41 @@ package transport_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"testing"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+
 	"github.com/emilejacobs/control-plane/internal/transport"
 )
+
+// stealClientID connects a second MQTT client with the same client ID, which
+// (per the MQTT spec) forces the broker to disconnect the existing client —
+// the same takeover AWS IoT performs when an updated agent reconnects with the
+// device's id. CleanSession=true wipes any persistent session, so the kicked
+// client can only recover its subscriptions by re-subscribing on reconnect.
+func stealClientID(t *testing.T, brokerURL, clientID string, certs testCerts) {
+	t.Helper()
+	cert, err := tls.X509KeyPair(certs.ClientCertPEM, certs.ClientKeyPEM)
+	must(t, err)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(certs.CAPEM)
+	opts := mqtt.NewClientOptions().
+		AddBroker(brokerURL).
+		SetClientID(clientID).
+		SetTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool, MinVersion: tls.VersionTLS12}).
+		SetCleanSession(true).
+		SetConnectTimeout(10 * time.Second)
+	c := mqtt.NewClient(opts)
+	tok := c.Connect()
+	if !tok.WaitTimeout(10*time.Second) || tok.Error() != nil {
+		t.Fatalf("steal connect: %v", tok.Error())
+	}
+	time.Sleep(300 * time.Millisecond) // let the broker process the takeover
+	c.Disconnect(0)                     // leave, so the transport reclaims its id
+}
 
 func TestTransportRoundtrip(t *testing.T) {
 	ctx := context.Background()
@@ -98,9 +128,65 @@ func TestTransportNewFailsWhenBrokerUnreachable(t *testing.T) {
 	}
 }
 
-// Auto-reconnect after broker disappearance is verified via field deployment
-// (Issue 07/08: "deliberate network blip → agent reconnects"). An automated
-// test was attempted here using container stop/start, but colima does not
-// preserve the host port mapping across restarts, so Paho cannot find the
-// broker on its old address. A toxiproxy-based fault injector would solve
-// this; deferred until a future cycle if the field test surfaces issues.
+// TestTransportResubscribesAfterReconnect is the regression for the fleet-wide
+// wedge: after an MQTT reconnect (here forced by a same-client-id takeover, as
+// AWS IoT does when an updated agent reconnects), the transport must still
+// deliver messages on a topic it subscribed to — i.e. it re-subscribes on
+// reconnect. Without that, publishes keep working but commands silently stop.
+func TestTransportResubscribesAfterReconnect(t *testing.T) {
+	ctx := context.Background()
+	certs := generateTestCerts(t)
+	fixture := startMosquitto(t, ctx, certs)
+
+	tr, err := transport.New(transport.Config{
+		BrokerURL: fixture.BrokerURL,
+		ClientID:  "resub-client",
+		CACertPEM: certs.CAPEM,
+		CertPEM:   certs.ClientCertPEM,
+		KeyPEM:    certs.ClientKeyPEM,
+	})
+	if err != nil {
+		t.Fatalf("transport.New: %v", err)
+	}
+	defer tr.Close()
+
+	received := make(chan []byte, 16)
+	if err := tr.Subscribe("device/cmd", func(_ string, payload []byte) {
+		received <- payload
+	}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// Sanity: the subscription delivers before any reconnect.
+	if err := tr.Publish("device/cmd", []byte("before")); err != nil {
+		t.Fatalf("publish before: %v", err)
+	}
+	select {
+	case <-received:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no delivery before reconnect — setup broken")
+	}
+
+	// Force the transport to drop + auto-reconnect.
+	stealClientID(t, fixture.BrokerURL, "resub-client", certs)
+
+	// After reconnect, a publish to the same topic must still be delivered.
+	// Retry because the reconnect moment is non-deterministic; a publish during
+	// the disconnected window simply errors and is retried.
+	deadline := time.After(25 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("no delivery after reconnect: the transport did not re-subscribe")
+		default:
+		}
+		_ = tr.Publish("device/cmd", []byte("after"))
+		select {
+		case p := <-received:
+			if string(p) == "after" {
+				return // re-subscribed and delivering again
+			}
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
