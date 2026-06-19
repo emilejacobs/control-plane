@@ -28,12 +28,40 @@ func TestColimaLaunchAgentPlistContents(t *testing.T) {
 		"start",
 		"--vm-type",
 		"vz",
+		// LAN reachability: the VZNAT reachable network becomes the VM's default
+		// route so the container can reach the directly-connected RTSP camera
+		// (ADR-038; without preferred-route the lima usernet default wins).
+		"--network-address",
+		"--network-preferred-route",
 		"--mount",
 		"/usr/local/etc/plate-recognizer/stream:w",
 		"RunAtLoad",
 	} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("plist missing %q\n%s", want, plist)
+		}
+	}
+}
+
+// ColimaVMSize sizes the VM to the host: ALPR inference is CPU-bound and Docker
+// Desktop gave it ~all cores, so a fixed 2 vCPUs tanks recognition health. Leave
+// 2 cores for macOS; ~half the RAM capped 4–8 GiB. Mirrors migrate-colima.sh.
+func TestColimaVMSize(t *testing.T) {
+	cases := []struct {
+		numCPU, memGiB           int
+		wantCPU, wantMem, wantDk int
+	}{
+		{10, 16, 8, 8, 30},  // M4 mini
+		{8, 8, 6, 4, 30},    // 8-core / 8 GiB
+		{4, 8, 2, 4, 30},    // small host: keep 2 vCPUs minimum
+		{2, 4, 2, 4, 30},    // tiny: cpu floor 2, mem floor 4
+		{16, 64, 14, 8, 30}, // big host: mem capped at 8
+	}
+	for _, c := range cases {
+		cpu, mem, dk := install.ColimaVMSize(c.numCPU, c.memGiB)
+		if cpu != c.wantCPU || mem != c.wantMem || dk != c.wantDk {
+			t.Errorf("ColimaVMSize(%d,%d) = (%d,%d,%d), want (%d,%d,%d)",
+				c.numCPU, c.memGiB, cpu, mem, dk, c.wantCPU, c.wantMem, c.wantDk)
 		}
 	}
 }

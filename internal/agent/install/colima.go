@@ -19,10 +19,33 @@ type ColimaAgentConfig struct {
 	StderrPath string
 }
 
+// ColimaVMSize sizes the Colima VM to the host (mirrors migrate-colima.sh).
+// ALPR inference is CPU-bound and Docker Desktop gave the container ~all the
+// host's cores, so a fixed 2 vCPUs tanks recognition health. Leave 2 cores for
+// macOS/agent/edge-ui; use ~half the RAM capped 4–8 GiB (ALPR's footprint is
+// small); disk stays 30 GiB (screenshots/clips ride the host bind mount).
+func ColimaVMSize(numCPU, memGiB int) (cpu, mem, disk int) {
+	cpu = 2
+	if numCPU > 4 {
+		cpu = numCPU - 2
+	}
+	mem = memGiB / 2
+	if mem < 4 {
+		mem = 4
+	}
+	if mem > 8 {
+		mem = 8
+	}
+	return cpu, mem, 30
+}
+
 // ColimaLaunchAgentPlist renders the user LaunchAgent that brings the per-user
 // Colima VM up at login (ADR-038 option 3: the LaunchAgent owns the VM
 // lifecycle, independent of the root agent). `colima start` is blocking and
 // returns once the VM is up, so RunAtLoad (no KeepAlive) starts it once.
+// --network-address + --network-preferred-route make the VZNAT reachable network
+// the VM's default route, so the container reaches the directly-connected LAN
+// camera (ADR-038; default NAT / plain --network-address cannot).
 func ColimaLaunchAgentPlist(c ColimaAgentConfig) []byte {
 	const tmpl = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -42,6 +65,8 @@ func ColimaLaunchAgentPlist(c ColimaAgentConfig) []byte {
         <string>%s</string>
         <string>--vm-type</string>
         <string>vz</string>
+        <string>--network-address</string>
+        <string>--network-preferred-route</string>
         <string>--mount</string>
         <string>%s:w</string>
     </array>

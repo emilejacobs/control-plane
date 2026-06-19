@@ -5,12 +5,29 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/emilejacobs/control-plane/internal/agent/enroll"
 	"github.com/emilejacobs/control-plane/internal/agent/install"
 )
+
+// hostMemGiB reads total RAM via sysctl (darwin). Falls back to 8 GiB so
+// ColimaVMSize still yields a sane allocation if the probe fails.
+func hostMemGiB() int {
+	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	if err != nil {
+		return 8
+	}
+	b, err := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return 8
+	}
+	return int(b / (1024 * 1024 * 1024))
+}
 
 // runInstall is the `uknomi-agent install` one-shot Provision (ADR-037): it
 // lays down the agent binary + supervisor, enrolls, and loads the LaunchDaemon
@@ -122,6 +139,8 @@ func runInstall(args []string) {
 		WhisperDst: "/usr/local/etc/uknomi/whisper-models/ggml-medium.en-q5_0.bin",
 	})
 
+	// Size the VM to this host (ALPR is CPU-bound; a fixed 2 vCPUs tanks health).
+	colimaCPU, colimaMem, colimaDisk := install.ColimaVMSize(runtime.NumCPU(), hostMemGiB())
 	colima := install.ColimaSteps(sys, install.ColimaConfig{
 		BrewUser:        *brewUser,
 		BrewPath:        *brewPath,
@@ -129,9 +148,9 @@ func runInstall(args []string) {
 		LaunchAgentPlist: install.ColimaLaunchAgentPlist(install.ColimaAgentConfig{
 			Label:      "com.uknomi.colima",
 			ColimaPath: filepath.Join(filepath.Dir(*brewPath), "colima"),
-			CPU:        2,
-			MemoryGiB:  4,
-			DiskGiB:    30,
+			CPU:        colimaCPU,
+			MemoryGiB:  colimaMem,
+			DiskGiB:    colimaDisk,
 			MountDir:   "/usr/local/etc/plate-recognizer/stream",
 			StdoutPath: "/tmp/colima.log",
 			StderrPath: "/tmp/colima-error.log",
