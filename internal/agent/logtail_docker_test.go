@@ -25,6 +25,25 @@ func TestBuildDockerLogsArgs(t *testing.T) {
 	}
 }
 
+// TestColimaDockerLogsArgv pins the ADR-038 Colima-wrapped argv: the root agent
+// reaches the ALPR container in the auto-login user's Colima daemon via
+// `launchctl asuser … sudo -u … <dockerBin> --context colima logs …`.
+func TestColimaDockerLogsArgv(t *testing.T) {
+	got := colimaDockerLogsArgv("501", "uknomi", "/opt/homebrew/bin/docker", "plate-recognizer-stream", 200)
+	want := []string{
+		"launchctl", "asuser", "501", "sudo", "-u", "uknomi", "/opt/homebrew/bin/docker",
+		"--context", "colima", "logs", "--tail", "200", "plate-recognizer-stream",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("argv length: got %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("argv[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // init() wires dockerLogsFn to execDockerLogs in production. The fake
 // swap in withFakeDockerLogs restores that, so an end-to-end "real
 // docker" path is reachable when integration tests need it. This test

@@ -139,6 +139,11 @@ func runDaemon() {
 		cameraProbeInterval = d
 	}
 
+	// Route the log.tail docker kind through the auto-login user's Colima daemon
+	// (ADR-038) — same as the plate_recognizer_container probe. No-op when no
+	// auto-login user is configured (falls back to root Docker Desktop).
+	agent.EnableColimaDocker(cfg.AutoLoginUser)
+
 	a, err := agent.New(agent.Config{
 		CertPath:              cfg.CertPath,
 		DeviceID:              cfg.DeviceID,
