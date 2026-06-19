@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	osuser "os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -58,6 +59,14 @@ type darwinBackend struct {
 	now               func() time.Time
 	expectedLoginUser string
 	logger            *slog.Logger
+
+	// Colima runtime (ADR-038): the per-user Colima VM that runs the ALPR
+	// container post-migration. The root agent reaches it via
+	// `launchctl asuser <colimaUID> sudo -u <colimaUser> <dockerBin> …`.
+	// Empty colimaUser/UID falls back to root Docker Desktop (pre-migration).
+	colimaUser string
+	colimaUID  string
+	dockerBin  string
 }
 
 // NewSystemBackend returns a darwin probe backend wired to the real
@@ -67,7 +76,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &darwinBackend{
+	b := &darwinBackend{
 		run:               execRun,
 		stat:              statReal,
 		readFile:          os.ReadFile,
@@ -75,7 +84,40 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 		now:               time.Now,
 		expectedLoginUser: expectedLoginUser,
 		logger:            logger,
+		dockerBin:         resolveDockerBin(),
 	}
+	// The auto-login user runs the per-user Colima VM (ADR-038). Resolve its uid
+	// once so docker probes can drop into its session via launchctl asuser. If
+	// the user can't be resolved, leave it empty — the probe falls back to root
+	// Docker Desktop (correct for not-yet-migrated devices).
+	if expectedLoginUser != "" {
+		if u, err := osuser.Lookup(expectedLoginUser); err == nil {
+			b.colimaUser = expectedLoginUser
+			b.colimaUID = u.Uid
+		}
+	}
+	return b
+}
+
+// resolveDockerBin finds the docker CLI by absolute path. Under
+// `launchctl asuser … sudo -u …`, sudo's secure_path won't include Homebrew, so
+// a bare "docker" wouldn't resolve — and Homebrew's arm64 prefix isn't on the
+// LaunchDaemon's PATH either. Prefer the brew (Colima) docker, then Docker
+// Desktop's, then a bare name as a last resort.
+func resolveDockerBin() string {
+	for _, p := range []string{"/opt/homebrew/bin/docker", "/usr/local/bin/docker"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "docker"
+}
+
+// colimaDockerArgv wraps a docker invocation to run inside the auto-login user's
+// Colima session (ADR-038 §2): launchctl asuser <uid> sudo -u <user> <bin> args…
+func colimaDockerArgv(uid, user, dockerBin string, args []string) []string {
+	base := []string{"launchctl", "asuser", uid, "sudo", "-u", user, dockerBin}
+	return append(base, args...)
 }
 
 func execRun(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
@@ -340,16 +382,17 @@ const plateRecognizerContainerName = "plate-recognizer-stream"
 func (b *darwinBackend) probePlateRecognizerContainer(ctx context.Context) healthprobes.Result {
 	res := healthprobes.Result{Name: healthprobes.ProbePlateRecognizerContainer, Details: map[string]any{}}
 
-	stdout, _, err := b.run(ctx, "docker", "ps", "-a",
-		"--filter", "name="+plateRecognizerContainerName, "--format", "{{.Status}}")
-	if err != nil {
+	status, runtime, reachable := b.containerStatus(ctx)
+	if !reachable {
 		res.State = "docker_unreachable"
 		res.Status = healthprobes.StatusRed
 		return res
 	}
 
-	status := strings.TrimSpace(string(stdout))
 	res.Details["docker_status"] = status
+	if runtime != "" {
+		res.Details["runtime"] = runtime
+	}
 	switch {
 	case status == "":
 		res.State = "missing"
@@ -362,6 +405,37 @@ func (b *darwinBackend) probePlateRecognizerContainer(ctx context.Context) healt
 		res.Status = healthprobes.StatusRed
 	}
 	return res
+}
+
+// containerStatus reports the ALPR container's `docker ps` status string, the
+// runtime it was found in, and whether any runtime was reachable. It checks the
+// per-user Colima daemon first (post-migration, ADR-038) and falls back to root
+// Docker Desktop (pre-migration) — so it's correct across the mixed fleet during
+// the Docker→Colima rollout.
+func (b *darwinBackend) containerStatus(ctx context.Context) (status, runtime string, reachable bool) {
+	psArgs := []string{"ps", "-a", "--filter", "name=" + plateRecognizerContainerName, "--format", "{{.Status}}"}
+
+	// 1. Colima (post-migration): drop into the auto-login user's session and
+	//    target the colima context explicitly (don't depend on its default ctx).
+	if b.colimaUser != "" && b.colimaUID != "" && b.dockerBin != "" {
+		argv := colimaDockerArgv(b.colimaUID, b.colimaUser, b.dockerBin, append([]string{"--context", "colima"}, psArgs...))
+		if out, _, err := b.run(ctx, argv[0], argv[1:]...); err == nil {
+			reachable = true
+			if s := strings.TrimSpace(string(out)); s != "" {
+				return s, "colima", true
+			}
+		}
+	}
+
+	// 2. Docker Desktop (pre-migration): plain root docker against its socket.
+	if out, _, err := b.run(ctx, "docker", psArgs...); err == nil {
+		reachable = true
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return s, "docker", true
+		}
+	}
+
+	return "", "", reachable
 }
 
 // probeGUISession reports who owns /dev/console — the macOS convention

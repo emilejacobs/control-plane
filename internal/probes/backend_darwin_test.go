@@ -458,6 +458,61 @@ func TestProbePlateRecognizerContainer(t *testing.T) {
 	}
 }
 
+// TestProbePlateRecognizerContainerColima covers the ADR-038 Colima runtime:
+// the probe must reach the ALPR container in the auto-login user's per-user
+// Colima daemon via `launchctl asuser … docker --context colima`, and fall back
+// to root Docker Desktop for not-yet-migrated devices (mixed-fleet rollout).
+func TestProbePlateRecognizerContainerColima(t *testing.T) {
+	psArgs := "ps -a --filter name=plate-recognizer-stream --format {{.Status}}"
+	colimaCmd := "launchctl asuser 501 sudo -u uknomi /opt/homebrew/bin/docker --context colima " + psArgs
+	dockerCmd := "docker " + psArgs
+
+	newBackend := func(results map[string]cmdResult) *darwinBackend {
+		return &darwinBackend{
+			colimaUser: "uknomi",
+			colimaUID:  "501",
+			dockerBin:  "/opt/homebrew/bin/docker",
+			run:        fakeRunner{results: results}.run,
+		}
+	}
+
+	t.Run("running under colima", func(t *testing.T) {
+		b := newBackend(map[string]cmdResult{colimaCmd: {stdout: "Up 2 days\n"}})
+		res := b.probePlateRecognizerContainer(context.Background())
+		if res.State != "running" || res.Status != healthprobes.StatusGreen {
+			t.Fatalf("State/Status = %q/%v, want running/green", res.State, res.Status)
+		}
+		if res.Details["runtime"] != "colima" {
+			t.Errorf("runtime = %v, want colima", res.Details["runtime"])
+		}
+	})
+
+	t.Run("falls back to docker desktop when colima down", func(t *testing.T) {
+		b := newBackend(map[string]cmdResult{
+			colimaCmd: {err: errors.New("exit status 1")}, // not migrated / VM down
+			dockerCmd: {stdout: "Up 5 days\n"},
+		})
+		res := b.probePlateRecognizerContainer(context.Background())
+		if res.State != "running" || res.Status != healthprobes.StatusGreen {
+			t.Fatalf("State/Status = %q/%v, want running/green", res.State, res.Status)
+		}
+		if res.Details["runtime"] != "docker" {
+			t.Errorf("runtime = %v, want docker", res.Details["runtime"])
+		}
+	})
+
+	t.Run("both runtimes unreachable", func(t *testing.T) {
+		b := newBackend(map[string]cmdResult{
+			colimaCmd: {err: errors.New("exit status 1")},
+			dockerCmd: {err: errors.New("exit status 1")},
+		})
+		res := b.probePlateRecognizerContainer(context.Background())
+		if res.State != "docker_unreachable" || res.Status != healthprobes.StatusRed {
+			t.Fatalf("State/Status = %q/%v, want docker_unreachable/red", res.State, res.Status)
+		}
+	})
+}
+
 func TestProbeAutoLoginCorrupted(t *testing.T) {
 	cases := map[string]fileStat{
 		"world-readable mode": {Mode: 0o644, UID: 0, GID: 0},
