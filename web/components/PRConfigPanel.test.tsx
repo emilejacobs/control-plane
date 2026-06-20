@@ -43,12 +43,11 @@ describe("PRConfigPanel", () => {
 
     // Form seeds from the fetched config (read-only LPR url shown).
     expect(await screen.findByText("rtsp://cam/lpr")).toBeInTheDocument();
-    const region = screen.getByLabelText("Region") as HTMLInputElement;
+    const region = screen.getByLabelText("Region") as HTMLSelectElement;
     await waitFor(() => expect(region.value).toBe("us-az"));
 
-    // Edit region + a webhook flag, then save.
-    await userEvent.clear(region);
-    await userEvent.type(region, "us-ca");
+    // Edit region (dropdown) + a webhook flag, then save.
+    await userEvent.selectOptions(region, "us-ca");
     await userEvent.click(screen.getByLabelText("webhook 0 image"));
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
