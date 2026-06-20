@@ -60,11 +60,23 @@ fi
 AUTH_HDR="Authorization: Bearer $CP_TOKEN"
 
 # ── Build tailscale_ip → device_id map ──────────────────────────────────────
+# The LIST endpoint (GET /devices) omits tailscale_ip — it's only on the
+# per-device record — so resolve each device's detail to build the map.
 echo "=== fetching device list from $CP_API_URL/devices ==="
 devices_resp=$(curl -fsS "${CURL_OPTS[@]}" -H "$AUTH_HDR" "$CP_API_URL/devices" 2>/dev/null) \
   || { echo "❌ GET /devices failed (auth/network)" >&2; exit 1; }
 
-ip_to_id() { printf '%s' "$devices_resp" | jq -r --arg ip "$1" '.devices[] | select(.tailscale_ip == $ip) | .id' | head -1; }
+n_dev=$(printf '%s' "$devices_resp" | jq '.devices | length')
+echo "=== resolving tailscale IPs for $n_dev devices (per-device detail) ==="
+IP_ID_MAP=""   # newline-delimited "<tailscale_ip> <device_id>" rows (bash-3.2 safe)
+while read -r did; do
+  [ -z "$did" ] && continue
+  detail=$(curl -fsS "${CURL_OPTS[@]}" -H "$AUTH_HDR" "$CP_API_URL/devices/$did" 2>/dev/null) || continue
+  tsip=$(printf '%s' "$detail" | jq -r '.tailscale_ip // empty')
+  [ -n "$tsip" ] && IP_ID_MAP="${IP_ID_MAP}${tsip} ${did}"$'\n'
+done < <(printf '%s' "$devices_resp" | jq -r '.devices[].device_id')
+
+ip_to_id() { printf '%s' "$IP_ID_MAP" | awk -v ip="$1" '$1==ip{print $2; exit}'; }
 
 ok=0; skip=0; fail=0
 for f in "$CAPTURE_DIR"/*.config.ini; do
