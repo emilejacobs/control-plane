@@ -302,6 +302,10 @@ func NewBuilderWith(d Deps) *Builder {
 		// agent is wired in a later slice (needs the agent handler first), so
 		// these don't require CmdPublisher.
 		b.Get("/devices/{id}/pr-config", requireAuth(onboarded(requireScope(devices.NewPRConfigGet(d.Registry)))))
+		// Seed CP from a device's existing config.ini (raw body) without pushing
+		// back — one-time migration seeding. No CmdPublisher needed (no push).
+		b.Post("/devices/{id}/pr-config/import",
+			requireAuth(onboarded(requireScope(devices.NewPRConfigImport(d.Registry)))))
 		if d.CmdPublisher != nil {
 			b.Put("/devices/{id}/pr-config",
 				requireAuth(onboarded(requireScope(devices.NewPRConfigPut(d.Registry, d.CmdPublisher)))))

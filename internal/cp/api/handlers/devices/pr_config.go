@@ -13,6 +13,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
 	"github.com/emilejacobs/control-plane/internal/protocol/prconfig"
+	"github.com/emilejacobs/control-plane/internal/protocol/prconfigini"
 )
 
 // PRConfigStore is the persistence side of the Plate Recognizer config handlers
@@ -169,6 +170,51 @@ func publishPRConfigUpdate(ctx context.Context, publisher CmdPublisher, deviceID
 		return err
 	}
 	return publisher.Publish(ctx, "devices/"+deviceID+"/cmd", payload)
+}
+
+// PRConfigImportHandler serves POST /devices/{id}/pr-config/import — seeds CP
+// from a device's existing config.ini WITHOUT pushing back (the device already
+// runs it). Body is the raw config.ini; the CP-managed subset is extracted and
+// upserted. Used once during the Docker→Colima migration to seed CP from the
+// captured configs before any dashboard edit, so the first real PUT doesn't
+// clobber hand-tuned values.
+type PRConfigImportHandler struct{ store PRConfigStore }
+
+func NewPRConfigImport(store PRConfigStore) *PRConfigImportHandler {
+	return &PRConfigImportHandler{store: store}
+}
+
+func (h *PRConfigImportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !deviceExists(w, r, h.store, id) {
+		return
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg, err := prconfigini.Extract(raw)
+	if err != nil {
+		http.Error(w, "parse config.ini: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := prconfig.Validate(cfg); err != nil {
+		http.Error(w, "extracted config invalid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	saved, err := h.store.UpsertPRConfig(r.Context(), id, cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	cams, err := h.store.ListCameras(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// No publish: seeding only populates CP to match what's already on the device.
+	writeJSON(w, http.StatusOK, prConfigResponse{Config: saved, LPRCameraRtspURL: resolveLPRURL(cams)})
 }
 
 // deviceExists writes a 404 (not found / not in scope) or 500 and returns false
