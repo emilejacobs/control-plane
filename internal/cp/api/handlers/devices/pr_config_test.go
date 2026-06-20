@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/handlers/devices"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -21,6 +22,7 @@ type prStore struct {
 	cfgExists map[string]bool
 	cams      map[string][]cameras.Camera
 	upserts   []prconfig.Config
+	applied   []string
 }
 
 func (s *prStore) GetByID(_ context.Context, id string) (registry.Device, error) {
@@ -42,6 +44,10 @@ func (s *prStore) UpsertPRConfig(_ context.Context, id string, c prconfig.Config
 }
 func (s *prStore) ListCameras(_ context.Context, id string) ([]cameras.Camera, error) {
 	return s.cams[id], nil
+}
+func (s *prStore) RecordPRConfigApplied(_ context.Context, id, _ string, _ time.Time) error {
+	s.applied = append(s.applied, id)
+	return nil
 }
 
 const prDev = "11111111-2222-3333-4444-555555555555"
@@ -171,6 +177,11 @@ func TestPRConfigImport(t *testing.T) {
 	}
 	if len(got.Webhooks) != 1 || got.Webhooks[0].Name != "prod" || !got.Webhooks[0].Enabled {
 		t.Errorf("seeded webhooks: %+v", got.Webhooks)
+	}
+	// Seeding must stamp last_applied (the device already runs this) so the
+	// dashboard doesn't show a permanent "Pending".
+	if len(store.applied) != 1 || store.applied[0] != prDev {
+		t.Errorf("import should record applied: %v", store.applied)
 	}
 
 	// Unknown device: 404.
