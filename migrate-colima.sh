@@ -280,10 +280,7 @@ if [ "$already_migrated" -eq 0 ]; then
   fi
 
   # --- 5. Start the VM now + (re)run ALPR under Colima ----------------------
-  # Delete any existing (partial/failed) VM so the network config below applies
-  # cleanly — colima networking is fixed at VM CREATION, not on stop/start.
-  "$COLIMA" delete -f >/dev/null 2>&1 || true
-  echo "  starting Colima VM (cpu=$COLIMA_CPU mem=${COLIMA_MEM}G disk=${COLIMA_DISK}G) — first run downloads the VM image…"
+  echo "  starting Colima VM (cpu=$COLIMA_CPU mem=${COLIMA_MEM}G disk=${COLIMA_DISK}G) — first run downloads the ~320MB VM image…"
   # --network-address + --network-preferred-route: the VZNAT reachable network
   # becomes the VM's default route, which CAN reach the host's directly-connected
   # LAN (the RTSP camera). Without preferred-route the lima usernet default wins
@@ -291,10 +288,25 @@ if [ "$already_migrated" -eq 0 ]; then
   # --gateway-address moves lima's usernet OFF its 192.168.5.0/24 default, which
   # collides with stores whose LAN is 192.168.5.x — there the VM treats the
   # camera as on-link and never reaches it. Shared mode — no socket_vmnet/sudoers.
-  if ! "$COLIMA" start --cpu "$COLIMA_CPU" --memory "$COLIMA_MEM" --disk "$COLIMA_DISK" \
-       --vm-type vz --network-address --network-preferred-route \
-       --gateway-address 192.168.211.2 --mount "$STREAM_DIR:w"; then
-    echo "REMOTE_FAIL colima start (vz needs the uknomi GUI session — check auto-login)"; exit 1
+  #
+  # Retry: the VM qcow2 is fetched from GitHub on first start; at fleet scale that
+  # redirect/download intermittently times out ("server may be slow or
+  # overloaded"). Retry a few times (clean delete first so the network config
+  # applies — colima networking is fixed at VM creation). A final failure trips
+  # the auto-rollback (Docker restarted).
+  colima_started=0
+  for attempt in 1 2 3 4; do
+    "$COLIMA" delete -f >/dev/null 2>&1 || true
+    if "$COLIMA" start --cpu "$COLIMA_CPU" --memory "$COLIMA_MEM" --disk "$COLIMA_DISK" \
+         --vm-type vz --network-address --network-preferred-route \
+         --gateway-address 192.168.211.2 --mount "$STREAM_DIR:w"; then
+      colima_started=1; break
+    fi
+    echo "  ⚠️  colima start attempt $attempt failed (VM image download / GitHub?) — retry in 20s…"
+    sleep 20
+  done
+  if [ "$colima_started" -ne 1 ]; then
+    echo "REMOTE_FAIL colima start failed after retries (VM image download or vz/auto-login)"; exit 1
   fi
   # Point default context at colima for the operator's later manual `docker …`.
   "$DOCKER" context use colima >/dev/null 2>&1 || true
