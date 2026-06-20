@@ -77,7 +77,7 @@ func TestPRConfigGet(t *testing.T) {
 	store := newPRStore()
 	h := devices.NewPRConfigGet(store)
 
-	// Fresh device: defaults (image=true) + resolved LPR url, 200.
+	// Fresh device: empty config + resolved LPR url, 200.
 	rec := doReq(t, h, http.MethodGet, prDev, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET fresh: code %d", rec.Code)
@@ -88,9 +88,6 @@ func TestPRConfigGet(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
-	}
-	if !got.Image {
-		t.Error("fresh config should default image=true")
 	}
 	if got.LPRCameraRtspURL != "rtsp://cam/lpr" {
 		t.Errorf("lpr url = %q, want rtsp://cam/lpr", got.LPRCameraRtspURL)
@@ -107,7 +104,7 @@ func TestPRConfigPut(t *testing.T) {
 	h := devices.NewPRConfigPut(store)
 
 	// Valid PUT: 200, upserted, response carries resolved LPR url.
-	body := `{"camera_id":"0","region":"us-az","caching":false,"image":true,"webhooks":[{"name":"prod","url":"https://api.uknomi.com/x","enabled":true}]}`
+	body := `{"camera_id":"0","region":"us-az","webhooks":[{"name":"prod","url":"https://api.uknomi.com/x","enabled":true,"image":true,"caching":false}]}`
 	rec := doReq(t, h, http.MethodPut, prDev, body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT valid: code %d body %s", rec.Code, rec.Body.String())

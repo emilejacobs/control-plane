@@ -44,12 +44,15 @@ func Validate(c Config) error {
 	return nil
 }
 
-// Webhook is one inline webhook target ([{name,url,enabled}]). The webhook
-// registry (#6) will normalise these later.
+// Webhook is one inline webhook target. image/caching are per-webhook (matching
+// PR's config.ini schema); enabled maps to membership in [cameras].webhook_targets.
+// The webhook registry (#6) will normalise these later.
 type Webhook struct {
 	Name    string `json:"name"`
 	URL     string `json:"url"`
 	Enabled bool   `json:"enabled"`
+	Image   bool   `json:"image"`
+	Caching bool   `json:"caching"`
 }
 
 // Config is the wire shape for a device's CP-managed PR config — used in the
@@ -58,8 +61,6 @@ type Webhook struct {
 type Config struct {
 	CameraID          string     `json:"camera_id"`
 	Region            string     `json:"region"`
-	Caching           bool       `json:"caching"`
-	Image             bool       `json:"image"`
 	Webhooks          []Webhook  `json:"webhooks"`
 	LastAppliedAt     *time.Time `json:"last_applied_at,omitempty"`
 	LastAppliedCorrID string     `json:"last_applied_corr_id,omitempty"`

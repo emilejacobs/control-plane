@@ -29,22 +29,21 @@ func TestRegistryPRConfigGetUpsert(t *testing.T) {
 	in := prconfig.Config{
 		CameraID: "0",
 		Region:   "us-az",
-		Caching:  false,
-		Image:    true,
 		Webhooks: []prconfig.Webhook{
-			{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true},
-			{Name: "pre-prod", URL: "https://preprod-flask.uknomi.com/recognize_vehicle_event", Enabled: false},
+			{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true, Image: true, Caching: false},
+			{Name: "pre-prod", URL: "https://preprod-flask.uknomi.com/recognize_vehicle_event", Enabled: false, Image: false, Caching: true},
 		},
 	}
 	got, err := srv.Registry.UpsertPRConfig(ctx, deviceID, in)
 	if err != nil {
 		t.Fatalf("UpsertPRConfig (insert): %v", err)
 	}
-	if got.Region != "us-az" || got.CameraID != "0" || got.Caching || !got.Image {
+	if got.Region != "us-az" || got.CameraID != "0" {
 		t.Errorf("inserted scalar fields: got %+v", got)
 	}
-	if len(got.Webhooks) != 2 || got.Webhooks[0].Name != "prod" || !got.Webhooks[0].Enabled ||
-		got.Webhooks[1].Name != "pre-prod" || got.Webhooks[1].Enabled {
+	if len(got.Webhooks) != 2 ||
+		got.Webhooks[0].Name != "prod" || !got.Webhooks[0].Enabled || !got.Webhooks[0].Image ||
+		got.Webhooks[1].Name != "pre-prod" || got.Webhooks[1].Enabled || !got.Webhooks[1].Caching {
 		t.Errorf("inserted webhooks: got %+v", got.Webhooks)
 	}
 	if got.LastAppliedAt != nil || got.LastAppliedCorrID != "" {
@@ -60,15 +59,14 @@ func TestRegistryPRConfigGetUpsert(t *testing.T) {
 		t.Errorf("fetched config: got %+v", fetched)
 	}
 
-	// Upsert again (replace): change region + caching, drop a webhook.
+	// Upsert again (replace): change region, drop a webhook.
 	in.Region = "us-ca"
-	in.Caching = true
-	in.Webhooks = []prconfig.Webhook{{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true}}
+	in.Webhooks = []prconfig.Webhook{{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true, Image: true}}
 	got, err = srv.Registry.UpsertPRConfig(ctx, deviceID, in)
 	if err != nil {
 		t.Fatalf("UpsertPRConfig (replace): %v", err)
 	}
-	if got.Region != "us-ca" || !got.Caching {
+	if got.Region != "us-ca" {
 		t.Errorf("replaced scalars: got %+v", got)
 	}
 	if len(got.Webhooks) != 1 || got.Webhooks[0].Name != "prod" {
