@@ -123,6 +123,51 @@ func TestMergeNewWebhookAndCamera(t *testing.T) {
 	}
 }
 
+// TestMergeReordersWebhooks covers a dashboard reorder: webhook ORDER is
+// meaningful in PR's config.ini (webhook_targets + the [[name]] subsection
+// order), so swapping the cfg.Webhooks order must move BOTH the webhook_targets
+// list and the on-disk subsection blocks, while still preserving each webhook's
+// unmodeled keys (header, image_quality).
+func TestMergeReordersWebhooks(t *testing.T) {
+	// realConfig is prod, pre-prod; ask for pre-prod, prod (both enabled).
+	cfg := prconfig.Config{
+		CameraID: "66_3",
+		Region:   "us-az",
+		Webhooks: []prconfig.Webhook{
+			{Name: "pre-prod", URL: "https://preprod-flask.uknomi.com/recognize_vehicle_event", Enabled: true},
+			{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true},
+		},
+	}
+	out, err := Merge([]byte(realConfig), cfg, "rtsp://x")
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	s := string(out)
+
+	// webhook_targets follows the new order.
+	if !strings.Contains(s, "webhook_targets = pre-prod, prod") {
+		t.Errorf("webhook_targets not reordered:\n%s", s)
+	}
+	// The [[pre-prod]] subsection block now precedes [[prod]].
+	pre := strings.Index(s, "[[pre-prod]]")
+	prod := strings.Index(s, "[[prod]]")
+	if pre < 0 || prod < 0 || pre > prod {
+		t.Errorf("subsection blocks not reordered (pre-prod at %d, prod at %d):\n%s", pre, prod, s)
+	}
+	// Unmodeled per-webhook keys still preserved through the reorder.
+	if strings.Count(s, "header = MAC: 1cf64c54a756") != 2 {
+		t.Errorf("webhook headers lost in reorder:\n%s", s)
+	}
+	// Round-trip: Extract sees the new order.
+	got, err := Extract(out)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(got.Webhooks) != 2 || got.Webhooks[0].Name != "pre-prod" || got.Webhooks[1].Name != "prod" {
+		t.Errorf("Extract did not reflect reordered webhooks: %+v", got.Webhooks)
+	}
+}
+
 func TestExtract(t *testing.T) {
 	cfg, err := Extract([]byte(realConfig))
 	if err != nil {
