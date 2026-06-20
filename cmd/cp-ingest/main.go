@@ -71,7 +71,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
@@ -114,7 +113,25 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, dsn)
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("aws config: %w", err)
+	}
+
+	// Live DB-password refresh (db-dsn rotation outage): with DB_PASSWORD_SECRET_ARN
+	// set, new pool connections take the current password from the RDS-managed
+	// secret via BeforeConnect, so a master-password rotation self-heals without a
+	// task restart. Unset (local/dev) → a plain static-DSN pool.
+	var poolOpts storage.PoolOptions
+	if arn := os.Getenv("DB_PASSWORD_SECRET_ARN"); arn != "" {
+		var smOpts []func(*secretsmanager.Options)
+		if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
+			smOpts = append(smOpts, func(o *secretsmanager.Options) { o.BaseEndpoint = aws.String(endpoint) })
+		}
+		poolOpts.Fetcher = storage.NewSecretPasswordFetcher(secretsmanager.NewFromConfig(awsCfg, smOpts...), arn)
+		logger.Info("DB password live-refresh enabled")
+	}
+	pool, err := storage.NewPool(ctx, dsn, poolOpts)
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}
@@ -124,11 +141,6 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	logger.Info("migrations applied")
-
-	awsCfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		return fmt.Errorf("aws config: %w", err)
-	}
 	var sqsOpts []func(*sqs.Options)
 	if endpoint := os.Getenv("AWS_ENDPOINT_URL"); endpoint != "" {
 		logger.Info("AWS_ENDPOINT_URL override active", "endpoint", endpoint)

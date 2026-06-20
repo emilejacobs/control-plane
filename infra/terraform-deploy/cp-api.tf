@@ -80,6 +80,11 @@ resource "aws_ecs_task_definition" "cp_api" {
         # downloads from the captures bucket. Unsetting it disables that route
         # (the list route keeps serving rows).
         { name = "CAPTURES_BUCKET", value = aws_s3_bucket.main["captures"].bucket },
+        # Live DB-password refresh: lets cp-api re-read the rotated master
+        # password from the RDS-managed secret at connect time (pgx
+        # BeforeConnect), so a rotation self-heals without a forced redeploy.
+        # The runtime task role is granted GetSecretValue on this ARN below.
+        { name = "DB_PASSWORD_SECRET_ARN", value = aws_db_instance.main.master_user_secret[0].secret_arn },
       ], local.db_environment)
 
       secrets = [
