@@ -278,12 +278,30 @@ func boolWord(v bool) string {
 	return "no"
 }
 
+// macHeader formats a host MAC as PR Stream's webhook `header` value: the
+// literal "MAC: " followed by the address with separators (`:`/`-`/`.`)
+// stripped and lowercased, e.g. "1C:F6:4C:52:3C:A4" → "MAC: 1cf64c523ca4".
+// Returns "" for an empty MAC so the caller writes no header at all.
+func macHeader(mac string) string {
+	hex := strings.ToLower(strings.Map(func(r rune) rune {
+		switch r {
+		case ':', '-', '.', ' ':
+			return -1
+		}
+		return r
+	}, mac))
+	if hex == "" {
+		return ""
+	}
+	return "MAC: " + hex
+}
+
 // Merge applies the CP-managed fields onto the existing config.ini and returns
 // the new bytes. CP-managed: [cameras].regions, the LPR camera's url under
 // [cameras][[<camera_id>]], and [cameras].webhook_targets + the [webhooks]
 // subsections derived from cfg.Webhooks. Everything else is preserved verbatim,
 // including unmodeled per-webhook keys (header, image_quality, …).
-func Merge(existing []byte, cfg prconfig.Config, lprURL string) ([]byte, error) {
+func Merge(existing []byte, cfg prconfig.Config, lprURL, mac string) ([]byte, error) {
 	doc, err := Parse(existing)
 	if err != nil {
 		return nil, err
@@ -316,6 +334,12 @@ func Merge(existing []byte, cfg prconfig.Config, lprURL string) ([]byte, error) 
 		sub.setKV("name", wh.Name)
 		sub.setKV("image", boolWord(wh.Image))
 		sub.setKV("caching", boolWord(wh.Caching))
+		// Stamp the host's MAC header on webhooks that lack one (PR forwards it
+		// to the recognition endpoint). Set-when-absent: migrated devices already
+		// carry the correct MAC, so we never overwrite a present header.
+		if h := macHeader(mac); h != "" && sub.get("header") == "" {
+			sub.setKV("header", h)
+		}
 		order = append(order, wh.Name)
 		if wh.Enabled {
 			enabled = append(enabled, wh.Name)

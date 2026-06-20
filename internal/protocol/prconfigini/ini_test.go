@@ -47,7 +47,7 @@ func TestMergePreservesAndUpdates(t *testing.T) {
 			{Name: "pre-prod", URL: "https://preprod-flask.uknomi.com/recognize_vehicle_event", Enabled: false, Image: false, Caching: false},
 		},
 	}
-	out, err := Merge([]byte(realConfig), cfg, "rtsp://user:pass@192.168.43.6:554/profile2/media.smp")
+	out, err := Merge([]byte(realConfig), cfg, "rtsp://user:pass@192.168.43.6:554/profile2/media.smp", "")
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestMergeNewWebhookAndCamera(t *testing.T) {
 		Region:   "us-az",
 		Webhooks: []prconfig.Webhook{{Name: "prod", URL: "https://x.com/y", Enabled: true, Image: true}},
 	}
-	out, err := Merge([]byte(base), cfg, "rtsp://cam/0")
+	out, err := Merge([]byte(base), cfg, "rtsp://cam/0", "")
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestMergeReordersWebhooks(t *testing.T) {
 			{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true},
 		},
 	}
-	out, err := Merge([]byte(realConfig), cfg, "rtsp://x")
+	out, err := Merge([]byte(realConfig), cfg, "rtsp://x", "")
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -168,6 +168,65 @@ func TestMergeReordersWebhooks(t *testing.T) {
 	}
 }
 
+// TestMergeSetsMACHeader: a NEW webhook (no header on disk) gets the host's
+// `header = MAC: <mac>`, with the MAC's separators stripped and lowercased.
+func TestMergeSetsMACHeader(t *testing.T) {
+	base := "[cameras]\n    regions = us-az\n[webhooks]\n"
+	cfg := prconfig.Config{
+		CameraID: "0",
+		Region:   "us-az",
+		Webhooks: []prconfig.Webhook{{Name: "prod", URL: "https://x/y", Enabled: true}},
+	}
+	out, err := Merge([]byte(base), cfg, "rtsp://cam/0", "1C:F6:4C:52:3C:A4")
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if !strings.Contains(string(out), "header = MAC: 1cf64c523ca4") {
+		t.Errorf("MAC header not set (colons stripped + lowercased):\n%s", out)
+	}
+}
+
+// TestMergePreservesExistingMACHeader: realConfig's webhooks already carry
+// `header = MAC: 1cf64c54a756`; merging with a DIFFERENT host MAC must not
+// overwrite them (set-when-absent — migrated devices already have the right MAC).
+func TestMergePreservesExistingMACHeader(t *testing.T) {
+	cfg := prconfig.Config{
+		CameraID: "66_3", Region: "us-az",
+		Webhooks: []prconfig.Webhook{
+			{Name: "prod", URL: "https://api-flask.uknomi.com/recognize_vehicle_event", Enabled: true},
+			{Name: "pre-prod", URL: "https://preprod-flask.uknomi.com/recognize_vehicle_event", Enabled: true},
+		},
+	}
+	out, err := Merge([]byte(realConfig), cfg, "rtsp://x", "aa:bb:cc:dd:ee:ff")
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	s := string(out)
+	if strings.Contains(s, "aabbccddeeff") {
+		t.Errorf("existing header overwritten with host MAC:\n%s", s)
+	}
+	if strings.Count(s, "header = MAC: 1cf64c54a756") != 2 {
+		t.Errorf("existing headers not preserved:\n%s", s)
+	}
+}
+
+// TestMergeNoMACSkipsHeader: an empty MAC (resolution failed) writes no header
+// rather than a broken `header = MAC: `.
+func TestMergeNoMACSkipsHeader(t *testing.T) {
+	base := "[cameras]\n    regions = us-az\n[webhooks]\n"
+	cfg := prconfig.Config{
+		CameraID: "0", Region: "us-az",
+		Webhooks: []prconfig.Webhook{{Name: "prod", URL: "https://x/y", Enabled: true}},
+	}
+	out, err := Merge([]byte(base), cfg, "rtsp://cam/0", "")
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if strings.Contains(string(out), "header = MAC:") {
+		t.Errorf("empty MAC should write no header:\n%s", out)
+	}
+}
+
 func TestExtract(t *testing.T) {
 	cfg, err := Extract([]byte(realConfig))
 	if err != nil {
@@ -194,7 +253,7 @@ func TestExtract(t *testing.T) {
 		}
 	}
 	// Round-trip: Extract then Merge back should keep webhook_targets intact.
-	merged, err := Merge([]byte(realConfig), cfg, "rtsp://x")
+	merged, err := Merge([]byte(realConfig), cfg, "rtsp://x", "")
 	if err != nil {
 		t.Fatalf("Merge after Extract: %v", err)
 	}

@@ -42,6 +42,32 @@ func TestPRConfigApplierMergesAndRestarts(t *testing.T) {
 	}
 }
 
+// TestPRConfigApplierStampsMACHeader: the applier threads the resolved host MAC
+// into Merge so a header-less webhook gets `header = MAC: <mac>` (normalised).
+func TestPRConfigApplierStampsMACHeader(t *testing.T) {
+	const existing = "[cameras]\n    regions = us-az\n[webhooks]\n    [[prod]]\n        url = https://x/y\n        name = prod\n        image = no\n"
+	var wrote []byte
+	a := &prConfigApplier{
+		configPath: "/x/config.ini",
+		readFile:   func(string) ([]byte, error) { return []byte(existing), nil },
+		writeFile:  func(_ string, b []byte, _ os.FileMode) error { wrote = b; return nil },
+		resolveMAC: func() (string, error) { return "1C:F6:4C:52:3C:A4", nil },
+		restart:    func(context.Context) error { return nil },
+	}
+	req := prconfig.UpdateRequest{
+		Config: prconfig.Config{
+			CameraID: "0", Region: "us-az",
+			Webhooks: []prconfig.Webhook{{Name: "prod", URL: "https://x/y", Enabled: true}},
+		},
+	}
+	if err := a.Apply(context.Background(), req); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !strings.Contains(string(wrote), "header = MAC: 1cf64c523ca4") {
+		t.Errorf("MAC header not stamped:\n%s", wrote)
+	}
+}
+
 func TestPRConfigApplierNoRunner(t *testing.T) {
 	a := &prConfigApplier{
 		configPath: "/x/config.ini",
