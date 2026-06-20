@@ -1763,6 +1763,24 @@ func (r *Registry) UpsertPRConfig(ctx context.Context, deviceID string, c prconf
 	return got, err
 }
 
+// RecordPRConfigApplied stamps last_applied_at/_corr_id on the device's PR
+// config row when the agent ACKs a pr.config.update (or at import/seed time,
+// since the device already runs the captured config). Clears the dashboard's
+// "Pending" state. No-op (not an error) if the device has no PR config row.
+func (r *Registry) RecordPRConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE device_pr_config
+		SET last_applied_at = $2, last_applied_corr_id = $3, updated_at = now()
+		WHERE device_id = $1
+	`, deviceID, at, correlationID); err != nil {
+		return fmt.Errorf("record pr config applied: %w", err)
+	}
+	return nil
+}
+
 // === Phase 2 Edge UI rework: network scan (issue #3) ===
 
 // NetworkScanRequest is the create-time shape of a per-request row.

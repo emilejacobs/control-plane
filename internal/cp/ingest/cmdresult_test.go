@@ -22,6 +22,7 @@ type recordingApplier struct {
 	logTailCompletes       []registry.LogTailCompletion
 	logTailFailures        []registry.LogTailFailure
 	camerasCalls           []applyArgs
+	prConfigCalls          []applyArgs
 	networkScanCompletes   []registry.NetworkScanCompletion
 	networkScanFailures    []registry.NetworkScanFailure
 	captures               []registry.CaptureInput
@@ -73,6 +74,13 @@ func (r *recordingApplier) FailLogTail(_ context.Context, f registry.LogTailFail
 func (r *recordingApplier) RecordCamerasApplied(_ context.Context, deviceID, correlationID string, at time.Time) error {
 	r.mu.Lock()
 	r.camerasCalls = append(r.camerasCalls, applyArgs{deviceID: deviceID, correlationID: correlationID, at: at})
+	r.mu.Unlock()
+	return r.camerasErr
+}
+
+func (r *recordingApplier) RecordPRConfigApplied(_ context.Context, deviceID, correlationID string, at time.Time) error {
+	r.mu.Lock()
+	r.prConfigCalls = append(r.prConfigCalls, applyArgs{deviceID: deviceID, correlationID: correlationID, at: at})
 	r.mu.Unlock()
 	return r.camerasErr
 }
