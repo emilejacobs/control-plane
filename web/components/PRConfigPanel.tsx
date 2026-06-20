@@ -9,14 +9,8 @@
 import { useEffect, useState } from "react";
 import { useDevicePRConfig, usePutPRConfig } from "../lib/api/hooks";
 import type { PRWebhook } from "../lib/api/devices";
+import { PR_REGIONS } from "../lib/prRegions";
 import { Pill } from "./ui/Pill";
-
-// Common PR region codes as datalist suggestions; the field stays free-text
-// (server validates the format) so an uncommon code isn't blocked.
-const REGION_SUGGESTIONS = [
-  "us-az", "us-ca", "us-co", "us-fl", "us-ga", "us-il",
-  "us-nv", "us-ny", "us-tx", "us-wa", "us-or", "us-nc",
-];
 
 const cellInput: React.CSSProperties = {
   fontSize: 12.5,
@@ -85,17 +79,23 @@ export function PRConfigPanel({ deviceId }: { deviceId: string }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: "8px 12px", alignItems: "center", marginBottom: 14 }}>
         <label htmlFor="pr-region" className="muted">Region</label>
-        <input
+        <select
           id="pr-region"
-          list="pr-region-codes"
           value={region}
           onChange={(e) => setRegion(e.target.value)}
-          placeholder="e.g. us-az"
-          style={{ ...cellInput, maxWidth: 220 }}
-        />
-        <datalist id="pr-region-codes">
-          {REGION_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
-        </datalist>
+          style={{ ...cellInput, maxWidth: 260 }}
+        >
+          {/* Placeholder until a region is chosen (validation rejects empty). */}
+          {region === "" && <option value="">— select region —</option>}
+          {/* Preserve a current value that isn't in the known list (e.g. a
+              non-US code) so editing doesn't silently drop it. */}
+          {region !== "" && !PR_REGIONS.some((r) => r.code === region) && (
+            <option value={region}>{region}</option>
+          )}
+          {PR_REGIONS.map((r) => (
+            <option key={r.code} value={r.code}>{r.label}</option>
+          ))}
+        </select>
 
         <label htmlFor="pr-camera-id" className="muted">Camera ID</label>
         <input

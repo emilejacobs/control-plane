@@ -380,7 +380,6 @@ export default function DevicePage() {
                   marginBottom: 10,
                 }}
               >
-                <ALPRLicenseControl deviceId={id} licenseSet={d.alprLicenseSet} />
                 <SnapshotCadenceControl deviceId={id} cadence={d.snapshotCadence} />
               </div>
               <CamerasPanel
@@ -413,6 +412,15 @@ export default function DevicePage() {
             <div style={{ height: 16 }} />
 
             <Card label="Plate Recognizer">
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  marginBottom: 10,
+                }}
+              >
+                <ALPRLicenseControl deviceId={id} licenseSet={d.alprLicenseSet} />
+              </div>
               <PRConfigPanel deviceId={id} />
             </Card>
             {cameraDialog && (
