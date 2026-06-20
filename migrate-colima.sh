@@ -85,6 +85,13 @@ IMAGE_BASE="platerecognizer/alpr-stream"
 DOCKER_STOPPED=0   # set once we've stopped Docker; gates the auto-rollback
 MIGRATION_OK=0     # set just before success; tells the rollback trap to no-op
 
+# CRITICAL on store Macs that haven't run brew in weeks: a bare `brew install`
+# triggers a full Homebrew auto-update + 30-day cleanup that is slow and floods
+# the SSH session with thousands of lines — on a real link that stalls the
+# connection past the keepalive and SSH drops mid-migration (leaving ALPR down).
+# Disable all of it so `brew install` is a fast, quiet bottle pour.
+export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1
+
 # Size the VM to the host: ALPR inference is CPU-bound, and Docker Desktop gave
 # it ~all the host's cores. Pinning 2 vCPUs tanks recognition health. Leave 2
 # cores for macOS/agent/edge-ui; ~half the RAM, capped 4–8 GiB (ALPR's footprint
@@ -415,6 +422,16 @@ while read -r ip <&3 || [ -n "$ip" ]; do
     fi
   else
     echo "  ❌ FAILED"; fail=$((fail + 1))
+    # Safety net: a failed run may have stopped Docker without the remote
+    # auto-rollback firing (e.g. the SSH session dropped → remote SIGHUP skips
+    # the EXIT trap). Restart the preserved Docker container from a FRESH
+    # connection so a store is never left down. Idempotent: a no-op if Docker is
+    # already up / was never stopped / the device is on Colima.
+    if [ "$ROLLBACK" != "1" ] && [ "$REMOVE_DOCKER" != "1" ]; then
+      if ssh "${SSH_OPTS[@]}" "uknomi@$ip" 'd=/Applications/Docker.app/Contents/Resources/bin/docker; [ -x "$d" ] || exit 0; c=$("$d" context ls --format "{{.Name}}" 2>/dev/null | grep -E "^(desktop-linux|default)$" | head -1); c="${c:-default}"; "$d" context use "$c" >/dev/null 2>&1; "$d" --context "$c" start plate-recognizer-stream >/dev/null 2>&1' 2>/dev/null; then
+        echo "     ↩️  safety-net: ensured Docker container is running"
+      fi
+    fi
   fi
 
   # Seed-capture the live config.ini (skip on rollback).
