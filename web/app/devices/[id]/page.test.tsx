@@ -20,6 +20,14 @@ beforeEach(() => {
   // RequireAuth bounces to /login when no tokens are set; these tests
   // exercise the page as it appears to a signed-in operator.
   setTokens({ accessToken: "test-access", refreshToken: "test-refresh" });
+  // Default empty PR config so the Plate Recognizer panel loads cleanly (no
+  // error alert) in page tests that don't exercise it; individual tests can
+  // override. Keeps the panel from polluting unrelated alert assertions.
+  server.use(
+    http.get(`${API_BASE}/devices/:id/pr-config`, () =>
+      HttpResponse.json({ camera_id: "", region: "", webhooks: [], lpr_camera_rtsp_url: "", last_applied_at: null }),
+    ),
+  );
   return () => clearTokens();
 });
 

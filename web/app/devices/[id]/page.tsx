@@ -29,6 +29,7 @@ import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
 import { HealthPanel } from "../../../components/HealthPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
+import { PRConfigPanel } from "../../../components/PRConfigPanel";
 import { SnapshotCadenceControl } from "../../../components/SnapshotCadenceControl";
 import { ALPRLicenseControl } from "../../../components/ALPRLicenseControl";
 import { CommissionButton } from "../../../components/CommissionButton";
@@ -407,6 +408,12 @@ export default function DevicePage() {
                     : undefined
                 }
               />
+            </Card>
+
+            <div style={{ height: 16 }} />
+
+            <Card label="Plate Recognizer">
+              <PRConfigPanel deviceId={id} />
             </Card>
             {cameraDialog && (
               <CameraDialog

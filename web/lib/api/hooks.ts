@@ -20,7 +20,7 @@ import {
   type CreateOperatorInput,
   type UpdateOperatorInput,
 } from "./operators";
-import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence, setALPRLicense, commissionDevice } from "./devices";
+import { getDevices, getDevice, getCameras, getHealthProbes, getNetworkScan, setSnapshotCadence, setALPRLicense, commissionDevice, getPRConfig, putPRConfig, type PRConfigInput } from "./devices";
 import type { SnapshotCadence } from "./devices";
 import {
   getPRTokenStatus,
@@ -263,6 +263,24 @@ export function useSetALPRLicense(deviceId: string) {
   return useMutation({
     mutationFn: (license: string) => setALPRLicense(deviceId, license),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["device", deviceId] }),
+  });
+}
+
+// Plate Recognizer per-device config (#5). The query feeds the edit form; the
+// mutation PUTs (which also pushes pr.config.update to the device) and
+// invalidates so the "pending → applied" state refreshes.
+export function useDevicePRConfig(deviceId: string) {
+  return useQuery({
+    queryKey: ["pr-config", deviceId],
+    queryFn: () => getPRConfig(deviceId),
+  });
+}
+
+export function usePutPRConfig(deviceId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PRConfigInput) => putPRConfig(deviceId, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-config", deviceId] }),
   });
 }
 
