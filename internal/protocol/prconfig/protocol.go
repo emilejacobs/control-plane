@@ -55,6 +55,14 @@ type Webhook struct {
 	Caching bool   `json:"caching"`
 }
 
+// UpdateRequest is the pr.config.update cmd payload (CP → agent): the
+// CP-managed config plus the CP-resolved LPR camera RTSP URL, embedded so the
+// agent needn't consult the cameras inventory (ADR-030 §3).
+type UpdateRequest struct {
+	Config
+	LPRCameraRtspURL string `json:"lpr_camera_rtsp_url"`
+}
+
 // Config is the wire shape for a device's CP-managed PR config — used in the
 // GET/PUT API bodies. LastAppliedAt/LastAppliedCorrID are read-only audit
 // fields the registry stamps on apply-ack (set by the agent round-trip).
