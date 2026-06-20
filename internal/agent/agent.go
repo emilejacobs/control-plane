@@ -26,6 +26,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/handlers/heartbeat"
 	"github.com/emilejacobs/control-plane/internal/handlers/logtail"
 	"github.com/emilejacobs/control-plane/internal/handlers/networkscan"
+	"github.com/emilejacobs/control-plane/internal/handlers/prconfigupdate"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicerestart"
 	"github.com/emilejacobs/control-plane/internal/handlers/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/handlers/snapshotconfig"
@@ -317,6 +318,13 @@ func New(cfg Config, transport Transport, opts ...Option) (*Agent, error) {
 	// ALPR devices, start the Plate Recognizer container via the per-user
 	// Colima runner. Always registered — every assigned device is commissioned.
 	a.dispatcher.Register("commission", commissionhandler.New(newCommissionApplier(cfg.AutoLoginUser)))
+
+	// pr.config.update (#5): merge CP-managed Plate Recognizer fields into the
+	// on-disk config.ini and bounce the container via the Colima runner. Always
+	// registered (ALPR-only devices receive it; others never get the cmd). The
+	// stream dir is the same bind-mount the container module uses (ADR-038).
+	a.dispatcher.Register("pr.config.update", prconfigupdate.New(
+		newPRConfigApplier("/usr/local/etc/plate-recognizer/stream", cfg.AutoLoginUser)))
 
 	// Phase 2 Edge UI rework (issue #2): cameras.update handler.
 	// Registered when a cameras file path is configured. Empty path
