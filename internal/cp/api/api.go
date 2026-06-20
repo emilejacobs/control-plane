@@ -295,6 +295,14 @@ func NewBuilderWith(d Deps) *Builder {
 			b.Delete("/devices/{id}/cameras/{camera_id}",
 				requireAuth(onboarded(requireScope(devices.NewCameraDelete(d.Registry, d.CmdPublisher)))))
 		}
+		// Plate Recognizer per-device config (issue #5). Read + persist the
+		// editable subset (region/camera_id/caching/image/webhooks); the GET
+		// also resolves the read-only LPR camera URL from the cameras
+		// inventory. Same gates as cameras. The pr.config.update push to the
+		// agent is wired in a later slice (needs the agent handler first), so
+		// these don't require CmdPublisher.
+		b.Get("/devices/{id}/pr-config", requireAuth(onboarded(requireScope(devices.NewPRConfigGet(d.Registry)))))
+		b.Put("/devices/{id}/pr-config", requireAuth(onboarded(requireScope(devices.NewPRConfigPut(d.Registry)))))
 		// Phase 2 slice 2: PUT /devices/{id}/service-config. Requires
 		// auth + TOTP + site scope (same gates as the read surface).
 		// Skipped silently when CmdPublisher is nil — keeps tests that
