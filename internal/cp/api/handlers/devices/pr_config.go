@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
+	"github.com/emilejacobs/control-plane/internal/envelope"
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
 	"github.com/emilejacobs/control-plane/internal/protocol/prconfig"
 )
@@ -82,11 +84,17 @@ func (h *PRConfigGetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // PRConfigPutHandler serves PUT /devices/{id}/pr-config — validates + upserts
 // the editable subset. Persist-only; the pr.config.update push to the agent is
-// wired in a later slice once the agent handler exists.
-type PRConfigPutHandler struct{ store PRConfigStore }
+// On success publishes a pr.config.update cmd carrying the saved config + the
+// CP-resolved LPR camera url, so the agent merges it into config.ini and bounces
+// the container.
+type PRConfigPutHandler struct {
+	store     PRConfigStore
+	publisher CmdPublisher
+	newCmdID  func() string
+}
 
-func NewPRConfigPut(store PRConfigStore) *PRConfigPutHandler {
-	return &PRConfigPutHandler{store: store}
+func NewPRConfigPut(store PRConfigStore, publisher CmdPublisher) *PRConfigPutHandler {
+	return &PRConfigPutHandler{store: store, publisher: publisher, newCmdID: newRandomID}
 }
 
 func (h *PRConfigPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +135,40 @@ func (h *PRConfigPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, prConfigResponse{Config: saved, LPRCameraRtspURL: resolveLPRURL(cams)})
+	lprURL := resolveLPRURL(cams)
+
+	// Push pr.config.update with the saved config + resolved LPR url. Persistence
+	// already succeeded; a publish failure surfaces 502 so the operator retries
+	// (dashboard pattern: save, then poll last_applied for "applied").
+	if err := publishPRConfigUpdate(r.Context(), h.publisher, id, saved, lprURL, h.newCmdID); err != nil {
+		http.Error(w, "publish pr.config.update: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, prConfigResponse{Config: saved, LPRCameraRtspURL: lprURL})
+}
+
+// publishPRConfigUpdate publishes a pr.config.update cmd on devices/{id}/cmd
+// carrying the desired config + the CP-resolved LPR camera url.
+func publishPRConfigUpdate(ctx context.Context, publisher CmdPublisher, deviceID string, cfg prconfig.Config, lprURL string, newCmdID func() string) error {
+	args, err := json.Marshal(prconfig.UpdateRequest{Config: cfg, LPRCameraRtspURL: lprURL})
+	if err != nil {
+		return err
+	}
+	correlationID := cplog.CorrelationIDFromContext(ctx)
+	if correlationID == "" {
+		correlationID = newCmdID()
+	}
+	cmd := envelope.Command{
+		Type:          "pr.config.update",
+		CorrelationID: correlationID,
+		CommandID:     newCmdID(),
+		Args:          args,
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	return publisher.Publish(ctx, "devices/"+deviceID+"/cmd", payload)
 }
 
 // deviceExists writes a 404 (not found / not in scope) or 500 and returns false
