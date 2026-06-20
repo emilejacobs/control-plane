@@ -195,6 +195,40 @@ func detectPrimarySubnet() (string, error) {
 	return "", errors.New("no suitable IPv4 interface")
 }
 
+// primaryMAC returns the host's primary interface MAC as a colon-separated
+// string (e.g. "1c:f6:4c:52:3c:a4") — the same interface detectPrimarySubnet
+// picks: the first up, non-loopback interface carrying a private RFC1918 IPv4
+// address (en0 on a typical Mac mini). prconfigini.macHeader normalises the
+// format; this only has to identify the right NIC. Errors when none is found.
+func primaryMAC() (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if len(iface.HardwareAddr) == 0 {
+			continue // virtual/usernet interfaces have no MAC
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if _, ok := subnetCandidate(ipnet); ok {
+				return iface.HardwareAddr.String(), nil
+			}
+		}
+	}
+	return "", errors.New("no suitable interface with a MAC")
+}
+
 // subnetCandidate returns the /24 CIDR for an *net.IPNet whose IP is
 // a private RFC1918 IPv4 address, or "", false otherwise. macOS's
 // iface.Addrs() returns IPv4 addresses as 16-byte IPv4-mapped slices;
