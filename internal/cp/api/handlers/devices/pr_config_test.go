@@ -99,9 +99,18 @@ func TestPRConfigGet(t *testing.T) {
 	}
 }
 
+// capturePublisher records published topics for assertions.
+type capturePublisher struct{ topics []string }
+
+func (p *capturePublisher) Publish(_ context.Context, topic string, _ []byte) error {
+	p.topics = append(p.topics, topic)
+	return nil
+}
+
 func TestPRConfigPut(t *testing.T) {
 	store := newPRStore()
-	h := devices.NewPRConfigPut(store)
+	pub := &capturePublisher{}
+	h := devices.NewPRConfigPut(store, pub)
 
 	// Valid PUT: 200, upserted, response carries resolved LPR url.
 	body := `{"camera_id":"0","region":"us-az","webhooks":[{"name":"prod","url":"https://api.uknomi.com/x","enabled":true,"image":true,"caching":false}]}`
@@ -111,6 +120,9 @@ func TestPRConfigPut(t *testing.T) {
 	}
 	if len(store.upserts) != 1 || store.upserts[0].Region != "us-az" {
 		t.Errorf("upsert not recorded correctly: %+v", store.upserts)
+	}
+	if len(pub.topics) != 1 || pub.topics[0] != "devices/"+prDev+"/cmd" {
+		t.Errorf("expected one publish to the device cmd topic, got %v", pub.topics)
 	}
 	var got struct {
 		LPRCameraRtspURL string `json:"lpr_camera_rtsp_url"`
