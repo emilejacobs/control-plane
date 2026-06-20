@@ -20,6 +20,7 @@ type prConfigApplier struct {
 	configPath string
 	readFile   func(string) ([]byte, error)
 	writeFile  func(string, []byte, os.FileMode) error
+	resolveMAC func() (string, error)          // host primary MAC for the webhook header; nil/err tolerated
 	restart    func(ctx context.Context) error // nil when no auto-login user (ALPR unavailable)
 }
 
@@ -28,7 +29,13 @@ func (a *prConfigApplier) Apply(ctx context.Context, req prconfig.UpdateRequest)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", a.configPath, err)
 	}
-	merged, err := prconfigini.Merge(existing, req.Config, req.LPRCameraRtspURL)
+	// Resolve the host MAC for the webhook header best-effort: a failure (or no
+	// resolver) yields "", and Merge then leaves the header untouched.
+	var mac string
+	if a.resolveMAC != nil {
+		mac, _ = a.resolveMAC()
+	}
+	merged, err := prconfigini.Merge(existing, req.Config, req.LPRCameraRtspURL, mac)
 	if err != nil {
 		return fmt.Errorf("merge config.ini: %w", err)
 	}
@@ -49,6 +56,7 @@ func newPRConfigApplier(streamDir, autoLoginUser string) *prConfigApplier {
 		configPath: filepath.Join(streamDir, "config.ini"),
 		readFile:   os.ReadFile,
 		writeFile:  os.WriteFile,
+		resolveMAC: primaryMAC,
 	}
 	if autoLoginUser != "" {
 		if runner, err := container.NewAsUserRunner(autoLoginUser); err == nil {
