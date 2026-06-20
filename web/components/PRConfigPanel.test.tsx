@@ -59,6 +59,38 @@ describe("PRConfigPanel", () => {
     ]);
   });
 
+  it("reorders webhooks with the up/down controls and PUTs the new order", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.get(`${API_BASE}/devices/${DEV}/pr-config`, () =>
+        HttpResponse.json({
+          camera_id: "66_3",
+          region: "us-az",
+          webhooks: [
+            { name: "prod", url: "https://api.uknomi.com/prod", enabled: true, image: false, caching: false },
+            { name: "pre-prod", url: "https://api.uknomi.com/pre", enabled: true, image: false, caching: false },
+          ],
+          lpr_camera_rtsp_url: "rtsp://cam/lpr",
+          last_applied_at: "2026-06-20T00:00:00Z",
+        }),
+      ),
+      http.put(`${API_BASE}/devices/${DEV}/pr-config`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...body, last_applied_at: null });
+      }),
+    );
+
+    renderWithClient(<PRConfigPanel deviceId={DEV} />);
+    expect(await screen.findByText("rtsp://cam/lpr")).toBeInTheDocument();
+
+    // Move the first webhook (prod) down so pre-prod leads.
+    await userEvent.click(screen.getByRole("button", { name: /move webhook 0 down/i }));
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect((body!.webhooks as Array<{ name: string }>).map((w) => w.name)).toEqual(["pre-prod", "prod"]);
+  });
+
   it("shows an error when the config fails to load", async () => {
     server.use(
       http.get(`${API_BASE}/devices/${DEV}/pr-config`, () =>

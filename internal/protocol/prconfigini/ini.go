@@ -121,6 +121,44 @@ func (s *Section) ensureSub(n string) *Section {
 	return sec
 }
 
+// reorderSubs reorders s's direct child sections to match the given name order.
+// Names in order that don't exist are skipped; existing sections whose name
+// isn't in order keep their relative position at the end. Non-section items
+// (section-level scalars, blank/comment lines) are kept ahead of the sections in
+// their original order. Used so a dashboard webhook reorder moves the [[name]]
+// blocks, not just webhook_targets.
+func (s *Section) reorderSubs(order []string) {
+	var lead []item
+	byName := map[string]*Section{}
+	var original []*Section
+	for _, it := range s.items {
+		if it.section != nil {
+			byName[it.section.name] = it.section
+			original = append(original, it.section)
+		} else {
+			lead = append(lead, it)
+		}
+	}
+	seen := map[string]bool{}
+	var ordered []*Section
+	for _, n := range order {
+		if sec := byName[n]; sec != nil && !seen[n] {
+			ordered = append(ordered, sec)
+			seen[n] = true
+		}
+	}
+	for _, sec := range original { // preserve any sections not named in order
+		if !seen[sec.name] {
+			ordered = append(ordered, sec)
+			seen[sec.name] = true
+		}
+	}
+	s.items = lead
+	for _, sec := range ordered {
+		s.items = append(s.items, item{section: sec})
+	}
+}
+
 // setKV updates the value of key in place, or appends it before the first nested
 // subsection (configobj requires a section's scalars to precede its subsections).
 func (s *Section) setKV(key, value string) {
@@ -267,7 +305,7 @@ func Merge(existing []byte, cfg prconfig.Config, lprURL string) ([]byte, error) 
 
 	// Webhooks: webhook_targets lists the enabled ones; each [[name]] subsection
 	// gets url/name/image/caching (preserving header/image_quality/etc.).
-	var enabled []string
+	var enabled, order []string
 	webhooks := doc.root.ensureSub("webhooks")
 	for _, wh := range cfg.Webhooks {
 		if wh.Name == "" {
@@ -278,10 +316,14 @@ func Merge(existing []byte, cfg prconfig.Config, lprURL string) ([]byte, error) 
 		sub.setKV("name", wh.Name)
 		sub.setKV("image", boolWord(wh.Image))
 		sub.setKV("caching", boolWord(wh.Caching))
+		order = append(order, wh.Name)
 		if wh.Enabled {
 			enabled = append(enabled, wh.Name)
 		}
 	}
+	// Webhook ORDER is meaningful to PR Stream — move the [[name]] subsection
+	// blocks to match cfg.Webhooks (webhook_targets already follows cfg order).
+	webhooks.reorderSubs(order)
 	cameras.setKV("webhook_targets", strings.Join(enabled, ", "))
 
 	return doc.Bytes(), nil

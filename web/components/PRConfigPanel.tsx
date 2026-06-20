@@ -56,6 +56,16 @@ export function PRConfigPanel({ deviceId }: { deviceId: string }) {
   const addWebhook = () =>
     setWebhooks((ws) => [...ws, { name: "", url: "", enabled: true, image: false, caching: false }]);
   const removeWebhook = (i: number) => setWebhooks((ws) => ws.filter((_, j) => j !== i));
+  // Webhook order is meaningful — it round-trips into config.ini's
+  // webhook_targets and [[name]] subsection order. dir = -1 up, +1 down.
+  const moveWebhook = (i: number, dir: -1 | 1) =>
+    setWebhooks((ws) => {
+      const j = i + dir;
+      if (j < 0 || j >= ws.length) return ws;
+      const next = ws.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
 
   const onSave = () => put.mutate({ cameraId, region, webhooks });
 
@@ -130,6 +140,7 @@ export function PRConfigPanel({ deviceId }: { deviceId: string }) {
               <th style={{ padding: "4px 6px", width: 70 }}>Enabled</th>
               <th style={{ padding: "4px 6px", width: 60 }}>Image</th>
               <th style={{ padding: "4px 6px", width: 70 }}>Caching</th>
+              <th style={{ padding: "4px 6px", width: 56 }}>Order</th>
               <th style={{ padding: "4px 6px", width: 30 }}></th>
             </tr>
           </thead>
@@ -155,6 +166,18 @@ export function PRConfigPanel({ deviceId }: { deviceId: string }) {
                 <td style={{ padding: "4px 6px", textAlign: "center" }}>
                   <input type="checkbox" aria-label={`webhook ${i} caching`} checked={w.caching}
                     onChange={(e) => setWebhook(i, { caching: e.target.checked })} />
+                </td>
+                <td style={{ padding: "4px 6px", textAlign: "center", whiteSpace: "nowrap" }}>
+                  <button type="button" aria-label={`move webhook ${i} up`} title="Move up"
+                    onClick={() => moveWebhook(i, -1)} disabled={i === 0}
+                    style={{ fontSize: 12, padding: "2px 5px", marginRight: 2, background: "transparent", border: "1px solid var(--line, #ccc)", borderRadius: 4, cursor: i === 0 ? "default" : "pointer", opacity: i === 0 ? 0.35 : 1 }}>
+                    ↑
+                  </button>
+                  <button type="button" aria-label={`move webhook ${i} down`} title="Move down"
+                    onClick={() => moveWebhook(i, 1)} disabled={i === webhooks.length - 1}
+                    style={{ fontSize: 12, padding: "2px 5px", background: "transparent", border: "1px solid var(--line, #ccc)", borderRadius: 4, cursor: i === webhooks.length - 1 ? "default" : "pointer", opacity: i === webhooks.length - 1 ? 0.35 : 1 }}>
+                    ↓
+                  </button>
                 </td>
                 <td style={{ padding: "4px 6px", textAlign: "right" }}>
                   <button type="button" aria-label={`remove webhook ${i}`} onClick={() => removeWebhook(i)}
