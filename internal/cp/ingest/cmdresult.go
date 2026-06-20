@@ -70,6 +70,9 @@ type CmdResultWriter interface {
 	// Edge UI rework (issue #2): cameras.update ACK stamps the
 	// cameras_last_applied_* mirror columns on the device row.
 	RecordCamerasApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
+	// Issue #5: pr.config.update ACK stamps last_applied_* on the device's PR
+	// config row (clears the dashboard "Pending" state).
+	RecordPRConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
 	// Edge UI rework (issue #3): network.scan success — updates the
 	// pending device_network_scans row with the agent's hosts list.
 	CompleteNetworkScan(ctx context.Context, c registry.NetworkScanCompletion) error
@@ -135,6 +138,8 @@ func (i *CmdResultIngester) Handle(ctx context.Context, r CmdResult) error {
 		return i.handleLogTail(ctx, r, log)
 	case "cameras.update":
 		return i.handleCamerasUpdate(ctx, r, log)
+	case "pr.config.update":
+		return i.handlePRConfigUpdate(ctx, r, log)
 	case "network.scan":
 		return i.handleNetworkScan(ctx, r, log)
 	case upload.TypeRequest:
@@ -288,6 +293,37 @@ func (i *CmdResultIngester) handleCamerasUpdate(ctx context.Context, r CmdResult
 		return err
 	}
 	log.Info("cameras.update applied",
+		"device_id", r.DeviceID,
+		"correlation_id", r.CorrelationID,
+	)
+	return nil
+}
+
+// handlePRConfigUpdate stamps last_applied_* on the device's PR config row when
+// the agent ACKs a pr.config.update (issue #5). Failure ACKs log + return nil
+// (the dashboard surfaces the missing apply timestamp as "Pending").
+func (i *CmdResultIngester) handlePRConfigUpdate(ctx context.Context, r CmdResult, log *slog.Logger) error {
+	if !r.Success {
+		code, message := "", ""
+		if r.Error != nil {
+			code = r.Error.Code
+			message = r.Error.Message
+		}
+		log.Warn("pr.config.update ACK failure",
+			"device_id", r.DeviceID,
+			"correlation_id", r.CorrelationID,
+			"error_code", code,
+			"error_message", message,
+		)
+		return nil
+	}
+	if err := i.writer.RecordPRConfigApplied(ctx, r.DeviceID, r.CorrelationID, i.now()); err != nil {
+		if errors.Is(err, registry.ErrDeviceNotFound) {
+			return sqsconsumer.Poison(err)
+		}
+		return err
+	}
+	log.Info("pr.config.update applied",
 		"device_id", r.DeviceID,
 		"correlation_id", r.CorrelationID,
 	)

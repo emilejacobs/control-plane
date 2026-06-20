@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/cplog"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -23,6 +24,7 @@ type PRConfigStore interface {
 	GetPRConfig(ctx context.Context, deviceID string) (prconfig.Config, bool, error)
 	UpsertPRConfig(ctx context.Context, deviceID string, c prconfig.Config) (prconfig.Config, error)
 	ListCameras(ctx context.Context, deviceID string) ([]cameras.Camera, error)
+	RecordPRConfigApplied(ctx context.Context, deviceID, correlationID string, at time.Time) error
 }
 
 // prConfigResponse is the GET/PUT body: the CP-managed config plus the
@@ -208,6 +210,13 @@ func (h *PRConfigImportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The device already runs this config (we extracted it from there), so stamp
+	// it applied — otherwise the dashboard shows a permanent "Pending".
+	if err := h.store.RecordPRConfigApplied(r.Context(), id, "seed-import", time.Now()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	saved, _, _ = h.store.GetPRConfig(r.Context(), id)
 	cams, err := h.store.ListCameras(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

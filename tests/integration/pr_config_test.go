@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/protocol/prconfig"
 )
@@ -71,5 +72,21 @@ func TestRegistryPRConfigGetUpsert(t *testing.T) {
 	}
 	if len(got.Webhooks) != 1 || got.Webhooks[0].Name != "prod" {
 		t.Errorf("replaced webhooks: got %+v", got.Webhooks)
+	}
+
+	// RecordPRConfigApplied stamps last_applied_* (clears the dashboard
+	// "Pending"); GetPRConfig surfaces them. Upsert must NOT clear them.
+	if got.LastAppliedAt != nil {
+		t.Errorf("last_applied_at should be nil before an apply-ack: %v", got.LastAppliedAt)
+	}
+	if err := srv.Registry.RecordPRConfigApplied(ctx, deviceID, "corr-xyz", time.Now()); err != nil {
+		t.Fatalf("RecordPRConfigApplied: %v", err)
+	}
+	after, _, err := srv.Registry.GetPRConfig(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("GetPRConfig after apply: %v", err)
+	}
+	if after.LastAppliedAt == nil || after.LastAppliedCorrID != "corr-xyz" {
+		t.Errorf("apply not stamped: at=%v corr=%q", after.LastAppliedAt, after.LastAppliedCorrID)
 	}
 }
