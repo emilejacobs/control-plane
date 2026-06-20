@@ -50,7 +50,7 @@ if [ -z "$CP_TOKEN" ]; then
   [ -n "$CP_PASSWORD" ] || { read -rs -p "Password: " CP_PASSWORD; echo; }
   [ -n "$CP_TOTP" ]     || read -r  -p "TOTP code: " CP_TOTP
   login_body=$(jq -nc --arg e "$CP_EMAIL" --arg p "$CP_PASSWORD" --arg t "$CP_TOTP" \
-    '{email:$e, password:$p, totp:$t}')
+    '{email:$e, password:$p, totp_code:$t, recovery_code:""}')
   login_resp=$(curl -fsS "${CURL_OPTS[@]}" -X POST "$CP_API_URL/auth/login" \
     -H 'Content-Type: application/json' -d "$login_body" 2>/dev/null) \
     || { echo "❌ login failed (email / password / TOTP)" >&2; exit 1; }
