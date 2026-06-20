@@ -148,8 +148,10 @@ while read -r ip <&3 || [ -n "$ip" ]; do
   fi
 
   rec="$(ssh "${SSH_OPTS[@]}" "uknomi@$ip" 'bash -s' <<< "$REMOTE_RECOVER" 2>/dev/null)"
-  license="$(printf '%s\n' "$rec" | sed -n 's/^LICENSE_KEY=//p' | head -1)"
-  token="$(printf '%s\n' "$rec" | sed -n 's/^TOKEN=//p' | head -1)"
+  # tr -d whitespace also strips any stray CR/blank the SSH channel appended; a
+  # license/token never contains whitespace, so this is lossless.
+  license="$(printf '%s\n' "$rec" | sed -n 's/^LICENSE_KEY=//p' | head -1 | tr -d '[:space:]')"
+  token="$(printf '%s\n' "$rec" | sed -n 's/^TOKEN=//p' | head -1 | tr -d '[:space:]')"
   if [ -z "$license" ]; then
     echo "⏭️  no ALPR license recovered (NO_CREDS / SSH) — skip"; skip=$((skip + 1)); continue
   fi
@@ -162,13 +164,20 @@ while read -r ip <&3 || [ -n "$ip" ]; do
   fi
 
   body="$(LICENSE="$license" jq -nc '{license: env.LICENSE}')"
-  code="$(printf '%s' "$body" | curl -sS "${CURL_OPTS[@]}" -o /dev/null -w '%{http_code}' \
+  if [ -z "$body" ]; then
+    echo "❌ could not JSON-encode license (len ${#license}) → device $id — skip"; fail=$((fail + 1)); continue
+  fi
+  # CP requires an Idempotency-Key on mutating requests; a fresh key per run
+  # applies the value (a replay of the same key would return the prior result).
+  idem="seed-alpr-lic-$ip-$(jot -r 1 100000 999999 2>/dev/null || echo $RANDOM)"
+  resp="$(printf '%s' "$body" | curl -sS "${CURL_OPTS[@]}" -w $'\n%{http_code}' \
     -X PUT "$CP_API_URL/devices/$id/alpr-license" \
-    -H "$AUTH_HDR" -H 'Content-Type: application/json' --data @- 2>/dev/null)"
+    -H "$AUTH_HDR" -H 'Content-Type: application/json' -H "Idempotency-Key: $idem" --data @- 2>&1)"
+  code="${resp##*$'\n'}"; rbody="${resp%$'\n'*}"
   if [ "$code" = "200" ]; then
     echo "✅ license …${license: -4} → device $id"; ok=$((ok + 1))
   else
-    echo "❌ PUT alpr-license failed (HTTP $code) → device $id"; fail=$((fail + 1))
+    echo "❌ PUT alpr-license failed (HTTP $code: ${rbody//$'\n'/ }) → device $id"; fail=$((fail + 1))
   fi
 done 3< "$IPS_FILE"
 
@@ -180,13 +189,15 @@ if [ "$SKIP_TOKEN" != "1" ] && [ "$NEED_TOKEN" = "1" ]; then
     echo "[dry-run] would PUT account PR token …${ACCOUNT_TOKEN: -4} → /settings/pr-token"
   else
     tbody="$(TOKEN="$ACCOUNT_TOKEN" jq -nc '{token: env.TOKEN}')"
-    tcode="$(printf '%s' "$tbody" | curl -sS "${CURL_OPTS[@]}" -o /dev/null -w '%{http_code}' \
+    tidem="seed-alpr-token-$(jot -r 1 100000 999999 2>/dev/null || echo $RANDOM)"
+    tresp="$(printf '%s' "$tbody" | curl -sS "${CURL_OPTS[@]}" -w $'\n%{http_code}' \
       -X PUT "$CP_API_URL/settings/pr-token" \
-      -H "$AUTH_HDR" -H 'Content-Type: application/json' --data @- 2>/dev/null)"
+      -H "$AUTH_HDR" -H 'Content-Type: application/json' -H "Idempotency-Key: $tidem" --data @- 2>&1)"
+    tcode="${tresp##*$'\n'}"; trbody="${tresp%$'\n'*}"
     if [ "$tcode" = "200" ]; then
       echo "✅ account PR token …${ACCOUNT_TOKEN: -4} → /settings/pr-token"
     else
-      echo "❌ PUT pr-token failed (HTTP $tcode)"
+      echo "❌ PUT pr-token failed (HTTP $tcode: ${trbody//$'\n'/ })"
     fi
   fi
 fi
