@@ -302,7 +302,10 @@ func NewBuilderWith(d Deps) *Builder {
 		// agent is wired in a later slice (needs the agent handler first), so
 		// these don't require CmdPublisher.
 		b.Get("/devices/{id}/pr-config", requireAuth(onboarded(requireScope(devices.NewPRConfigGet(d.Registry)))))
-		b.Put("/devices/{id}/pr-config", requireAuth(onboarded(requireScope(devices.NewPRConfigPut(d.Registry)))))
+		if d.CmdPublisher != nil {
+			b.Put("/devices/{id}/pr-config",
+				requireAuth(onboarded(requireScope(devices.NewPRConfigPut(d.Registry, d.CmdPublisher)))))
+		}
 		// Phase 2 slice 2: PUT /devices/{id}/service-config. Requires
 		// auth + TOTP + site scope (same gates as the read surface).
 		// Skipped silently when CmdPublisher is nil — keeps tests that
