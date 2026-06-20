@@ -723,3 +723,72 @@ export async function setALPRLicense(id: string, license: string): Promise<void>
     throw new ApiError(res.status, "failed to update ALPR license");
   }
 }
+
+// ── Plate Recognizer per-device config (issue #5) ───────────────────────────
+
+export interface PRWebhook {
+  name: string;
+  url: string;
+  enabled: boolean;
+  image: boolean;
+  caching: boolean;
+}
+
+// PRConfig is GET/PUT /devices/{id}/pr-config. lprCameraRtspUrl is read-only
+// (resolved from the cameras inventory); lastAppliedAt is null until the agent
+// ACKs a pushed change (drives the "pending" affordance).
+export interface PRConfig {
+  cameraId: string;
+  region: string;
+  webhooks: PRWebhook[];
+  lprCameraRtspUrl: string;
+  lastAppliedAt: string | null;
+}
+
+interface PRConfigWire {
+  camera_id: string;
+  region: string;
+  webhooks: PRWebhook[] | null;
+  lpr_camera_rtsp_url: string;
+  last_applied_at?: string | null;
+}
+
+function prConfigFromWire(w: PRConfigWire): PRConfig {
+  return {
+    cameraId: w.camera_id ?? "",
+    region: w.region ?? "",
+    webhooks: w.webhooks ?? [],
+    lprCameraRtspUrl: w.lpr_camera_rtsp_url ?? "",
+    lastAppliedAt: w.last_applied_at ?? null,
+  };
+}
+
+export async function getPRConfig(deviceId: string): Promise<PRConfig> {
+  const res = await apiRequest(`/devices/${deviceId}/pr-config`);
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.text());
+  }
+  return prConfigFromWire((await res.json()) as PRConfigWire);
+}
+
+export interface PRConfigInput {
+  cameraId: string;
+  region: string;
+  webhooks: PRWebhook[];
+}
+
+export async function putPRConfig(deviceId: string, input: PRConfigInput): Promise<PRConfig> {
+  const res = await apiRequest(`/devices/${deviceId}/pr-config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({
+      camera_id: input.cameraId,
+      region: input.region,
+      webhooks: input.webhooks,
+    }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.text());
+  }
+  return prConfigFromWire((await res.json()) as PRConfigWire);
+}
