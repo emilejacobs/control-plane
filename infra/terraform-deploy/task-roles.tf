@@ -132,6 +132,16 @@ data "aws_iam_policy_document" "cp_api" {
     actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.main["captures"].arn}/*"]
   }
+  # Live DB-password refresh (db-dsn rotation outage): the running task re-reads
+  # the rotated master password from the RDS-managed secret at connect time
+  # (pgx BeforeConnect), so a rotation self-heals without a forced redeploy. The
+  # master secret is KMS-encrypted with aws_kms_key.main, already covered by the
+  # DecryptForBootstrapRefresh kms:Decrypt (ViaService secretsmanager) above.
+  statement {
+    sid       = "DBPasswordSecretRead"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_db_instance.main.master_user_secret[0].secret_arn]
+  }
 }
 
 resource "aws_iam_role_policy" "cp_api" {
@@ -208,6 +218,16 @@ data "aws_iam_policy_document" "cp_ingest" {
     sid       = "NotificationsSendEmail"
     actions   = ["ses:SendEmail"]
     resources = ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/*"]
+  }
+  # Live DB-password refresh (db-dsn rotation outage): re-read the rotated master
+  # password from the RDS-managed secret at connect time (pgx BeforeConnect), so
+  # a rotation self-heals without a forced redeploy. The master secret is
+  # KMS-encrypted with aws_kms_key.main, already covered by the
+  # DecryptCommandSigningKey kms:Decrypt (ViaService secretsmanager) above.
+  statement {
+    sid       = "DBPasswordSecretRead"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_db_instance.main.master_user_secret[0].secret_arn]
   }
 }
 

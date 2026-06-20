@@ -65,6 +65,11 @@ resource "aws_ecs_task_definition" "this" {
         { name = "DB_NAME", value = var.db_name },
         { name = "DB_USER", value = var.db_user },
         { name = "DB_SSLMODE", value = var.db_sslmode },
+        # Live DB-password refresh: lets cp-ingest re-read the rotated master
+        # password from the RDS-managed secret at connect time (pgx
+        # BeforeConnect), so a rotation self-heals without a forced redeploy.
+        # The runtime task role is granted GetSecretValue on this ARN.
+        { name = "DB_PASSWORD_SECRET_ARN", value = var.db_password_secret_arn },
         # Agent fleet-update reconcile (#40/#41). Empty disables the re-push
         # (reported versions still persist); empty signing id publishes
         # unsigned (a verifying agent then rejects, so set them together).

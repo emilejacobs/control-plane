@@ -52,7 +52,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/emilejacobs/control-plane/internal/cp/agentrollout"
 	"github.com/emilejacobs/control-plane/internal/cp/api"
@@ -114,17 +113,6 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return fmt.Errorf("pgxpool: %w", err)
-	}
-	defer pool.Close()
-
-	if err := storage.Migrate(ctx, pool); err != nil {
-		return fmt.Errorf("migrate: %w", err)
-	}
-	logger.Info("migrations applied")
-
 	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("aws config: %w", err)
@@ -159,6 +147,27 @@ func run(logger *slog.Logger) error {
 	// The bootstrap key's store of record is Secrets Manager (ADR-017). The
 	// verifier loads it eagerly — a key store it cannot reach fails startup.
 	smClient := secretsmanager.NewFromConfig(awsCfg, smOpts...)
+
+	// Live DB-password refresh (db-dsn rotation outage): with DB_PASSWORD_SECRET_ARN
+	// set, new pool connections take the current password from the RDS-managed
+	// secret via BeforeConnect, so a master-password rotation self-heals without a
+	// task restart. Unset (local/dev) → a plain static-DSN pool.
+	var poolOpts storage.PoolOptions
+	if arn := os.Getenv("DB_PASSWORD_SECRET_ARN"); arn != "" {
+		poolOpts.Fetcher = storage.NewSecretPasswordFetcher(smClient, arn)
+		logger.Info("DB password live-refresh enabled")
+	}
+	pool, err := storage.NewPool(ctx, dsn, poolOpts)
+	if err != nil {
+		return fmt.Errorf("pgxpool: %w", err)
+	}
+	defer pool.Close()
+
+	if err := storage.Migrate(ctx, pool); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	logger.Info("migrations applied")
+
 	bootstrapLoader := bootstrap.NewSecretsManagerLoader(smClient, bootstrapSecretID)
 	bootstrapVerifier, err := bootstrap.NewVerifier(ctx, bootstrapLoader)
 	if err != nil {
