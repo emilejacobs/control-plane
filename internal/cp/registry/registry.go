@@ -22,6 +22,7 @@ import (
 	"github.com/emilejacobs/control-plane/internal/protocol/cameras"
 	"github.com/emilejacobs/control-plane/internal/protocol/healthprobes"
 	"github.com/emilejacobs/control-plane/internal/protocol/networkscan"
+	"github.com/emilejacobs/control-plane/internal/protocol/prconfig"
 	"github.com/emilejacobs/control-plane/internal/protocol/servicestatus"
 	"github.com/emilejacobs/control-plane/internal/service"
 )
@@ -1698,6 +1699,70 @@ func (r *Registry) RecordCamerasApplied(ctx context.Context, deviceID, correlati
 		return ErrDeviceNotFound
 	}
 	return nil
+}
+
+// === Plate Recognizer per-device config (issue #5, ADR-030 § 3) ===
+
+// GetPRConfig returns the CP-managed Plate Recognizer config for deviceID and
+// whether a row exists (false = the device has no PR config yet — distinct from
+// a zero-value config). The LPR camera URL is not stored here; callers resolve
+// it from device_cameras at push time.
+func (r *Registry) GetPRConfig(ctx context.Context, deviceID string) (prconfig.Config, bool, error) {
+	var (
+		c           prconfig.Config
+		webhooksRaw []byte
+		appliedAt   *time.Time
+	)
+	err := r.pool.QueryRow(ctx, `
+		SELECT camera_id, region, caching, image, enabled_webhooks,
+		       last_applied_at, last_applied_corr_id
+		FROM device_pr_config WHERE device_id = $1
+	`, deviceID).Scan(&c.CameraID, &c.Region, &c.Caching, &c.Image,
+		&webhooksRaw, &appliedAt, &c.LastAppliedCorrID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return prconfig.Config{}, false, nil
+	}
+	if err != nil {
+		return prconfig.Config{}, false, fmt.Errorf("get pr config: %w", err)
+	}
+	if len(webhooksRaw) > 0 {
+		if err := json.Unmarshal(webhooksRaw, &c.Webhooks); err != nil {
+			return prconfig.Config{}, false, fmt.Errorf("unmarshal webhooks: %w", err)
+		}
+	}
+	c.LastAppliedAt = appliedAt
+	return c, true, nil
+}
+
+// UpsertPRConfig inserts or replaces the editable PR config fields for deviceID
+// and returns the resulting state. Used by the PUT API and by migration-time
+// seeding from captured config.ini files. The last_applied_* audit fields are
+// NOT touched here — they're stamped on the agent's apply-ack.
+func (r *Registry) UpsertPRConfig(ctx context.Context, deviceID string, c prconfig.Config) (prconfig.Config, error) {
+	webhooks := c.Webhooks
+	if webhooks == nil {
+		webhooks = []prconfig.Webhook{}
+	}
+	raw, err := json.Marshal(webhooks)
+	if err != nil {
+		return prconfig.Config{}, fmt.Errorf("marshal webhooks: %w", err)
+	}
+	if _, err := r.pool.Exec(ctx, `
+		INSERT INTO device_pr_config
+			(device_id, camera_id, region, caching, image, enabled_webhooks)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (device_id) DO UPDATE SET
+			camera_id        = EXCLUDED.camera_id,
+			region           = EXCLUDED.region,
+			caching          = EXCLUDED.caching,
+			image            = EXCLUDED.image,
+			enabled_webhooks = EXCLUDED.enabled_webhooks,
+			updated_at       = now()
+	`, deviceID, c.CameraID, c.Region, c.Caching, c.Image, raw); err != nil {
+		return prconfig.Config{}, fmt.Errorf("upsert pr config: %w", err)
+	}
+	got, _, err := r.GetPRConfig(ctx, deviceID)
+	return got, err
 }
 
 // === Phase 2 Edge UI rework: network scan (issue #3) ===
