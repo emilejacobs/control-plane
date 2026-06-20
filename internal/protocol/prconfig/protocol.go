@@ -9,7 +9,40 @@
 // cameras inventory at push time, not stored here.
 package prconfig
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+)
+
+// regionPattern matches a Plate Recognizer region code like "us-az" or "fr".
+var regionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z0-9]+)*$`)
+
+// Validate checks a Config for the API PUT surface: region must look like a PR
+// region code, camera_id must be set, and each webhook needs a name and an
+// http(s) URL. The dashboard constrains region via a dropdown; this is the
+// server-side backstop.
+func Validate(c Config) error {
+	if !regionPattern.MatchString(c.Region) {
+		return fmt.Errorf("invalid region %q (expected a code like \"us-az\")", c.Region)
+	}
+	if strings.TrimSpace(c.CameraID) == "" {
+		return errors.New("camera_id is required")
+	}
+	for i, wh := range c.Webhooks {
+		if strings.TrimSpace(wh.Name) == "" {
+			return fmt.Errorf("webhook %d: name is required", i)
+		}
+		u, err := url.Parse(wh.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("webhook %q: url must be http(s)", wh.Name)
+		}
+	}
+	return nil
+}
 
 // Webhook is one inline webhook target ([{name,url,enabled}]). The webhook
 // registry (#6) will normalise these later.
