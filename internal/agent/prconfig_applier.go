@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/emilejacobs/control-plane/internal/agent/container"
-	"github.com/emilejacobs/control-plane/internal/agent/prconfigini"
+	"github.com/emilejacobs/control-plane/internal/protocol/prconfigini"
 	"github.com/emilejacobs/control-plane/internal/protocol/prconfig"
 )
 

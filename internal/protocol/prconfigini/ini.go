@@ -172,6 +172,67 @@ func writeSection(b *bytes.Buffer, s *Section) {
 	}
 }
 
+// get returns the value of a direct child key, or "".
+func (s *Section) get(key string) string {
+	for _, it := range s.items {
+		if it.kv != nil && it.kv.key == key {
+			return it.kv.value
+		}
+	}
+	return ""
+}
+
+// subSections returns the direct child sections in order.
+func (s *Section) subSections() []*Section {
+	var out []*Section
+	for _, it := range s.items {
+		if it.section != nil {
+			out = append(out, it.section)
+		}
+	}
+	return out
+}
+
+// Extract reads the CP-managed subset out of an existing config.ini — the
+// inverse of Merge. Used to SEED CP from each device's captured config so the
+// first CP-driven push doesn't clobber hand-tuned values (issue #5). camera_id
+// is the first [cameras] subsection name; a webhook is Enabled if it appears in
+// [cameras].webhook_targets.
+func Extract(data []byte) (prconfig.Config, error) {
+	doc, err := Parse(data)
+	if err != nil {
+		return prconfig.Config{}, err
+	}
+	var cfg prconfig.Config
+	cameras := doc.root.sub("cameras")
+	if cameras == nil {
+		return cfg, nil
+	}
+	cfg.Region = cameras.get("regions")
+	if cams := cameras.subSections(); len(cams) > 0 {
+		cfg.CameraID = cams[0].name
+	}
+
+	enabled := map[string]bool{}
+	for _, name := range strings.Split(cameras.get("webhook_targets"), ",") {
+		if n := strings.TrimSpace(name); n != "" {
+			enabled[n] = true
+		}
+	}
+	if webhooks := doc.root.sub("webhooks"); webhooks != nil {
+		for _, wh := range webhooks.subSections() {
+			cfg.Webhooks = append(cfg.Webhooks, prconfig.Webhook{
+				Name:    wh.name,
+				URL:     wh.get("url"),
+				Enabled: enabled[wh.name],
+				Image:   wh.get("image") == "yes",
+				Caching: wh.get("caching") == "yes",
+			})
+		}
+	}
+	return cfg, nil
+}
+
 func boolWord(v bool) string {
 	if v {
 		return "yes"

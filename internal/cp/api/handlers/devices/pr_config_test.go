@@ -151,3 +151,30 @@ func TestPRConfigPut(t *testing.T) {
 		t.Errorf("PUT unknown device: code %d, want 404", rec.Code)
 	}
 }
+
+func TestPRConfigImport(t *testing.T) {
+	store := newPRStore()
+	h := devices.NewPRConfigImport(store)
+
+	raw := "timezone = UTC\n[cameras]\n    regions = us-az\n    webhook_targets = prod\n    [[66_3]]\n        url = rtsp://cam/lpr\n        active = yes\n[webhooks]\n    [[prod]]\n        url = https://api.uknomi.com/x\n        name = prod\n        image = no\n        header = MAC: abc\n"
+	rec := doReq(t, h, http.MethodPost, prDev, raw)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import: code %d body %s", rec.Code, rec.Body.String())
+	}
+	// Extracted + upserted (no publish path on this handler).
+	if len(store.upserts) != 1 {
+		t.Fatalf("expected one upsert, got %d", len(store.upserts))
+	}
+	got := store.upserts[0]
+	if got.Region != "us-az" || got.CameraID != "66_3" {
+		t.Errorf("seeded config: %+v", got)
+	}
+	if len(got.Webhooks) != 1 || got.Webhooks[0].Name != "prod" || !got.Webhooks[0].Enabled {
+		t.Errorf("seeded webhooks: %+v", got.Webhooks)
+	}
+
+	// Unknown device: 404.
+	if rec := doReq(t, h, http.MethodPost, "00000000-0000-0000-0000-000000000000", raw); rec.Code != http.StatusNotFound {
+		t.Errorf("import unknown device: code %d, want 404", rec.Code)
+	}
+}

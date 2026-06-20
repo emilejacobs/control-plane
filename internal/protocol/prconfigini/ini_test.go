@@ -123,6 +123,41 @@ func TestMergeNewWebhookAndCamera(t *testing.T) {
 	}
 }
 
+func TestExtract(t *testing.T) {
+	cfg, err := Extract([]byte(realConfig))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if cfg.Region != "us-az" {
+		t.Errorf("region = %q, want us-az", cfg.Region)
+	}
+	if cfg.CameraID != "66_3" {
+		t.Errorf("camera_id = %q, want 66_3", cfg.CameraID)
+	}
+	if len(cfg.Webhooks) != 2 {
+		t.Fatalf("webhooks = %d, want 2", len(cfg.Webhooks))
+	}
+	for _, wh := range cfg.Webhooks {
+		if !wh.Enabled { // both are in webhook_targets
+			t.Errorf("%s should be enabled (in webhook_targets)", wh.Name)
+		}
+		if wh.Image { // both have image = no
+			t.Errorf("%s image should be false", wh.Name)
+		}
+		if wh.URL == "" {
+			t.Errorf("%s url not extracted", wh.Name)
+		}
+	}
+	// Round-trip: Extract then Merge back should keep webhook_targets intact.
+	merged, err := Merge([]byte(realConfig), cfg, "rtsp://x")
+	if err != nil {
+		t.Fatalf("Merge after Extract: %v", err)
+	}
+	if !strings.Contains(string(merged), "webhook_targets = prod, pre-prod") {
+		t.Errorf("round-trip lost webhook_targets:\n%s", merged)
+	}
+}
+
 func kvVal(s *Section, key string) string {
 	for _, it := range s.items {
 		if it.kv != nil && it.kv.key == key {
