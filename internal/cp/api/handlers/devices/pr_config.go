@@ -32,11 +32,10 @@ type prConfigResponse struct {
 
 // prConfigPutRequest is the editable subset accepted on PUT — deliberately
 // excludes the last_applied_* audit fields (stamped on the agent apply-ack).
+// image/caching are per-webhook (on prconfig.Webhook), not global.
 type prConfigPutRequest struct {
 	CameraID string             `json:"camera_id"`
 	Region   string             `json:"region"`
-	Caching  bool               `json:"caching"`
-	Image    bool               `json:"image"`
 	Webhooks []prconfig.Webhook `json:"webhooks"`
 }
 
@@ -68,9 +67,9 @@ func (h *PRConfigGetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !exists {
-		// No row yet: return sane defaults so the dashboard form pre-populates
-		// (image on by default per #5). Region/camera_id stay empty until set.
-		cfg = prconfig.Config{Image: true}
+		// No row yet: empty config (region/camera_id blank, no webhooks). The
+		// dashboard pre-populates the form from the captured/seeded values.
+		cfg = prconfig.Config{}
 	}
 
 	cams, err := h.store.ListCameras(r.Context(), id)
@@ -111,8 +110,6 @@ func (h *PRConfigPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := prconfig.Config{
 		CameraID: req.CameraID,
 		Region:   req.Region,
-		Caching:  req.Caching,
-		Image:    req.Image,
 		Webhooks: req.Webhooks,
 	}
 	if err := prconfig.Validate(cfg); err != nil {

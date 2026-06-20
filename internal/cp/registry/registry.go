@@ -1714,10 +1714,10 @@ func (r *Registry) GetPRConfig(ctx context.Context, deviceID string) (prconfig.C
 		appliedAt   *time.Time
 	)
 	err := r.pool.QueryRow(ctx, `
-		SELECT camera_id, region, caching, image, enabled_webhooks,
+		SELECT camera_id, region, enabled_webhooks,
 		       last_applied_at, last_applied_corr_id
 		FROM device_pr_config WHERE device_id = $1
-	`, deviceID).Scan(&c.CameraID, &c.Region, &c.Caching, &c.Image,
+	`, deviceID).Scan(&c.CameraID, &c.Region,
 		&webhooksRaw, &appliedAt, &c.LastAppliedCorrID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return prconfig.Config{}, false, nil
@@ -1749,16 +1749,14 @@ func (r *Registry) UpsertPRConfig(ctx context.Context, deviceID string, c prconf
 	}
 	if _, err := r.pool.Exec(ctx, `
 		INSERT INTO device_pr_config
-			(device_id, camera_id, region, caching, image, enabled_webhooks)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(device_id, camera_id, region, enabled_webhooks)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (device_id) DO UPDATE SET
 			camera_id        = EXCLUDED.camera_id,
 			region           = EXCLUDED.region,
-			caching          = EXCLUDED.caching,
-			image            = EXCLUDED.image,
 			enabled_webhooks = EXCLUDED.enabled_webhooks,
 			updated_at       = now()
-	`, deviceID, c.CameraID, c.Region, c.Caching, c.Image, raw); err != nil {
+	`, deviceID, c.CameraID, c.Region, raw); err != nil {
 		return prconfig.Config{}, fmt.Errorf("upsert pr config: %w", err)
 	}
 	got, _, err := r.GetPRConfig(ctx, deviceID)

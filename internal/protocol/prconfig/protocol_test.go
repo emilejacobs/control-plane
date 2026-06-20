@@ -10,8 +10,7 @@ func TestValidate(t *testing.T) {
 	valid := prconfig.Config{
 		CameraID: "0",
 		Region:   "us-az",
-		Image:    true,
-		Webhooks: []prconfig.Webhook{{Name: "prod", URL: "https://api-flask.uknomi.com/x", Enabled: true}},
+		Webhooks: []prconfig.Webhook{{Name: "prod", URL: "https://api-flask.uknomi.com/x", Enabled: true, Image: true}},
 	}
 	if err := prconfig.Validate(valid); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
