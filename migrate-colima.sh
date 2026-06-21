@@ -395,10 +395,6 @@ else
   echo "  already on Colima — skipping swap"
 fi
 
-# Always (re)write + load the LaunchAgent with the current sizing/flags — fixes a
-# stale plist on an already-migrated device (e.g. after a manual resize).
-write_colima_launchagent
-
 # --- 6. Verify the container is Up and STAYS up (no crash-loop) -------------
 # :8050 is intentionally not probed — it doesn't serve on a healthy ALPR
 # container (memory plate_recognizer_no_web_ui). `Up` status is the real signal.
@@ -426,6 +422,14 @@ esac
 [ -f "$STREAM_DIR/config.ini" ] && echo "  config.ini intact ✓"
 echo "  ALPR container Up under Colima ($st) ✓"
 MIGRATION_OK=1   # verified healthy — the auto-rollback trap will now no-op
+
+# (Re)write + load the LaunchAgent with the current sizing/flags — fixes a stale
+# plist on an already-migrated device (e.g. after a manual resize). Done AFTER the
+# verify (not before): bootstrapping the agent fires its RunAtLoad `colima start`,
+# and that redundant start against the just-booted VM flickers the docker socket
+# — running it before the verify false-failed an otherwise-healthy migration
+# (store13, where the MTU daemon restart tightened the timing).
+write_colima_launchagent
 
 # --- 7. Remove Docker Desktop (opt-in, only after verified success) ---------
 if [ "${REMOVE_DOCKER:-0}" = "1" ]; then
