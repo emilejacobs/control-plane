@@ -49,12 +49,17 @@
 #   REMOVE_DOCKER=1 ./migrate-colima.sh <ips>    # COMMIT: uninstall Docker (verified)
 #   SUDO_PW=... ./migrate-colima.sh              # skip the sudo prompt
 #   PR_LICENSE=... PR_TOKEN=... ./migrate-colima.sh other-ips.txt  # creds fallback
+#   MTU=1400 ./migrate-colima.sh store13.txt     # low-MTU store (pin VM+daemon MTU)
 
 set -uo pipefail
 
 IPS_FILE="${1:-mac-tailnet-ips.txt}"
 REMOVE_DOCKER="${REMOVE_DOCKER:-0}"
 ROLLBACK="${ROLLBACK:-0}"
+# MTU: pin the Colima VM ifaces + docker daemon to this MTU for low-MTU stores
+# (e.g. store13, en0 MTU 1400) where the VM's default 1500 black-holes registry
+# packets on the constrained uplink → image pulls fail. Empty = default 1500.
+MTU="${MTU:-}"
 
 [ "$REMOVE_DOCKER" = "1" ] && [ "$ROLLBACK" = "1" ] && { echo "❌ pick one: REMOVE_DOCKER or ROLLBACK, not both" >&2; exit 1; }
 
@@ -271,12 +276,28 @@ if [ "$already_migrated" -eq 0 ]; then
   # Check the actual BINARIES, not `brew list` — Docker Desktop is a cask also
   # named "docker", so `brew list docker` is a false positive that skips the
   # docker FORMULA and leaves Colima with no docker CLI (the fleet-rollout bug).
-  [ -x "$BREW_PREFIX/bin/colima" ] || "$BREW" install colima || { echo "REMOTE_FAIL colima install"; exit 1; }
-  if [ ! -x "$BREW_PREFIX/bin/docker" ]; then
-    "$BREW" install --formula docker || true
-    # The formula may be installed-but-unlinked (the cask owns the name) — force it.
-    [ -x "$BREW_PREFIX/bin/docker" ] || "$BREW" link --overwrite docker >/dev/null 2>&1 || true
-    [ -x "$BREW_PREFIX/bin/docker" ] || { echo "REMOTE_FAIL docker CLI missing at $BREW_PREFIX/bin/docker after install"; exit 1; }
+  # install_colima_docker pours both formulae and links the docker CLI (the cask
+  # owns the name, so the formula may install-but-not-link). Returns non-zero if
+  # either binary is still missing afterward.
+  install_colima_docker() {
+    [ -x "$BREW_PREFIX/bin/colima" ] || "$BREW" install colima || true
+    if [ ! -x "$BREW_PREFIX/bin/docker" ]; then
+      "$BREW" install --formula docker || true
+      [ -x "$BREW_PREFIX/bin/docker" ] || "$BREW" link --overwrite docker >/dev/null 2>&1 || true
+    fi
+    [ -x "$BREW_PREFIX/bin/colima" ] && [ -x "$BREW_PREFIX/bin/docker" ]
+  }
+  # HOMEBREW_NO_AUTO_UPDATE=1 (set above to avoid the slow auto-update that drops
+  # SSH mid-migration) means a Homebrew that hasn't been updated in a long time
+  # can fail to pour current bottles — `Utils::Bottles.load_tab: undefined method
+  # '[]' for nil`, or a dependency left uninstalled (e.g. colima without lima).
+  # On any such failure, run `brew update` ONCE (quietly) and retry; Homebrew
+  # itself says this is the fix. Gated to the failure path, so the SSH-drop risk
+  # only applies to already-broken devices.
+  if ! install_colima_docker; then
+    echo "  ⚠️  brew install incomplete (stale-Homebrew bottle/dep failure) — 'brew update' once, then retry…"
+    "$BREW" update >/dev/null 2>&1 || true
+    install_colima_docker || { echo "REMOTE_FAIL colima/docker CLI missing after 'brew update' + retry"; exit 1; }
   fi
 
   # --- 5. Start the VM now + (re)run ALPR under Colima ----------------------
@@ -315,6 +336,29 @@ if [ "$already_migrated" -eq 0 ]; then
   # Wait for the daemon.
   for _ in $(seq 1 30); do "$DOCKER" info >/dev/null 2>&1 && break; sleep 2; done
   "$DOCKER" info >/dev/null 2>&1 || { echo "REMOTE_FAIL docker daemon unreachable via Colima"; exit 1; }
+
+  # Low-MTU stores (en0 < 1500, e.g. store13 at 1400): the Colima VM brings eth0
+  # /col0 up at 1500, so registry packets sized to the VM's MSS get black-holed
+  # entering the constrained uplink → the image pull below (and the pre-flight's
+  # own alpine pull) stalls and fails. Pin the VM host ifaces NOW so this run's
+  # pulls fit, and pin the docker daemon MTU (daemon.json, persisted on the VM
+  # disk → survives reboot) so the ALPR container's internet path — license check
+  # + webhook POSTs — also fits without re-touching the ifaces each boot.
+  if [ -n "${MTU:-}" ]; then
+    echo "  MTU=$MTU set (low-MTU store) — pinning Colima VM ifaces + docker daemon…"
+    "$COLIMA" ssh -- sudo ip link set eth0 mtu "$MTU" 2>/dev/null || true
+    "$COLIMA" ssh -- sudo ip link set col0 mtu "$MTU" 2>/dev/null || true
+    # Merge mtu into the VM's daemon.json (preserve any colima-written settings);
+    # python3 ships in the lima guest. Fall back to a fresh file if none exists.
+    if "$COLIMA" ssh -- test -s /etc/docker/daemon.json 2>/dev/null; then
+      "$COLIMA" ssh -- sudo python3 -c "import json;p='/etc/docker/daemon.json';d=json.load(open(p));d['mtu']=$MTU;json.dump(d,open(p,'w'))" 2>/dev/null || true
+    else
+      printf '{"mtu":%s}\n' "$MTU" | "$COLIMA" ssh -- sudo tee /etc/docker/daemon.json >/dev/null 2>&1 || true
+    fi
+    "$COLIMA" ssh -- sudo systemctl restart docker 2>/dev/null || true
+    for _ in $(seq 1 30); do "$DOCKER" info >/dev/null 2>&1 && break; sleep 2; done
+    "$DOCKER" info >/dev/null 2>&1 || { echo "REMOTE_FAIL docker daemon unreachable after MTU/daemon restart"; exit 1; }
+  fi
 
   # Pre-flight: confirm a container can reach the LPR camera BEFORE pulling the
   # big ALPR image — else ALPR would just retry, disable the camera, and exit.
@@ -418,8 +462,8 @@ while read -r ip <&3 || [ -n "$ip" ]; do
 
   # Prepend the secrets as shell assignments on stdin (never on argv/ps), then
   # the remote body. %q keeps arbitrary passwords/tokens safe.
-  out=$( { printf 'SUDO_PW=%q\nREMOVE_DOCKER=%q\nROLLBACK=%q\nPR_LICENSE=%q\nPR_TOKEN=%q\n' \
-             "$SUDO_PW" "$REMOVE_DOCKER" "$ROLLBACK" "${PR_LICENSE:-}" "${PR_TOKEN:-}"; \
+  out=$( { printf 'SUDO_PW=%q\nREMOVE_DOCKER=%q\nROLLBACK=%q\nPR_LICENSE=%q\nPR_TOKEN=%q\nMTU=%q\n' \
+             "$SUDO_PW" "$REMOVE_DOCKER" "$ROLLBACK" "${PR_LICENSE:-}" "${PR_TOKEN:-}" "${MTU:-}"; \
            cat "$REMOTE_FILE"; } \
         | ssh "${SSH_OPTS[@]}" "uknomi@$ip" 'bash -s' 2>&1)
   echo "$out" | grep -v '^REMOTE_OK$' | sed 's/^/  /'
