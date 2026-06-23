@@ -40,6 +40,10 @@ function deviceFixture(overrides: Partial<Device> = {}): Device {
       lastAppliedAt: null,
       lastAppliedCorrelationId: null,
     },
+    lastBootTime: null,
+    lastShutdownCause: null,
+    lastShutdownCauseCode: null,
+    recentReboots: [],
     ...overrides,
   };
 }

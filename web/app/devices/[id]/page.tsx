@@ -28,6 +28,7 @@ import { PresenceChip } from "../../../components/PresenceChip";
 import { CertExpiryIndicator } from "../../../components/CertExpiryIndicator";
 import { ServicesPanel } from "../../../components/ServicesPanel";
 import { HealthPanel } from "../../../components/HealthPanel";
+import { RebootsPanel } from "../../../components/RebootsPanel";
 import { CamerasPanel } from "../../../components/CamerasPanel";
 import { PRConfigPanel } from "../../../components/PRConfigPanel";
 import { SnapshotCadenceControl } from "../../../components/SnapshotCadenceControl";
@@ -220,6 +221,22 @@ export default function DevicePage() {
                     ["LAN IP", networkField(d.lanIp)],
                     ["Tailscale IP", networkField(d.tailscaleIp)],
                     ["Tailscale name", networkField(d.tailscaleName)],
+                    [
+                      "Last boot",
+                      d.lastBootTime ? (
+                        <time>{formatAgo(new Date(d.lastBootTime), now)}</time>
+                      ) : (
+                        <span className="muted">Never reported</span>
+                      ),
+                    ],
+                    [
+                      "Last shutdown cause",
+                      d.lastShutdownCause ? (
+                        d.lastShutdownCause
+                      ) : (
+                        <span className="muted">Unknown</span>
+                      ),
+                    ],
                   ]}
                 />
               </Card>
@@ -344,6 +361,12 @@ export default function DevicePage() {
 
             <Card label="Health">
               <HealthPanel probes={healthProbes.data ?? []} now={now} />
+            </Card>
+
+            <div style={{ height: 16 }} />
+
+            <Card label="Restart History">
+              <RebootsPanel reboots={d.recentReboots} now={now} />
             </Card>
             {editingServices && d && (
               <EditServicesModal
