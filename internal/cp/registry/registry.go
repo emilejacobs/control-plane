@@ -228,6 +228,15 @@ type Device struct {
 	// value ever leaving the CP. Commission reads the raw value via
 	// GetALPRLicense; staff sets it via SetALPRLicense.
 	ALPRLicenseSet bool
+
+	// LastBootTime, LastShutdownCause, LastShutdownCauseCode are the device's
+	// most-recent boot state (migration 032, #157), updated by RecordBootInfo on
+	// each boot_time change. All nil until a rolled agent first reports boot info
+	// (a pre-#157 agent never sets them). The device page surfaces them as "last
+	// boot" + "last shutdown cause" (#159).
+	LastBootTime          *time.Time
+	LastShutdownCause     *string
+	LastShutdownCauseCode *int
 }
 
 func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
@@ -249,7 +258,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
 		       devices.desired_agent_version, devices.rolled_back_version,
 		       devices.snapshot_cadence,
-		       (devices.alpr_license IS NOT NULL) AS alpr_license_set
+		       (devices.alpr_license IS NOT NULL) AS alpr_license_set,
+		       devices.last_boot_time, devices.last_shutdown_cause, devices.last_shutdown_cause_code
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -268,6 +278,7 @@ func (r *Registry) GetByID(ctx context.Context, id string) (Device, error) {
 		&d.DesiredAgentVersion, &d.RolledBackVersion,
 		&d.SnapshotCadence,
 		&d.ALPRLicenseSet,
+		&d.LastBootTime, &d.LastShutdownCause, &d.LastShutdownCauseCode,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -297,7 +308,8 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 		       devices.lan_ip, devices.tailscale_ip, devices.tailscale_name,
 		       devices.desired_agent_version, devices.rolled_back_version,
 		       devices.snapshot_cadence,
-		       (devices.alpr_license IS NOT NULL) AS alpr_license_set
+		       (devices.alpr_license IS NOT NULL) AS alpr_license_set,
+		       devices.last_boot_time, devices.last_shutdown_cause, devices.last_shutdown_cause_code
 		FROM devices
 		LEFT JOIN sites s ON s.id = devices.site_id
 		LEFT JOIN clients c ON c.id = s.client_id
@@ -324,6 +336,7 @@ func (r *Registry) List(ctx context.Context) ([]Device, error) {
 			&d.DesiredAgentVersion, &d.RolledBackVersion,
 			&d.SnapshotCadence,
 			&d.ALPRLicenseSet,
+			&d.LastBootTime, &d.LastShutdownCause, &d.LastShutdownCauseCode,
 		); err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -1183,6 +1196,50 @@ func (r *Registry) OfflineReason(ctx context.Context, deviceID string, since, un
 		return "network blip", nil
 	}
 	return "", nil
+}
+
+// DeviceReboot is one row of a device's reboot history (migration 032, #157): a
+// distinct boot_time CP observed, the previous-shutdown cause that came with it,
+// and when CP first saw it (detected_at). Surfaced as the device-page restart
+// history (#159).
+type DeviceReboot struct {
+	BootTime          time.Time
+	ShutdownCause     *string
+	ShutdownCauseCode *int
+	DetectedAt        time.Time
+}
+
+// ListReboots returns a device's most-recent reboot rows (migration 032),
+// newest first, capped at limit (default 10 when <= 0). An empty (non-nil)
+// slice for a device with no reboot history; a non-UUID id returns empty rather
+// than an error so the device page still renders (mirrors ListHealthProbes).
+func (r *Registry) ListReboots(ctx context.Context, deviceID string, limit int) ([]DeviceReboot, error) {
+	out := []DeviceReboot{}
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return out, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT boot_time, shutdown_cause, shutdown_cause_code, detected_at
+		FROM device_reboots
+		WHERE device_id = $1
+		ORDER BY detected_at DESC
+		LIMIT $2
+	`, deviceID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list device_reboots: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dr DeviceReboot
+		if err := rows.Scan(&dr.BootTime, &dr.ShutdownCause, &dr.ShutdownCauseCode, &dr.DetectedAt); err != nil {
+			return nil, fmt.Errorf("scan device_reboot: %w", err)
+		}
+		out = append(out, dr)
+	}
+	return out, rows.Err()
 }
 
 // SetDesiredAgentVersion stamps the fleet-update rollout target on a set of

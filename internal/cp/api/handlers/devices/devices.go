@@ -23,6 +23,9 @@ type Service interface {
 	// tracking (Phase 2 slice 2). Zero-valued for a device with no
 	// override ever set; non-nil pointers indicate present values.
 	GetServiceConfig(ctx context.Context, deviceID string) (registry.ServiceConfig, error)
+	// ListReboots returns a device's recent reboot history (#159), newest
+	// first, capped at limit. Empty (non-nil) for a device with no history.
+	ListReboots(ctx context.Context, deviceID string, limit int) ([]registry.DeviceReboot, error)
 }
 
 type GetHandler struct {
@@ -90,6 +93,23 @@ type response struct {
 	// internal fields may be null. Distinguishes "default" from
 	// "overridden" via allow_list_override != null on the dashboard.
 	ServiceConfig serviceConfigItem `json:"service_config"`
+
+	// LastBootTime / LastShutdownCause / LastShutdownCauseCode are the device's
+	// most-recent boot state (#157/#159). All null until a rolled agent reports
+	// boot info; the device page renders "last boot" + "last shutdown cause".
+	LastBootTime          *string `json:"last_boot_time"` // RFC3339
+	LastShutdownCause     *string `json:"last_shutdown_cause"`
+	LastShutdownCauseCode *int    `json:"last_shutdown_cause_code"`
+	// RecentReboots is the device's reboot history, newest first (#159). Empty
+	// array (not null) for a device that has never reported a reboot.
+	RecentReboots []rebootItem `json:"recent_reboots"`
+}
+
+type rebootItem struct {
+	BootTime          string  `json:"boot_time"`   // RFC3339
+	ShutdownCause     *string `json:"shutdown_cause"`
+	ShutdownCauseCode *int    `json:"shutdown_cause_code"`
+	DetectedAt        string  `json:"detected_at"` // RFC3339
 }
 
 type serviceConfigItem struct {
@@ -239,6 +259,28 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		LastAppliedCorrelationID: cfg.LastAppliedCorrelationID,
 	}
 
+	// Boot state + recent reboot history (#159). Same resilience posture as
+	// services — a read failure surfaces an empty list, not a 500. The fields
+	// are null/empty for a device on a pre-#157 agent (graceful empty state).
+	var lastBootTime *string
+	if dev.LastBootTime != nil {
+		s := dev.LastBootTime.UTC().Format(time.RFC3339)
+		lastBootTime = &s
+	}
+	rebootRows, err := h.svc.ListReboots(r.Context(), dev.ID, 10)
+	if err != nil {
+		rebootRows = nil
+	}
+	reboots := make([]rebootItem, 0, len(rebootRows))
+	for _, rb := range rebootRows {
+		reboots = append(reboots, rebootItem{
+			BootTime:          rb.BootTime.UTC().Format(time.RFC3339),
+			ShutdownCause:     rb.ShutdownCause,
+			ShutdownCauseCode: rb.ShutdownCauseCode,
+			DetectedAt:        rb.DetectedAt.UTC().Format(time.RFC3339),
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response{
 		DeviceID:              dev.ID,
@@ -265,5 +307,9 @@ func (h *GetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ALPRLicenseSet:        dev.ALPRLicenseSet,
 		Services:              services,
 		ServiceConfig:         serviceConfig,
+		LastBootTime:          lastBootTime,
+		LastShutdownCause:     dev.LastShutdownCause,
+		LastShutdownCauseCode: dev.LastShutdownCauseCode,
+		RecentReboots:         reboots,
 	})
 }
