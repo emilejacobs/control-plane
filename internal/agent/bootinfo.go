@@ -53,6 +53,28 @@ func shutdownCauseLabel(code int) string {
 	return fmt.Sprintf("unknown (code %d)", code)
 }
 
+// newBootInfoCollector returns a heartbeat collector (the defaultCollectors
+// pattern) that emits the cached boot info as static JSON fields — no per-tick
+// cost. boot_time is RFC3339/UTC; the shutdown cause + raw code ride along only
+// when present. When ok is false (non-macOS, or the read failed) it emits
+// nothing, so other agents stay back-compatible and cp-ingest's conditional
+// write leaves stored values untouched.
+func newBootInfoCollector(info BootInfo, ok bool) func() map[string]any {
+	return func() map[string]any {
+		if !ok {
+			return map[string]any{}
+		}
+		out := map[string]any{
+			"boot_time": info.BootTime.UTC().Format(time.RFC3339),
+		}
+		if info.HasShutdownCause {
+			out["last_shutdown_cause"] = info.ShutdownCause
+			out["shutdown_cause_code"] = info.ShutdownCauseCode
+		}
+		return out
+	}
+}
+
 // shutdownCausePattern matches a "Previous shutdown cause: <int>" line in
 // `log show` output. Case-insensitive; the code may be negative.
 var shutdownCausePattern = regexp.MustCompile(`(?i)shutdown cause:?\s*(-?\d+)`)
