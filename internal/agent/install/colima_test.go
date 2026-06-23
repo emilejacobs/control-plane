@@ -36,10 +36,34 @@ func TestColimaLaunchAgentPlistContents(t *testing.T) {
 		"--mount",
 		"/usr/local/etc/plate-recognizer/stream:w",
 		"RunAtLoad",
+		// launchd runs the LaunchAgent with a minimal PATH; colima shells out to
+		// limactl by name, so the plist must put the brew bin (where limactl
+		// lives, alongside colima) on PATH or `colima start` fatals with
+		// "limactl: executable file not found in $PATH" and the VM never
+		// auto-starts at login.
+		"EnvironmentVariables",
+		"<key>PATH</key>",
+		"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 	} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("plist missing %q\n%s", want, plist)
 		}
+	}
+}
+
+// On an Intel host the brew bin is /usr/local/bin; the PATH is derived from the
+// colima binary's own directory so limactl resolves on either architecture.
+func TestColimaLaunchAgentPlistPathFromColimaDir(t *testing.T) {
+	plist := string(install.ColimaLaunchAgentPlist(install.ColimaAgentConfig{
+		Label:      "com.uknomi.colima",
+		ColimaPath: "/usr/local/bin/colima",
+		CPU:        2, MemoryGiB: 4, DiskGiB: 30,
+		MountDir:   "/usr/local/etc/plate-recognizer/stream",
+		StdoutPath: "/tmp/colima.log",
+		StderrPath: "/tmp/colima-error.log",
+	}))
+	if !strings.Contains(plist, "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin") {
+		t.Errorf("plist PATH should lead with the colima binary's dir (/usr/local/bin)\n%s", plist)
 	}
 }
 
