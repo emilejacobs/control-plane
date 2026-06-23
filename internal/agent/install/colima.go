@@ -47,10 +47,24 @@ func ColimaVMSize(numCPU, memGiB int) (cpu, mem, disk int) {
 // the VM's default route, so the container reaches the directly-connected LAN
 // camera (ADR-038; default NAT / plain --network-address cannot).
 func ColimaLaunchAgentPlist(c ColimaAgentConfig) []byte {
+	// launchd runs the LaunchAgent with a minimal PATH (/usr/bin:/bin:...). colima
+	// shells out to limactl by bare name, so without the brew bin on PATH
+	// `colima start` fatals ("limactl: executable file not found in $PATH") and
+	// the VM never auto-starts at login. limactl is installed alongside colima, so
+	// lead PATH with the colima binary's own dir (handles Apple Silicon
+	// /opt/homebrew/bin and Intel /usr/local/bin).
+	brewBin := filepath.Dir(c.ColimaPath)
+	launchPath := brewBin + ":/usr/bin:/bin:/usr/sbin:/sbin"
+
 	const tmpl = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>%s</string>
+    </dict>
     <key>Label</key>
     <string>%s</string>
     <key>ProgramArguments</key>
@@ -80,7 +94,7 @@ func ColimaLaunchAgentPlist(c ColimaAgentConfig) []byte {
 </plist>
 `
 	return []byte(fmt.Sprintf(tmpl,
-		c.Label, c.ColimaPath,
+		launchPath, c.Label, c.ColimaPath,
 		strconv.Itoa(c.CPU), strconv.Itoa(c.MemoryGiB), strconv.Itoa(c.DiskGiB),
 		c.MountDir, c.StdoutPath, c.StderrPath))
 }
