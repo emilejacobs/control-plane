@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { useDevices, useFleetAlerts } from "../../lib/api/hooks";
+import { useDevices, useFleetAlerts, useFleetCameras } from "../../lib/api/hooks";
 import { groupDevices } from "../../lib/fleet";
 import { Topbar } from "../../components/ui/Topbar";
 import { Card } from "../../components/ui/Card";
@@ -10,6 +10,7 @@ import { Gauge, gaugeTone } from "../../components/ui/Gauge";
 import { Dot } from "../../components/ui/Dot";
 import { Pill } from "../../components/ui/Pill";
 import { FleetAlertsPanel } from "../../components/FleetAlertsPanel";
+import { CameraAlertsPanel } from "../../components/CameraAlertsPanel";
 import { RequireAuth } from "../../components/RequireAuth";
 
 // OverviewPage — fleet health at a glance.
@@ -36,6 +37,7 @@ export default function OverviewPage() {
 export function OverviewBody() {
   const devices = useDevices();
   const fleetAlerts = useFleetAlerts();
+  const fleetCameras = useFleetCameras();
 
   const stats = useMemo(() => {
     const list = devices.data ?? [];
@@ -148,6 +150,23 @@ export function OverviewBody() {
                 sub={stats.offline === 0 ? "all online" : `${stats.offline} offline`}
                 tone={gaugeTone(stats.total > 0 ? stats.online / stats.total : 0)}
               />
+              {fleetCameras.data && (
+                <Gauge
+                  value={fleetCameras.data.online}
+                  max={fleetCameras.data.total}
+                  label="Cameras online"
+                  sub={
+                    fleetCameras.data.offline === 0
+                      ? "all online"
+                      : `${fleetCameras.data.offline} offline`
+                  }
+                  tone={
+                    fleetCameras.data.total > 0
+                      ? gaugeTone(fleetCameras.data.online / fleetCameras.data.total)
+                      : "neutral"
+                  }
+                />
+              )}
               <Gauge
                 value={stats.versionModal}
                 max={stats.total}
@@ -177,6 +196,7 @@ export function OverviewBody() {
               )}
 
             <div className="overview-row">
+              <CameraAlertsPanel />
               <Card label="Needs attention" flush>
                 <div style={{ padding: "8px 20px 12px" }}>
                   <div
