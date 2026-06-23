@@ -136,6 +136,10 @@ write_colima_launchagent() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>$BREW_PREFIX/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>Label</key><string>com.uknomi.colima</string>
     <key>ProgramArguments</key>
     <array>
