@@ -33,11 +33,23 @@ type fakeWriter struct {
 	networkCalls    []networkCall
 	rolledBackErr   error
 	rolledBackCalls []rolledBackCall
+	bootInfoErr     error
+	bootInfoCalls   []bootInfoCall
 }
 
 type rolledBackCall struct {
 	deviceID string
 	version  string
+}
+
+// bootInfoCall records every RecordBootInfo invocation so the #157 tests can
+// assert the parsed boot time, cause, and (pointer) code reach the writer.
+type bootInfoCall struct {
+	deviceID string
+	bootTime time.Time
+	cause    string
+	code     *int
+	at       time.Time
 }
 
 func (f *fakeWriter) UpdateLastSeen(_ context.Context, deviceID string, at time.Time) error {
@@ -59,6 +71,11 @@ func (f *fakeWriter) RecordReportedAgentVersion(context.Context, string, string)
 func (f *fakeWriter) RecordRolledBackVersion(_ context.Context, deviceID, version string) error {
 	f.rolledBackCalls = append(f.rolledBackCalls, rolledBackCall{deviceID, version})
 	return f.rolledBackErr
+}
+
+func (f *fakeWriter) RecordBootInfo(_ context.Context, deviceID string, bootTime time.Time, cause string, code *int, at time.Time) error {
+	f.bootInfoCalls = append(f.bootInfoCalls, bootInfoCall{deviceID, bootTime, cause, code, at})
+	return f.bootInfoErr
 }
 
 func fixedClock(t time.Time) func() time.Time {

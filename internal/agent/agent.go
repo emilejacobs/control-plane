@@ -532,6 +532,10 @@ func (a *Agent) defaultCollectors() []func() map[string]any {
 			}
 			return map[string]any{}
 		},
+		// Offline-reason signal (#157): system boot_time + previous-shutdown
+		// cause, read once at start (cached). CP infers reboot-vs-blip from
+		// boot_time deltas. Omitted on non-macOS or read failure.
+		newBootInfoCollector(readBootInfo()),
 	}
 }
 
