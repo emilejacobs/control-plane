@@ -29,7 +29,7 @@ afterEach(cleanup);
 describe("FleetAlertsPanel — alert-only", () => {
   it("renders nothing when there are no probe or service alerts", () => {
     const { container } = render(
-      <FleetAlertsPanel alerts={{ probes: [], services: [] }} devices={devices} />,
+      <FleetAlertsPanel alerts={{ probes: [], services: [], serviceOnline: 0, serviceTotal: 0 }} devices={devices} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -41,6 +41,8 @@ describe("FleetAlertsPanel — populated", () => {
       { probeName: "plate_recognizer_container", red: ["dev-a"], yellow: ["dev-b"] },
     ],
     services: [{ serviceName: "usb_audio", stopped: ["dev-a"] }],
+    serviceOnline: 0,
+    serviceTotal: 0,
   };
 
   it("shows a row per probe and service with affected device counts", () => {
@@ -75,7 +77,7 @@ describe("FleetAlertsPanel — populated", () => {
     const user = userEvent.setup();
     render(
       <FleetAlertsPanel
-        alerts={{ probes: [{ probeName: "boot_sanity", red: ["ghost-id"], yellow: [] }], services: [] }}
+        alerts={{ probes: [{ probeName: "boot_sanity", red: ["ghost-id"], yellow: [] }], services: [], serviceOnline: 0, serviceTotal: 0 }}
         devices={devices}
       />,
     );

@@ -143,6 +143,23 @@ export function OverviewBody() {
                 from the devices summary already loaded here; cameras + services
                 gauges land in the follow-up slices (#152/#153). */}
             <div className="gauge-grid">
+              {fleetAlerts.data && (
+                <Gauge
+                  value={fleetAlerts.data.serviceOnline}
+                  max={fleetAlerts.data.serviceTotal}
+                  label="Services online"
+                  sub={
+                    fleetAlerts.data.serviceTotal - fleetAlerts.data.serviceOnline === 0
+                      ? "all up"
+                      : `${fleetAlerts.data.serviceTotal - fleetAlerts.data.serviceOnline} down`
+                  }
+                  tone={
+                    fleetAlerts.data.serviceTotal > 0
+                      ? gaugeTone(fleetAlerts.data.serviceOnline / fleetAlerts.data.serviceTotal)
+                      : "neutral"
+                  }
+                />
+              )}
               <Gauge
                 value={stats.online}
                 max={stats.total}

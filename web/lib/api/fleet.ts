@@ -18,6 +18,10 @@ export interface ServiceAlert {
 export interface FleetAlerts {
   probes: ProbeAlert[];
   services: ServiceAlert[];
+  // Running vs all monitored service instances across the scoped fleet —
+  // the Overview Services gauge (#153). Distinct from the alert-only list.
+  serviceOnline: number;
+  serviceTotal: number;
 }
 
 interface ProbeAlertWire {
@@ -34,6 +38,8 @@ interface ServiceAlertWire {
 interface FleetAlertsWire {
   probes?: ProbeAlertWire[];
   services?: ServiceAlertWire[];
+  service_online?: number;
+  service_total?: number;
 }
 
 // OfflineCamera is one currently-offline camera in the fleet roll-up, carrying
@@ -114,5 +120,7 @@ export async function getFleetAlerts(): Promise<FleetAlerts> {
       serviceName: s.service_name,
       stopped: s.stopped ?? [],
     })),
+    serviceOnline: d.service_online ?? 0,
+    serviceTotal: d.service_total ?? 0,
   };
 }

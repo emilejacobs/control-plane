@@ -139,6 +139,11 @@ type DeviceHealthProbe struct {
 type FleetAlerts struct {
 	Probes   []ProbeAlert
 	Services []ServiceAlert
+	// ServiceOnline/ServiceTotal are the running vs all monitored service
+	// instances across the (scoped) fleet — the Overview's Services gauge (#153).
+	// Counts, unlike the alert lists, include healthy services.
+	ServiceOnline int
+	ServiceTotal  int
 }
 
 // ProbeAlert is the set of devices currently red and/or yellow on one probe.
@@ -703,6 +708,18 @@ func (r *Registry) FleetAlerts(ctx context.Context) (FleetAlerts, error) {
 	}
 	if err := svcRows.Err(); err != nil {
 		return out, fmt.Errorf("iterate service alerts: %w", err)
+	}
+
+	// Service online/total counts for the Overview's Services gauge (#153) —
+	// running vs all monitored service instances, same site scope.
+	countSQL, countArgs := authz.ScopedDeviceQuery(filter, `
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE ds.state = 'running')
+		FROM device_services ds
+		JOIN devices ON devices.id = ds.device_id
+		WHERE true
+	`)
+	if err := r.pool.QueryRow(ctx, countSQL, countArgs...).Scan(&out.ServiceTotal, &out.ServiceOnline); err != nil {
+		return out, fmt.Errorf("query service counts: %w", err)
 	}
 
 	return out, nil
