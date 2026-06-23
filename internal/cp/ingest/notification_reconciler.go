@@ -31,6 +31,11 @@ type AlertEvent struct {
 	// label for camera_offline); empty for kinds that render the subject
 	// directly. Rendering prefers it over Subject when set.
 	Label string
+	// Reason is the offline-recovery cause (#158): "reboot: <cause>" when the
+	// device rebooted during the offline window, "network blip" when it didn't.
+	// Set only on resolved offline events; empty for every other kind and for a
+	// device on a pre-#157 agent (no boot_time → unknown, render nothing).
+	Reason string
 }
 
 // Digest is the coalesced set of transitions found in one reconcile tick. It is
