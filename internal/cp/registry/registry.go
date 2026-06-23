@@ -1140,6 +1140,51 @@ func (r *Registry) RecordBootInfo(ctx context.Context, deviceID string, bootTime
 	return tx.Commit(ctx)
 }
 
+// OfflineReason classifies a recovered device-offline alert (#158): why the
+// device was offline, inferred from device_reboots over the offline window
+// [since, until]. It returns "reboot: <cause>" when a reboot was detected in the
+// window (the most recent one's cause; just "reboot" when the cause is NULL),
+// "network blip" when a boot-info-reporting device had no reboot in the window,
+// and "" when the device has never reported boot info (a pre-#157 agent — the
+// reason is genuinely unknown, so callers render nothing rather than a false
+// "network blip"). Unknown / non-UUID ids are ErrDeviceNotFound.
+func (r *Registry) OfflineReason(ctx context.Context, deviceID string, since, until time.Time) (string, error) {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return "", ErrDeviceNotFound
+	}
+	var cause *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT shutdown_cause FROM device_reboots
+		WHERE device_id = $1 AND detected_at >= $2 AND detected_at <= $3
+		ORDER BY detected_at DESC
+		LIMIT 1
+	`, deviceID, since, until).Scan(&cause)
+	switch {
+	case err == nil:
+		if cause != nil && *cause != "" {
+			return "reboot: " + *cause, nil
+		}
+		return "reboot", nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return "", fmt.Errorf("query device_reboots: %w", err)
+	}
+
+	// No reboot in the window. Distinguish a device that reports boot info (a
+	// genuine network/MQTT blip) from one that never has (unknown — old agent).
+	var lastBoot *time.Time
+	if err := r.pool.QueryRow(ctx,
+		`SELECT last_boot_time FROM devices WHERE id = $1`, deviceID).Scan(&lastBoot); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrDeviceNotFound
+		}
+		return "", fmt.Errorf("query last_boot_time: %w", err)
+	}
+	if lastBoot != nil {
+		return "network blip", nil
+	}
+	return "", nil
+}
+
 // SetDesiredAgentVersion stamps the fleet-update rollout target on a set of
 // devices (issue #40, ADR-035 §1). Non-UUID or unknown ids in the set are
 // skipped, not an error — the returned count of stamped rows is the caller's

@@ -113,6 +113,11 @@ func joinAlert(e ingest.AlertEvent, device string) string {
 	if subj := subjectLabel(e); subj != "" {
 		parts = append(parts, subj)
 	}
+	// Offline-recovery reason (#158): "reboot: <cause>" / "network blip". Set
+	// only on resolved offline events; empty otherwise so nothing is appended.
+	if e.Reason != "" {
+		parts = append(parts, e.Reason)
+	}
 	line := strings.Join(parts, " · ")
 	if e.SiteName != nil && *e.SiteName != "" {
 		line += " (" + *e.SiteName + ")"

@@ -26,10 +26,23 @@ type fakeAlertStore struct {
 	mu       sync.Mutex
 	snapshot []registry.UnhealthySignal
 	open     map[alertKey]registry.OpenAlert
+	reasons  map[string]string // deviceID → offline reason served by OfflineReason
 }
 
 func newFakeAlertStore() *fakeAlertStore {
-	return &fakeAlertStore{open: map[alertKey]registry.OpenAlert{}}
+	return &fakeAlertStore{open: map[alertKey]registry.OpenAlert{}, reasons: map[string]string{}}
+}
+
+func (s *fakeAlertStore) setReason(deviceID, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reasons[deviceID] = reason
+}
+
+func (s *fakeAlertStore) OfflineReason(_ context.Context, deviceID string, _, _ time.Time) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reasons[deviceID], nil
 }
 
 func (s *fakeAlertStore) setSnapshot(sigs ...registry.UnhealthySignal) {
