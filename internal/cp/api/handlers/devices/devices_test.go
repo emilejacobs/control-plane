@@ -19,6 +19,7 @@ type fakeService struct {
 	err           error
 	serviceConfig registry.ServiceConfig
 	serviceCfgErr error
+	reboots       []registry.DeviceReboot
 }
 
 func (f fakeService) GetByID(_ context.Context, _ string) (registry.Device, error) {
@@ -35,6 +36,10 @@ func (f fakeService) ListServices(_ context.Context, _ string) ([]registry.Devic
 
 func (f fakeService) GetServiceConfig(_ context.Context, _ string) (registry.ServiceConfig, error) {
 	return f.serviceConfig, f.serviceCfgErr
+}
+
+func (f fakeService) ListReboots(_ context.Context, _ string, _ int) ([]registry.DeviceReboot, error) {
+	return f.reboots, nil
 }
 
 // getDevice drives GetHandler.ServeHTTP and returns the decoded JSON body.
@@ -245,6 +250,61 @@ func TestGetDeviceAssetNumberIsNullWhenUnassigned(t *testing.T) {
 
 	if got, ok := out["asset_number"]; !ok || got != nil {
 		t.Errorf("asset_number: got %v want null (key must be present)", got)
+	}
+}
+
+// #159: the device GET surfaces last boot time + last shutdown cause and a
+// recent-reboots list (newest first, with cause), each formatted RFC3339.
+func TestGetDeviceSurfacesBootStateAndReboots(t *testing.T) {
+	boot := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
+	detected := time.Date(2026, 6, 23, 9, 0, 0, 0, time.UTC)
+	cause, code := "thermal", -71
+	h := NewGet(fakeService{
+		dev: registry.Device{
+			ID: "dev-1", EnrolledAt: time.Now(),
+			LastBootTime: &boot, LastShutdownCause: &cause, LastShutdownCauseCode: &code,
+		},
+		reboots: []registry.DeviceReboot{
+			{BootTime: boot, ShutdownCause: &cause, ShutdownCauseCode: &code, DetectedAt: detected},
+		},
+	})
+
+	out := getDevice(t, h)
+
+	if got := out["last_boot_time"]; got != boot.Format(time.RFC3339) {
+		t.Errorf("last_boot_time: got %v want %s", got, boot.Format(time.RFC3339))
+	}
+	if got := out["last_shutdown_cause"]; got != "thermal" {
+		t.Errorf("last_shutdown_cause: got %v want thermal", got)
+	}
+	reboots, ok := out["recent_reboots"].([]any)
+	if !ok || len(reboots) != 1 {
+		t.Fatalf("recent_reboots: got %T len mismatch: %v", out["recent_reboots"], out["recent_reboots"])
+	}
+	rb := reboots[0].(map[string]any)
+	if rb["boot_time"] != boot.Format(time.RFC3339) || rb["shutdown_cause"] != "thermal" {
+		t.Errorf("reboot row: got %+v", rb)
+	}
+}
+
+// Graceful empty state for a pre-#157 agent: boot fields null, recent_reboots an
+// empty (present, non-null) array.
+func TestGetDeviceBootStateEmptyForOldAgent(t *testing.T) {
+	h := NewGet(fakeService{dev: registry.Device{ID: "dev-1", EnrolledAt: time.Now()}})
+
+	out := getDevice(t, h)
+
+	for _, k := range []string{"last_boot_time", "last_shutdown_cause", "last_shutdown_cause_code"} {
+		if got, ok := out[k]; !ok || got != nil {
+			t.Errorf("%s: got %v want null (key present)", k, got)
+		}
+	}
+	reboots, ok := out["recent_reboots"].([]any)
+	if !ok {
+		t.Fatalf("recent_reboots should be an empty array, got %T (%v)", out["recent_reboots"], out["recent_reboots"])
+	}
+	if len(reboots) != 0 {
+		t.Errorf("recent_reboots: got %d want 0", len(reboots))
 	}
 }
 
