@@ -6,6 +6,14 @@ issues under the `ready-for-agent` label that reference this file.
 Design approved 2026-06-23 via mockups (radial-arc gauge style chosen over
 speedometer/linear options; full-page mock signed off).
 
+## Implementation slices
+
+Filed on GitHub Issues under `ready-for-agent`, in dependency order:
+
+- **#151** — reusable radial `Gauge` + Devices/Version gauges (existing data). No blockers.
+- **#152** — Camera alerts panel + Cameras gauge (`registry.FleetCameras` + `GET /fleet/cameras`; integration-tested). Blocked by #151.
+- **#153** — Services-online gauge (service online/total counts on `/fleet/alerts`). Blocked by #151.
+
 ## Problem Statement
 
 The fleet overview page (`/overview`, also the root `/`) opens with three flat
