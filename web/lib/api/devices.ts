@@ -115,6 +115,22 @@ export interface Device {
   // EditServicesModal reads + writes this block; the panel chrome
   // shows "(default)" vs "(overridden)" derived from allowListOverride.
   serviceConfig: ServiceConfig;
+  // #157/#159: the device's most-recent boot state + reboot history. All null /
+  // empty until a rolled agent reports boot info (a pre-#157 agent never does).
+  // The device page renders last boot + last shutdown cause and a restart list.
+  lastBootTime: string | null; // RFC3339
+  lastShutdownCause: string | null;
+  lastShutdownCauseCode: number | null;
+  recentReboots: DeviceReboot[];
+}
+
+// DeviceReboot is one row of a device's reboot history (#157/#159): a distinct
+// boot_time CP observed, the previous-shutdown cause, and when CP first saw it.
+export interface DeviceReboot {
+  bootTime: string; // RFC3339
+  shutdownCause: string | null;
+  shutdownCauseCode: number | null;
+  detectedAt: string; // RFC3339
 }
 
 // Camera is the per-device camera inventory row (Phase 2 Edge UI
@@ -363,6 +379,17 @@ interface DeviceWire {
   alpr_license_set: boolean;
   services: DeviceServiceWire[];
   service_config: ServiceConfigWire;
+  last_boot_time: string | null;
+  last_shutdown_cause: string | null;
+  last_shutdown_cause_code: number | null;
+  recent_reboots: DeviceRebootWire[];
+}
+
+interface DeviceRebootWire {
+  boot_time: string;
+  shutdown_cause: string | null;
+  shutdown_cause_code: number | null;
+  detected_at: string;
 }
 
 interface DeviceServiceWire {
@@ -424,6 +451,15 @@ export async function getDevice(id: string): Promise<Device> {
       lastAppliedCorrelationId:
         d.service_config?.last_applied_correlation_id ?? null,
     },
+    lastBootTime: d.last_boot_time ?? null,
+    lastShutdownCause: d.last_shutdown_cause ?? null,
+    lastShutdownCauseCode: d.last_shutdown_cause_code ?? null,
+    recentReboots: (d.recent_reboots ?? []).map((r) => ({
+      bootTime: r.boot_time,
+      shutdownCause: r.shutdown_cause ?? null,
+      shutdownCauseCode: r.shutdown_cause_code ?? null,
+      detectedAt: r.detected_at,
+    })),
   };
 }
 

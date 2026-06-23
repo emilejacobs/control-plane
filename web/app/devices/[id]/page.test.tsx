@@ -94,6 +94,61 @@ describe("per-device view", () => {
     expect(fieldValue("Enrolled")).toBe("2026-05-01");
   });
 
+  // #159: the device page surfaces last boot + last shutdown cause and a
+  // recent-reboots history, so a device's restart state is visible at a glance.
+  it("shows last boot and last shutdown cause on the System card", async () => {
+    deviceReturns(
+      device({
+        last_boot_time: "2026-06-22T00:00:00Z",
+        last_shutdown_cause: "thermal",
+        last_shutdown_cause_code: -71,
+        recent_reboots: [],
+      }),
+    );
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(fieldValue("Last shutdown cause")).toBe("thermal");
+    // Last boot renders a relative time, not the empty-state token.
+    expect(fieldValue("Last boot")).not.toBe("");
+    expect(fieldValue("Last boot")).not.toMatch(/never/i);
+  });
+
+  it("renders a Restart History panel with the recent reboots", async () => {
+    deviceReturns(
+      device({
+        recent_reboots: [
+          {
+            boot_time: "2026-06-22T00:00:00Z",
+            shutdown_cause: "thermal",
+            shutdown_cause_code: -71,
+            detected_at: "2026-06-23T09:00:00Z",
+          },
+          {
+            boot_time: "2026-06-20T00:00:00Z",
+            shutdown_cause: "clean restart",
+            shutdown_cause_code: 5,
+            detected_at: "2026-06-21T09:00:00Z",
+          },
+        ],
+      }),
+    );
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(screen.getByText("Restart History")).toBeInTheDocument();
+    expect(screen.getByText("thermal")).toBeInTheDocument();
+    expect(screen.getByText("clean restart")).toBeInTheDocument();
+  });
+
+  it("shows an empty restart-history state for a device with no reboots", async () => {
+    deviceReturns(device({ recent_reboots: [], last_boot_time: null, last_shutdown_cause: null }));
+    renderWithClient(<DevicePage />);
+    await screen.findByRole("heading", { name: "mac-mini-acme-01" });
+
+    expect(screen.getByText(/no reboots/i)).toBeInTheDocument();
+  });
+
   // Issue #14 shipped lan_ip + tailscale_ip + tailscale_name into the
   // device record; issue #15 renders them so operators can read them
   // off the device page without inspecting the API.
