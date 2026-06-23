@@ -528,6 +528,50 @@ label.field .hint {
 .qr .px { background: #fff; }
 
 /* ───── overview ───── */
+/* Radial-arc KPI gauges (#151). auto-fit so the row reads as intentional as
+   gauges are added slice by slice (devices+version now; cameras, services
+   follow) — 2 gauges fill the row, 4 settle into quarters. */
+.gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.gauge-card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: 16px 12px 14px;
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+.gauge {
+  width: 112px;
+  height: 99px;
+  display: block;
+  margin: 0 auto 4px;
+}
+.gauge-pct {
+  fill: var(--ink);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.gauge-count {
+  fill: var(--ink-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.gauge-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.gauge-sub {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

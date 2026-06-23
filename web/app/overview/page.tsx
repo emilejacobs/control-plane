@@ -6,6 +6,7 @@ import { useDevices, useFleetAlerts } from "../../lib/api/hooks";
 import { groupDevices } from "../../lib/fleet";
 import { Topbar } from "../../components/ui/Topbar";
 import { Card } from "../../components/ui/Card";
+import { Gauge, gaugeTone } from "../../components/ui/Gauge";
 import { Dot } from "../../components/ui/Dot";
 import { Pill } from "../../components/ui/Pill";
 import { FleetAlertsPanel } from "../../components/FleetAlertsPanel";
@@ -54,8 +55,15 @@ export function OverviewBody() {
     const certExpiring = list.filter(
       (d) => d.certDaysRemaining != null && d.certDaysRemaining <= 30,
     ).length;
-    const versions = new Set<string>();
-    for (const d of list) if (d.agentVersion) versions.add(d.agentVersion);
+    // Version conformance: the share of the fleet on the modal (most-common)
+    // agent version. versionModal is that largest cohort's size; total-minus-it
+    // is the drift count the gauge sub-label calls out.
+    const versionCounts = new Map<string, number>();
+    for (const d of list) {
+      if (d.agentVersion) versionCounts.set(d.agentVersion, (versionCounts.get(d.agentVersion) ?? 0) + 1);
+    }
+    let versionModal = 0;
+    for (const c of versionCounts.values()) if (c > versionModal) versionModal = c;
     return {
       total: list.length,
       online,
@@ -63,7 +71,8 @@ export function OverviewBody() {
       sites: sites.size,
       clients: clients.size,
       certExpiring,
-      agentVersionCount: versions.size,
+      agentVersionCount: versionCounts.size,
+      versionModal,
     };
   }, [devices.data]);
 
@@ -128,49 +137,28 @@ export function OverviewBody() {
 
         {devices.data && (
           <>
-            <div className="stat-grid">
-              <div className="stat">
-                <div className="stat-label">Online</div>
-                <div className="stat-value">
-                  {stats.online}
-                  <span
-                    style={{
-                      color: "var(--ink-3)",
-                      fontSize: 16,
-                      fontWeight: 500,
-                    }}
-                  >
-                    {" "}
-                    / {stats.total}
-                  </span>
-                </div>
-                <div className="stat-sub">
-                  {stats.total > 0
-                    ? `${Math.round((stats.online / stats.total) * 100)}% available · ${stats.offline} offline`
-                    : "No devices enrolled"}
-                </div>
-              </div>
-
-              <div className="stat">
-                <div className="stat-label">Cert expiring &le; 30d</div>
-                <div className="stat-value">{stats.certExpiring}</div>
-                <div className="stat-sub">
-                  {stats.certExpiring === 0
-                    ? "All certs > 30 days out"
-                    : `${stats.certExpiring} of ${stats.total} need rotation soon`}
-                </div>
-              </div>
-
-              <div className="stat">
-                <div className="stat-label">Agent version drift</div>
-                <div className="stat-value">{stats.agentVersionCount}</div>
-                <div className="stat-sub">
-                  {stats.agentVersionCount <= 1
-                    ? "Fleet on one version"
-                    : `${stats.agentVersionCount} distinct versions in fleet`}
-                </div>
-              </div>
-
+            {/* Radial-arc gauge row (#151). Devices + version conformance draw
+                from the devices summary already loaded here; cameras + services
+                gauges land in the follow-up slices (#152/#153). */}
+            <div className="gauge-grid">
+              <Gauge
+                value={stats.online}
+                max={stats.total}
+                label="Devices online"
+                sub={stats.offline === 0 ? "all online" : `${stats.offline} offline`}
+                tone={gaugeTone(stats.total > 0 ? stats.online / stats.total : 0)}
+              />
+              <Gauge
+                value={stats.versionModal}
+                max={stats.total}
+                label="Agent version"
+                sub={
+                  stats.versionModal >= stats.total
+                    ? "fleet converged"
+                    : `${stats.total - stats.versionModal} on old build`
+                }
+                tone={gaugeTone(stats.total > 0 ? stats.versionModal / stats.total : 0)}
+              />
             </div>
 
             {fleetAlerts.data &&
