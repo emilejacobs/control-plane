@@ -1078,6 +1078,68 @@ func (r *Registry) RecordRolledBackVersion(ctx context.Context, deviceID, versio
 	return nil
 }
 
+// RecordBootInfo records a heartbeat's reported system boot time + previous-
+// shutdown cause (#157, PRD .scratch/offline-reason-tracking). It compares the
+// reported bootTime to the device's stored last_boot_time: on a change —
+// including first contact, when the stored value is NULL — it appends a
+// device_reboots history row and updates the device's last boot state; an
+// unchanged boot_time is a no-op (no row, no update). This is the reboot-vs-blip
+// discriminator: a changed boot_time across an offline window means the device
+// rebooted, unchanged means a network/MQTT blip.
+//
+// code is nil when the agent reported no shutdown cause (the column is left
+// NULL). detectedAt is CP's observation time (not the boot instant). The work
+// runs in one transaction with a row lock so concurrent heartbeats for the same
+// device can't double-insert. Unknown / non-UUID ids are ErrDeviceNotFound.
+func (r *Registry) RecordBootInfo(ctx context.Context, deviceID string, bootTime time.Time, cause string, code *int, detectedAt time.Time) error {
+	if _, err := uuid.Parse(deviceID); err != nil {
+		return ErrDeviceNotFound
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var stored *time.Time
+	err = tx.QueryRow(ctx,
+		`SELECT last_boot_time FROM devices WHERE id = $1 FOR UPDATE`, deviceID).Scan(&stored)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrDeviceNotFound
+		}
+		return fmt.Errorf("select last_boot_time: %w", err)
+	}
+
+	// Unchanged boot_time — same boot, just another heartbeat. No reboot.
+	if stored != nil && stored.Equal(bootTime) {
+		return tx.Commit(ctx)
+	}
+
+	var causePtr *string
+	if cause != "" {
+		causePtr = &cause
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO device_reboots (device_id, boot_time, shutdown_cause, shutdown_cause_code, detected_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (device_id, boot_time) DO NOTHING
+	`, deviceID, bootTime, causePtr, code, detectedAt); err != nil {
+		return fmt.Errorf("insert device_reboots: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE devices
+		SET last_boot_time           = $2,
+		    last_shutdown_cause      = $3,
+		    last_shutdown_cause_code = $4,
+		    updated_at               = now()
+		WHERE id = $1
+	`, deviceID, bootTime, causePtr, code); err != nil {
+		return fmt.Errorf("update device boot state: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 // SetDesiredAgentVersion stamps the fleet-update rollout target on a set of
 // devices (issue #40, ADR-035 §1). Non-UUID or unknown ids in the set are
 // skipped, not an error — the returned count of stamped rows is the caller's

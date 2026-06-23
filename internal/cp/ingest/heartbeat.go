@@ -42,6 +42,15 @@ type Heartbeat struct {
 	// present; empty/omitted means no rollback to record (and the previously
 	// stored value is left untouched).
 	RolledBackVersion string `json:"rolled_back_version,omitempty"`
+	// BootTime is the device's system boot instant (RFC3339), the offline-reason
+	// discriminator (#157): a changed boot_time between offline and recovery is a
+	// reboot, unchanged is a network/MQTT blip. Empty/omitted = a pre-#157 agent;
+	// the boot-info path is skipped. LastShutdownCause + ShutdownCauseCode are the
+	// macOS previous-shutdown cause that rides with it (the code is a pointer so a
+	// real 0 — power loss — is distinct from absent).
+	BootTime          string `json:"boot_time,omitempty"`
+	LastShutdownCause string `json:"last_shutdown_cause,omitempty"`
+	ShutdownCauseCode *int   `json:"shutdown_cause_code,omitempty"`
 }
 
 // Correlation satisfies sqsconsumer.Correlated.
@@ -67,6 +76,13 @@ type LastSeenWriter interface {
 	// untargeted) so the ingester can make the reconcile decision in
 	// the same round trip.
 	RecordReportedAgentVersion(ctx context.Context, deviceID, version string) (desired *string, err error)
+	// RecordBootInfo records the device's reported system boot time + shutdown
+	// cause (#157). When the boot_time differs from the device's stored value
+	// (including first contact) it inserts a device_reboots history row and
+	// updates the device's last boot state; an unchanged boot_time is a no-op.
+	// code is nil when the agent had no shutdown cause to report. at is the
+	// ingest clock (detected_at).
+	RecordBootInfo(ctx context.Context, deviceID string, bootTime time.Time, cause string, code *int, at time.Time) error
 }
 
 // UpdatePusher re-publishes agent.update toward a device whose reported
@@ -132,6 +148,20 @@ func (i *PresenceIngester) Handle(ctx context.Context, hb Heartbeat) error {
 			optionalString(hb.TailscaleIP),
 			optionalString(hb.TailscaleName),
 		); err != nil {
+			if errors.Is(err, registry.ErrDeviceNotFound) {
+				return sqsconsumer.Poison(err)
+			}
+			return err
+		}
+	}
+	if hb.BootTime != "" {
+		// Best-effort: a malformed boot_time is dropped (logged), never fatal —
+		// the rest of the heartbeat (last_seen, etc.) is fine and the next
+		// heartbeat carries the same static value.
+		if bt, err := time.Parse(time.RFC3339, hb.BootTime); err != nil {
+			i.logger().Warn("heartbeat boot_time unparseable; skipping boot info",
+				"device_id", hb.DeviceID, "boot_time", hb.BootTime, "err", err)
+		} else if err := i.writer.RecordBootInfo(ctx, hb.DeviceID, bt, hb.LastShutdownCause, hb.ShutdownCauseCode, at); err != nil {
 			if errors.Is(err, registry.ErrDeviceNotFound) {
 				return sqsconsumer.Poison(err)
 			}
