@@ -17,6 +17,13 @@ type NotificationStore interface {
 	OpenAlert(ctx context.Context, kind registry.UnhealthyKind, deviceID, subject string, at time.Time) error
 	MarkAlertNotified(ctx context.Context, kind registry.UnhealthyKind, deviceID, subject string, at time.Time) error
 	ResolveAlert(ctx context.Context, kind registry.UnhealthyKind, deviceID, subject string, at time.Time) error
+	// OfflineReason classifies a cleared device-offline alert (#158): the
+	// recovery cause inferred from device_reboots over the offline window
+	// (since, until]. Returns "reboot: <cause>" when the device rebooted in the
+	// window, "network blip" when a boot-info-reporting device didn't, and ""
+	// when the device never reported boot info (a pre-#157 agent — unknown, so
+	// render no reason).
+	OfflineReason(ctx context.Context, deviceID string, since, until time.Time) (string, error)
 }
 
 // AlertEvent is one alert transition rendered into a digest — enough to name
@@ -253,7 +260,19 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 		}
 	}
 	for _, a := range recovered {
-		digest.Resolved = append(digest.Resolved, eventFromOpen(a))
+		ev := eventFromOpen(a)
+		// Offline recoveries carry a reason (#158): reboot vs network blip,
+		// inferred from device_reboots over the offline window [OpenedAt, now]. A
+		// lookup error degrades to no reason rather than dropping the recovery.
+		if a.Kind == registry.UnhealthyOffline {
+			reason, err := r.store.OfflineReason(ctx, a.DeviceID, a.OpenedAt, now)
+			if err != nil {
+				r.log.Error("offline reason lookup failed", "device_id", a.DeviceID, "err", err)
+			} else {
+				ev.Reason = reason
+			}
+		}
+		digest.Resolved = append(digest.Resolved, ev)
 	}
 
 	if digest.Empty() {
