@@ -708,6 +708,74 @@ func (r *Registry) FleetAlerts(ctx context.Context) (FleetAlerts, error) {
 	return out, nil
 }
 
+// FleetCameraRollup is the #152 fleet-wide camera reachability roll-up that
+// backs the Overview's Cameras gauge + Camera alerts panel: the online/total
+// counts plus the currently-offline cameras with enough context (device, site,
+// since-when) to triage. Cameras whose status is "unknown" (never probed) count
+// toward Total but are neither Online nor in Offline.
+type FleetCameraRollup struct {
+	Total   int
+	Online  int
+	Offline []OfflineCamera
+}
+
+// OfflineCamera is one currently-offline camera in the fleet roll-up.
+// StatusChangedAt is when it went offline (nil if never recorded).
+type OfflineCamera struct {
+	CameraID        string
+	Label           string
+	DeviceID        string
+	Hostname        string
+	SiteName        *string
+	StatusChangedAt *time.Time
+}
+
+// FleetCameras returns the site-scoped fleet camera roll-up (#152). It routes
+// through ScopedDeviceQuery so a site-scoped operator only sees cameras at their
+// allowlisted sites; a read with no resolved scope fails closed (empty roll-up).
+// The offline list is ordered longest-outage-first (oldest status_changed_at),
+// so the most urgent outage sorts to the top of the alerts panel.
+func (r *Registry) FleetCameras(ctx context.Context) (FleetCameraRollup, error) {
+	out := FleetCameraRollup{Offline: []OfflineCamera{}}
+	filter, ok := authz.ScopeFromContext(ctx)
+	if !ok {
+		return out, nil
+	}
+
+	sql, args := authz.ScopedDeviceQuery(filter, `
+		SELECT dc.status, dc.camera_id, dc.label, dc.device_id::text,
+		       devices.hostname, s.name, dc.status_changed_at
+		FROM device_cameras dc
+		JOIN devices ON devices.id = dc.device_id
+		LEFT JOIN sites s ON s.id = devices.site_id
+		WHERE true
+	`)
+	rows, err := r.pool.Query(ctx, sql+" ORDER BY dc.status_changed_at ASC NULLS LAST, dc.camera_id", args...)
+	if err != nil {
+		return out, fmt.Errorf("query fleet cameras: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var cam OfflineCamera
+		if err := rows.Scan(&status, &cam.CameraID, &cam.Label, &cam.DeviceID,
+			&cam.Hostname, &cam.SiteName, &cam.StatusChangedAt); err != nil {
+			return out, fmt.Errorf("scan fleet camera: %w", err)
+		}
+		out.Total++
+		switch status {
+		case "online":
+			out.Online++
+		case "offline":
+			out.Offline = append(out.Offline, cam)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("iterate fleet cameras: %w", err)
+	}
+	return out, nil
+}
+
 // Capture is a row in device_captures (#8): one uploaded artifact's index
 // entry. The bytes live in S3 at S3Key; Metadata is the per-kind payload
 // (e.g. {"camera_id": "cam1"} for a snapshot).

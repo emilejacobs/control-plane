@@ -254,6 +254,10 @@ func NewBuilderWith(d Deps) *Builder {
 		// dashboard (#21). Site-scoped (not staff-gated): a scoped operator
 		// sees only their sites' alerts; staff see the whole fleet.
 		b.Get("/fleet/alerts", requireAuth(onboarded(requireScope(fleet.NewAlerts(d.Registry)))))
+		// GET /fleet/cameras — fleet-wide camera reachability roll-up for the
+		// Overview Cameras gauge + Camera alerts panel (#152). Site-scoped like
+		// /fleet/alerts: scoped operators see only their sites' cameras.
+		b.Get("/fleet/cameras", requireAuth(onboarded(requireScope(fleet.NewCameras(d.Registry)))))
 		// GET /fleet/agent-rollout — issue #40 desired-vs-reported rollout
 		// view. Site-scoped like /fleet/alerts: scoped operators see their
 		// slice, staff see the fleet; the mutating counterpart

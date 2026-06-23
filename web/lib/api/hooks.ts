@@ -30,7 +30,7 @@ import {
   setTeamsWebhook,
 } from "./settings";
 import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
-import { getFleetAlerts } from "./fleet";
+import { getFleetAlerts, getFleetCameras } from "./fleet";
 import {
   getAgentRollout,
   getAgentVersions,
@@ -147,6 +147,17 @@ export function useFleetAlerts() {
   return useQuery({
     queryKey: ["fleet-alerts"],
     queryFn: getFleetAlerts,
+    refetchInterval: devicePollInterval,
+  });
+}
+
+// useFleetCameras loads the site-scoped fleet camera roll-up (#152) for the
+// Overview Cameras gauge + Camera alerts panel, on the same 10s cadence as the
+// rest of the dashboard.
+export function useFleetCameras() {
+  return useQuery({
+    queryKey: ["fleet-cameras"],
+    queryFn: getFleetCameras,
     refetchInterval: devicePollInterval,
   });
 }
