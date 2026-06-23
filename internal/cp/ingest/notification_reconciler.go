@@ -19,7 +19,7 @@ type NotificationStore interface {
 	ResolveAlert(ctx context.Context, kind registry.UnhealthyKind, deviceID, subject string, at time.Time) error
 	// OfflineReason classifies a cleared device-offline alert (#158): the
 	// recovery cause inferred from device_reboots over the offline window
-	// (since, until]. Returns "reboot: <cause>" when the device rebooted in the
+	// [since, until]. Returns "reboot: <cause>" when the device rebooted in the
 	// window, "network blip" when a boot-info-reporting device didn't, and ""
 	// when the device never reported boot info (a pre-#157 agent — unknown, so
 	// render no reason).
