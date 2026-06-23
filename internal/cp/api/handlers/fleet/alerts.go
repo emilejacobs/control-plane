@@ -43,6 +43,10 @@ type serviceAlert struct {
 type alertsResponse struct {
 	Probes   []probeAlert   `json:"probes"`
 	Services []serviceAlert `json:"services"`
+	// Service online/total across the scoped fleet — the Overview Services
+	// gauge (#153). Distinct from the alert-only `services` list above.
+	ServiceOnline int `json:"service_online"`
+	ServiceTotal  int `json:"service_total"`
 }
 
 func (h *AlertsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,8 +57,10 @@ func (h *AlertsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := alertsResponse{
-		Probes:   make([]probeAlert, 0, len(alerts.Probes)),
-		Services: make([]serviceAlert, 0, len(alerts.Services)),
+		Probes:        make([]probeAlert, 0, len(alerts.Probes)),
+		Services:      make([]serviceAlert, 0, len(alerts.Services)),
+		ServiceOnline: alerts.ServiceOnline,
+		ServiceTotal:  alerts.ServiceTotal,
 	}
 	for _, p := range alerts.Probes {
 		resp.Probes = append(resp.Probes, probeAlert{
