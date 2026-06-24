@@ -50,7 +50,9 @@ REMOTE
 )
 
 ok=0; fail=0
-while read -r ip; do
+# `|| [ -n "$ip" ]` so a final line with no trailing newline (e.g.
+# mac-tailnet-ips-single.txt) is still processed rather than silently skipped.
+while read -r ip || [ -n "$ip" ]; do
   [ -z "$ip" ] && continue
   printf '%-16s ... ' "$ip"
   out="$(ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
