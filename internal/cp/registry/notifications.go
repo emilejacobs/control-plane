@@ -41,6 +41,11 @@ type UnhealthySignal struct {
 	// camera_offline signals; empty for the other kinds (which render the
 	// subject directly).
 	Label string
+	// Since is when the signal began — for offline signals, the device's
+	// presence_changed_at (when it went offline). The notification reconciler's
+	// offline debounce uses it to suppress sub-grace blips. nil for the other
+	// kinds (no debounce) and for an offline device with no recorded transition.
+	Since *time.Time
 }
 
 // FleetUnhealthy returns the whole fleet's current unhealthy signals — offline
