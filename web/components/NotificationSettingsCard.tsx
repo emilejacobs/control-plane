@@ -21,6 +21,7 @@ export function NotificationSettingsCard() {
 
   const [enabled, setEnabled] = useState(false);
   const [recipients, setRecipients] = useState("");
+  const [graceSeconds, setGraceSeconds] = useState("180");
   const [webhook, setWebhook] = useState("");
 
   // Seed the editable fields from the loaded config once it arrives.
@@ -28,6 +29,7 @@ export function NotificationSettingsCard() {
     if (settings.data) {
       setEnabled(settings.data.enabled);
       setRecipients(settings.data.emailRecipients.join("\n"));
+      setGraceSeconds(String(settings.data.offlineGraceSeconds));
     }
   }, [settings.data]);
 
@@ -43,7 +45,8 @@ export function NotificationSettingsCard() {
       .split("\n")
       .map((s) => s.trim())
       .filter((s) => s !== "");
-    saveConfig.mutate({ enabled, emailRecipients: list });
+    const grace = Math.max(0, Math.min(3600, parseInt(graceSeconds, 10) || 0));
+    saveConfig.mutate({ enabled, emailRecipients: list, offlineGraceSeconds: grace });
   };
 
   const onSaveWebhook = () => {
@@ -90,6 +93,33 @@ export function NotificationSettingsCard() {
             marginTop: 4,
           }}
         />
+        <div style={{ marginTop: 12 }}>
+          <label htmlFor="notif-offline-grace">Offline alert delay (seconds)</label>
+          <input
+            id="notif-offline-grace"
+            type="number"
+            aria-label="Offline alert delay seconds"
+            min={0}
+            max={3600}
+            value={graceSeconds}
+            disabled={saveConfig.isPending}
+            onChange={(e) => setGraceSeconds(e.target.value)}
+            style={{
+              display: "block",
+              width: 120,
+              fontSize: 13,
+              padding: "4px 8px",
+              border: "1px solid var(--line, #ccc)",
+              borderRadius: 4,
+              marginTop: 4,
+            }}
+          />
+          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Wait this long before alerting on an offline device — suppresses brief
+            network blips. 0 alerts immediately. Default 180 (3 min).
+          </p>
+        </div>
+
         <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
           <button
             type="button"

@@ -3,6 +3,7 @@ package notify_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/notify"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -37,6 +38,38 @@ func TestSettingsConfigSourceLoad(t *testing.T) {
 	}
 	if cfg.TeamsWebhookURL != "https://hook.example/z" {
 		t.Errorf("webhook = %q", cfg.TeamsWebhookURL)
+	}
+}
+
+// The offline-grace setting loads as a duration; unset/invalid → the 180s
+// default; "0" disables the debounce.
+func TestSettingsConfigSourceOfflineGrace(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		set   bool
+		want  time.Duration
+	}{
+		{"explicit 120s", "120", true, 120 * time.Second},
+		{"zero disables", "0", true, 0},
+		{"unset → default", "", false, 180 * time.Second},
+		{"invalid → default", "abc", true, 180 * time.Second},
+		{"negative → default", "-5", true, 180 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vals := map[string]string{}
+			if tc.set {
+				vals[registry.SettingOfflineGraceSeconds] = tc.value
+			}
+			cfg, err := notify.NewSettingsConfigSource(&fakeSettingStore{values: vals}).Load(context.Background())
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.OfflineGrace != tc.want {
+				t.Errorf("OfflineGrace = %v, want %v", cfg.OfflineGrace, tc.want)
+			}
+		})
 	}
 }
 

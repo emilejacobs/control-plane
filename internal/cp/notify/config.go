@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/emilejacobs/control-plane/internal/cp/ingest"
 	"github.com/emilejacobs/control-plane/internal/cp/registry"
@@ -39,14 +41,34 @@ func (s *SettingsConfigSource) Load(ctx context.Context) (ingest.NotificationCon
 	if err != nil {
 		return ingest.NotificationConfig{}, fmt.Errorf("load notifications.teams_webhook_url: %w", err)
 	}
+	graceRaw, _, err := s.store.GetCPSetting(ctx, registry.SettingOfflineGraceSeconds)
+	if err != nil {
+		return ingest.NotificationConfig{}, fmt.Errorf("load notifications.offline_grace_seconds: %w", err)
+	}
 
 	return ingest.NotificationConfig{
-		Enabled: enabled == "true",
+		Enabled:      enabled == "true",
+		OfflineGrace: parseOfflineGrace(graceRaw),
 		NotifyConfig: ingest.NotifyConfig{
 			Recipients:      parseRecipients(recipientsRaw),
 			TeamsWebhookURL: webhook,
 		},
 	}, nil
+}
+
+// parseOfflineGrace turns the stored integer-seconds string into a duration.
+// Unset/empty, non-numeric, or negative falls back to the 3-minute default; a
+// valid non-negative integer (including "0", which disables the debounce) is
+// honoured.
+func parseOfflineGrace(raw string) time.Duration {
+	if raw == "" {
+		return registry.DefaultOfflineGraceSeconds * time.Second
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return registry.DefaultOfflineGraceSeconds * time.Second
+	}
+	return time.Duration(n) * time.Second
 }
 
 // parseRecipients decodes the stored JSON array, tolerating unset/empty/invalid
