@@ -339,8 +339,8 @@ export function useNotificationSettings() {
 export function useSetNotificationConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (cfg: { enabled: boolean; emailRecipients: string[] }) =>
-      setNotificationConfig(cfg.enabled, cfg.emailRecipients),
+    mutationFn: (cfg: { enabled: boolean; emailRecipients: string[]; offlineGraceSeconds: number }) =>
+      setNotificationConfig(cfg.enabled, cfg.emailRecipients, cfg.offlineGraceSeconds),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-settings"] }),
   });
 }

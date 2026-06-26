@@ -38,6 +38,10 @@ export async function setPRToken(token: string): Promise<void> {
 export interface NotificationSettings {
   enabled: boolean;
   emailRecipients: string[];
+  // offlineGraceSeconds is the debounce window: a device must be offline this
+  // long before an OFFLINE alert fires, suppressing brief network blips. 0 =
+  // alert immediately. Defaults to 180.
+  offlineGraceSeconds: number;
   teamsWebhookSet: boolean;
   teamsWebhookPreview: string;
 }
@@ -50,22 +54,25 @@ export async function getNotificationSettings(): Promise<NotificationSettings> {
   const d = (await res.json()) as {
     enabled?: boolean;
     email_recipients?: string[];
+    offline_grace_seconds?: number;
     teams_webhook_set?: boolean;
     teams_webhook_preview?: string;
   };
   return {
     enabled: d.enabled ?? false,
     emailRecipients: d.email_recipients ?? [],
+    offlineGraceSeconds: d.offline_grace_seconds ?? 180,
     teamsWebhookSet: d.teams_webhook_set ?? false,
     teamsWebhookPreview: d.teams_webhook_preview ?? "",
   };
 }
 
 // setNotificationConfig writes the non-secret config (enable switch + recipient
-// list) in one PUT.
+// list + the offline-alert debounce window) in one PUT.
 export async function setNotificationConfig(
   enabled: boolean,
   emailRecipients: string[],
+  offlineGraceSeconds: number,
 ): Promise<void> {
   const res = await apiRequest("/settings/notifications", {
     method: "PUT",
@@ -73,7 +80,11 @@ export async function setNotificationConfig(
       "Content-Type": "application/json",
       "Idempotency-Key": crypto.randomUUID(),
     },
-    body: JSON.stringify({ enabled, email_recipients: emailRecipients }),
+    body: JSON.stringify({
+      enabled,
+      email_recipients: emailRecipients,
+      offline_grace_seconds: offlineGraceSeconds,
+    }),
   });
   if (!res.ok) {
     throw new ApiError(res.status, "failed to update notification settings");
