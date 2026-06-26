@@ -1385,7 +1385,17 @@ const (
 	SettingNotificationsEnabled    = "notifications.enabled"
 	SettingNotificationsRecipients = "notifications.email_recipients"
 	SettingTeamsWebhookURL         = "notifications.teams_webhook_url"
+	// SettingOfflineGraceSeconds tunes the offline-alert debounce: a device must
+	// be offline this many seconds before an OFFLINE alert opens, suppressing
+	// sub-grace network blips. Stored as an integer-seconds string; unset →
+	// DefaultOfflineGraceSeconds; "0" disables the debounce.
+	SettingOfflineGraceSeconds = "notifications.offline_grace_seconds"
 )
+
+// DefaultOfflineGraceSeconds is the offline-debounce window applied when the
+// setting is unset or invalid — 3 minutes, comfortably above the sub-minute
+// network/MQTT blips while barely delaying real-outage alerts.
+const DefaultOfflineGraceSeconds = 180
 
 // SetCPSetting upserts a CP-singleton setting (#84, migration 027). Values may
 // be secret — callers must not log them.

@@ -81,6 +81,11 @@ type Notifier interface {
 type NotificationConfig struct {
 	Enabled bool
 	NotifyConfig
+	// OfflineGrace debounces device-offline alerts: an offline signal younger
+	// than this is not opened/notified, so a sub-grace network blip never fires
+	// an OFFLINE + recovered pair. Only the offline kind is debounced. Zero
+	// disables it (every offline alerts immediately, the pre-debounce behaviour).
+	OfflineGrace time.Duration
 }
 
 // ConfigSource loads the current notification config from the settings store.
@@ -210,9 +215,19 @@ func (r *NotificationReconciler) ReconcileOnce(ctx context.Context) error {
 	var owed []registry.UnhealthySignal
 	for _, s := range snapshot {
 		a, ok := openByID[signalIdentity(s)]
-		if !ok || a.LastNotifiedAt == nil {
-			owed = append(owed, s)
+		if ok && a.LastNotifiedAt != nil {
+			continue // already open + notified
 		}
+		// Offline debounce (#offline-debounce): a brand-new offline signal younger
+		// than the grace window is held back, so a sub-grace network/MQTT blip
+		// never opens an OFFLINE + recovered pair. Only newly-seen signals (no open
+		// row) are debounced; an already-open alert awaiting a retry is not. Offline
+		// only; grace 0 / a nil Since disables it.
+		if !ok && s.Kind == registry.UnhealthyOffline && cfg.OfflineGrace > 0 &&
+			s.Since != nil && now.Sub(*s.Since) < cfg.OfflineGrace {
+			continue
+		}
+		owed = append(owed, s)
 	}
 
 	// Open rows no longer in the snapshot have cleared. A row that was actually

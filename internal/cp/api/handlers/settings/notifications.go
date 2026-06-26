@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"strconv"
 
 	"github.com/emilejacobs/control-plane/internal/cp/api/middleware"
 	"github.com/emilejacobs/control-plane/internal/cp/audit"
@@ -16,11 +17,19 @@ import (
 // webhook is write-only: only whether it is set and a host-only preview are
 // exposed, never the signed URL.
 type notificationsResponse struct {
-	Enabled             bool     `json:"enabled"`
-	EmailRecipients     []string `json:"email_recipients"`
-	TeamsWebhookSet     bool     `json:"teams_webhook_set"`
-	TeamsWebhookPreview string   `json:"teams_webhook_preview"`
+	Enabled         bool     `json:"enabled"`
+	EmailRecipients []string `json:"email_recipients"`
+	// OfflineGraceSeconds is the offline-alert debounce window (#offline-debounce):
+	// a device must be offline this long before an OFFLINE alert fires, so a
+	// sub-grace network blip is suppressed. 0 disables it; defaults to 180.
+	OfflineGraceSeconds int    `json:"offline_grace_seconds"`
+	TeamsWebhookSet     bool   `json:"teams_webhook_set"`
+	TeamsWebhookPreview string `json:"teams_webhook_preview"`
 }
+
+// maxOfflineGraceSeconds caps the debounce window at 1 hour — beyond that a real
+// outage would go unannounced too long.
+const maxOfflineGraceSeconds = 3600
 
 // NotificationsGetHandler serves GET /settings/notifications — the enable
 // switch, recipient list, and Teams-webhook set/preview. Staff-only.
@@ -51,10 +60,17 @@ func (h *NotificationsGetHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	graceVal, _, err := h.store.GetCPSetting(r.Context(), registry.SettingOfflineGraceSeconds)
+	if err != nil {
+		log.Error("get offline grace", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, notificationsResponse{
 		Enabled:             enabledVal == "true",
 		EmailRecipients:     decodeRecipients(recipientsVal),
+		OfflineGraceSeconds: decodeGrace(graceVal),
 		TeamsWebhookSet:     webhookSet && webhookVal != "",
 		TeamsWebhookPreview: webhookPreview(webhookVal),
 	})
@@ -74,6 +90,10 @@ func NewNotificationsPut(store Store, auditW audit.Writer) *NotificationsPutHand
 type notificationsRequest struct {
 	Enabled         bool     `json:"enabled"`
 	EmailRecipients []string `json:"email_recipients"`
+	// OfflineGraceSeconds is optional: a nil pointer (field omitted) leaves the
+	// stored debounce window unchanged, so older clients that don't send it never
+	// reset it. When present it must be 0..maxOfflineGraceSeconds.
+	OfflineGraceSeconds *int `json:"offline_grace_seconds"`
 }
 
 func (h *NotificationsPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +108,12 @@ func (h *NotificationsPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	for _, addr := range req.EmailRecipients {
 		if _, err := mail.ParseAddress(addr); err != nil {
 			http.Error(w, "invalid email address: "+addr, http.StatusBadRequest)
+			return
+		}
+	}
+	if req.OfflineGraceSeconds != nil {
+		if *req.OfflineGraceSeconds < 0 || *req.OfflineGraceSeconds > maxOfflineGraceSeconds {
+			http.Error(w, "offline_grace_seconds must be between 0 and 3600", http.StatusBadRequest)
 			return
 		}
 	}
@@ -108,6 +134,13 @@ func (h *NotificationsPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if req.OfflineGraceSeconds != nil {
+		if err := h.store.SetCPSetting(r.Context(), registry.SettingOfflineGraceSeconds, strconv.Itoa(*req.OfflineGraceSeconds)); err != nil {
+			log.Error("set offline grace", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	_ = h.audit.Write(r.Context(), audit.Entry{
 		Action:    "audit.notifications_config",
@@ -118,9 +151,16 @@ func (h *NotificationsPutHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		UserAgent: r.UserAgent(),
 		Payload:   map[string]any{"enabled": req.Enabled, "recipient_count": len(req.EmailRecipients)},
 	})
+	graceOut := decodeGrace("")
+	if req.OfflineGraceSeconds != nil {
+		graceOut = *req.OfflineGraceSeconds
+	} else if g, _, err := h.store.GetCPSetting(r.Context(), registry.SettingOfflineGraceSeconds); err == nil {
+		graceOut = decodeGrace(g)
+	}
 	writeJSON(w, notificationsResponse{
-		Enabled:         req.Enabled,
-		EmailRecipients: nonNilStrings(req.EmailRecipients),
+		Enabled:             req.Enabled,
+		EmailRecipients:     nonNilStrings(req.EmailRecipients),
+		OfflineGraceSeconds: graceOut,
 	})
 }
 
@@ -188,6 +228,20 @@ func decodeRecipients(stored string) []string {
 		return []string{}
 	}
 	return nonNilStrings(out)
+}
+
+// decodeGrace parses the stored integer-seconds string, falling back to the
+// 180s default for unset/invalid/negative — mirrors the config source so GET
+// reports what the reconciler will actually apply.
+func decodeGrace(stored string) int {
+	if stored == "" {
+		return registry.DefaultOfflineGraceSeconds
+	}
+	n, err := strconv.Atoi(stored)
+	if err != nil || n < 0 {
+		return registry.DefaultOfflineGraceSeconds
+	}
+	return n
 }
 
 // webhookPreview returns a host-only, non-sensitive hint of the configured

@@ -60,8 +60,40 @@ describe("NotificationSettingsCard", () => {
     await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
-      expect(body).toEqual({ enabled: false, email_recipients: ["a@x.com", "b@y.com"] }),
+      expect(body).toEqual({
+        enabled: false,
+        email_recipients: ["a@x.com", "b@y.com"],
+        offline_grace_seconds: 180,
+      }),
     );
+  });
+
+  it("seeds and PUTs the offline alert delay (debounce window)", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.get(`${API_BASE}/settings/notifications`, () =>
+        HttpResponse.json({
+          enabled: true,
+          email_recipients: [],
+          offline_grace_seconds: 120,
+          teams_webhook_set: false,
+          teams_webhook_preview: "",
+        }),
+      ),
+      http.put(`${API_BASE}/settings/notifications`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({});
+      }),
+    );
+    renderWithClient(<NotificationSettingsCard />);
+
+    const grace = await screen.findByLabelText(/offline alert delay/i);
+    expect(grace).toHaveValue(120); // seeded from the loaded config
+    await userEvent.clear(grace);
+    await userEvent.type(grace, "300");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(body?.offline_grace_seconds).toBe(300));
   });
 
   it("PUTs the Teams webhook to its write-only endpoint and never shows the value", async () => {
