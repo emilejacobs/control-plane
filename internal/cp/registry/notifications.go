@@ -57,27 +57,28 @@ type UnhealthySignal struct {
 func (r *Registry) FleetUnhealthy(ctx context.Context) ([]UnhealthySignal, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT 'offline' AS kind, d.id::text AS device_id, '' AS subject,
-		       d.hostname, s.name AS site_name, '' AS label
+		       d.hostname, s.name AS site_name, '' AS label,
+		       d.presence_changed_at AS since
 		FROM devices d
 		LEFT JOIN sites s ON s.id = d.site_id
 		WHERE d.is_online = false
 		UNION ALL
 		SELECT 'service_stopped', d.id::text, ds.service_name,
-		       d.hostname, s.name, ''
+		       d.hostname, s.name, '', NULL::timestamptz
 		FROM device_services ds
 		JOIN devices d ON d.id = ds.device_id
 		LEFT JOIN sites s ON s.id = d.site_id
 		WHERE ds.state = 'stopped'
 		UNION ALL
 		SELECT 'probe_red', d.id::text, dhp.probe_name,
-		       d.hostname, s.name, ''
+		       d.hostname, s.name, '', NULL::timestamptz
 		FROM device_health_probes dhp
 		JOIN devices d ON d.id = dhp.device_id
 		LEFT JOIN sites s ON s.id = d.site_id
 		WHERE dhp.status = 'red'
 		UNION ALL
 		SELECT 'camera_offline', d.id::text, dc.camera_id,
-		       d.hostname, s.name, dc.label
+		       d.hostname, s.name, dc.label, NULL::timestamptz
 		FROM device_cameras dc
 		JOIN devices d ON d.id = dc.device_id
 		LEFT JOIN sites s ON s.id = d.site_id
@@ -93,7 +94,7 @@ func (r *Registry) FleetUnhealthy(ctx context.Context) ([]UnhealthySignal, error
 	for rows.Next() {
 		var sig UnhealthySignal
 		var kind string
-		if err := rows.Scan(&kind, &sig.DeviceID, &sig.Subject, &sig.Hostname, &sig.SiteName, &sig.Label); err != nil {
+		if err := rows.Scan(&kind, &sig.DeviceID, &sig.Subject, &sig.Hostname, &sig.SiteName, &sig.Label, &sig.Since); err != nil {
 			return nil, fmt.Errorf("scan fleet unhealthy: %w", err)
 		}
 		sig.Kind = UnhealthyKind(kind)
