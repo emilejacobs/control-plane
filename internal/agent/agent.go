@@ -179,6 +179,10 @@ type Agent struct {
 	probePublisher *telemetry.ProbePublisher
 	probeDone      chan struct{}
 
+	// colimaKeeperDone tracks the Colima-liveness backstop loop (#172), run
+	// whenever the probe backend can ensure Colima (the darwin backend).
+	colimaKeeperDone chan struct{}
+
 	// cameraReach + cameraStatus are set whenever CamerasPath is
 	// configured (#113 camera-status probe). cameraReach defaults to the
 	// ffmpeg reachability check; WithCameraReachability overrides it in
@@ -593,6 +597,16 @@ func (a *Agent) Start() error {
 			a.probePublisher.Run(pubCtx)
 		}()
 	}
+	// Colima-liveness backstop (#172): if the probe backend can ensure Colima
+	// (the darwin backend), keep the VM up — the user LaunchAgent loads
+	// unreliably at boot. Other OSes don't implement it, so this never runs.
+	if ce, ok := a.probeBackend.(probes.ColimaEnsurer); ok {
+		a.colimaKeeperDone = make(chan struct{})
+		go func() {
+			defer close(a.colimaKeeperDone)
+			a.runColimaKeeper(pubCtx, ce, colimaEnsureInterval)
+		}()
+	}
 	if a.cameraStatus != nil {
 		a.cameraStatusDone = make(chan struct{})
 		go func() {
@@ -710,6 +724,9 @@ func (a *Agent) Stop() error {
 		}
 		if a.probeDone != nil {
 			<-a.probeDone
+		}
+		if a.colimaKeeperDone != nil {
+			<-a.colimaKeeperDone
 		}
 		if a.cameraStatusDone != nil {
 			<-a.cameraStatusDone

@@ -140,6 +140,9 @@ func resolveColimaBin() string {
 	return "colima"
 }
 
+// The darwin backend is both a probe collector and a Colima ensurer (#172).
+var _ ColimaEnsurer = (*darwinBackend)(nil)
+
 // EnsureColima starts the per-user Colima VM if it has stopped (issue #172).
 // The VM is normally started by the com.uknomi.colima *user* LaunchAgent, but
 // that agent loads non-deterministically at GUI login — on some boots it never
