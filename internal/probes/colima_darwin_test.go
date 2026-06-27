@@ -59,3 +59,18 @@ func TestEnsureColima_StartsWhenStopped(t *testing.T) {
 		t.Errorf("expected a colima start; calls were:\n%v", rr.calls)
 	}
 }
+
+// When colima reports running (status exits 0), EnsureColima does NOT start it.
+func TestEnsureColima_NoopWhenRunning(t *testing.T) {
+	statusKey := "launchctl asuser 442 sudo -u uknomi /opt/homebrew/bin/colima status"
+	rr := &recordingRunner{results: map[string]cmdResult{
+		statusKey: {stdout: "colima is running", err: nil},
+	}}
+	b := &darwinBackend{run: rr.run, colimaUser: "uknomi", colimaUID: "442", colimaBin: "/opt/homebrew/bin/colima", logger: discardLogger()}
+
+	b.EnsureColima(context.Background())
+
+	if rr.called("launchctl asuser 442 sudo -u uknomi /opt/homebrew/bin/colima start") {
+		t.Errorf("must not start a running colima; calls were:\n%v", rr.calls)
+	}
+}
