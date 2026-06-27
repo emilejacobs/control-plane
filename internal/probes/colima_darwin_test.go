@@ -1,0 +1,90 @@
+//go:build darwin
+
+package probes
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"os"
+	"testing"
+)
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+}
+
+// recordingRunner records every command it's asked to run (name + space-joined
+// args) and returns staged results, so tests can assert which colima admin
+// commands EnsureColima issued.
+type recordingRunner struct {
+	results map[string]cmdResult
+	calls   []string
+}
+
+func (r *recordingRunner) run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	key := name
+	for _, a := range args {
+		key += " " + a
+	}
+	r.calls = append(r.calls, key)
+	if res, ok := r.results[key]; ok {
+		return []byte(res.stdout), []byte(res.stderr), res.err
+	}
+	return nil, nil, os.ErrNotExist
+}
+
+func (r *recordingRunner) called(substr string) bool {
+	for _, c := range r.calls {
+		if c == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// When colima reports not-running, EnsureColima starts it via the asuser path
+// (no extra args — resumes the saved profile).
+func TestEnsureColima_StartsWhenStopped(t *testing.T) {
+	statusKey := "launchctl asuser 442 sudo -u uknomi /opt/homebrew/bin/colima status"
+	rr := &recordingRunner{results: map[string]cmdResult{
+		statusKey: {err: errors.New("colima is not running")},
+	}}
+	b := &darwinBackend{run: rr.run, colimaUser: "uknomi", colimaUID: "442", colimaBin: "/opt/homebrew/bin/colima", logger: discardLogger()}
+
+	b.EnsureColima(context.Background())
+
+	if !rr.called("launchctl asuser 442 sudo -u uknomi /opt/homebrew/bin/colima start") {
+		t.Errorf("expected a colima start; calls were:\n%v", rr.calls)
+	}
+}
+
+// When colima reports running (status exits 0), EnsureColima does NOT start it.
+func TestEnsureColima_NoopWhenRunning(t *testing.T) {
+	statusKey := "launchctl asuser 442 sudo -u uknomi /opt/homebrew/bin/colima status"
+	rr := &recordingRunner{results: map[string]cmdResult{
+		statusKey: {stdout: "colima is running", err: nil},
+	}}
+	b := &darwinBackend{run: rr.run, colimaUser: "uknomi", colimaUID: "442", colimaBin: "/opt/homebrew/bin/colima", logger: discardLogger()}
+
+	b.EnsureColima(context.Background())
+
+	if rr.called("launchctl asuser 442 sudo -u uknomi /opt/homebrew/bin/colima start") {
+		t.Errorf("must not start a running colima; calls were:\n%v", rr.calls)
+	}
+}
+
+// On an un-migrated device (no colima user resolved — still Docker Desktop),
+// EnsureColima does nothing at all: it must never run colima against a box that
+// isn't on Colima.
+func TestEnsureColima_NoopWhenUnmigrated(t *testing.T) {
+	rr := &recordingRunner{results: map[string]cmdResult{}}
+	b := &darwinBackend{run: rr.run, colimaUser: "", colimaUID: "", colimaBin: "/opt/homebrew/bin/colima", logger: discardLogger()}
+
+	b.EnsureColima(context.Background())
+
+	if len(rr.calls) != 0 {
+		t.Errorf("expected no commands on an un-migrated device; got:\n%v", rr.calls)
+	}
+}

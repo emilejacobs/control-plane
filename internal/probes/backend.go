@@ -18,3 +18,11 @@ import (
 type Backend interface {
 	Collect(ctx context.Context) []healthprobes.Result
 }
+
+// ColimaEnsurer is implemented by backends that can (re)start the per-user
+// Colima VM when it has stopped (issue #172). The darwin backend implements
+// it; other OSes don't, so the agent's keeper loop simply never runs there —
+// the OS split falls out of a type assertion, no extra wiring.
+type ColimaEnsurer interface {
+	EnsureColima(ctx context.Context)
+}
