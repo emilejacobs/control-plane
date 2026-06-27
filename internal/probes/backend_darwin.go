@@ -67,6 +67,7 @@ type darwinBackend struct {
 	colimaUser string
 	colimaUID  string
 	dockerBin  string
+	colimaBin  string
 }
 
 // NewSystemBackend returns a darwin probe backend wired to the real
@@ -85,6 +86,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 		expectedLoginUser: expectedLoginUser,
 		logger:            logger,
 		dockerBin:         resolveDockerBin(),
+		colimaBin:         resolveColimaBin(),
 	}
 	// The auto-login user runs the per-user Colima VM (ADR-038). Resolve its uid
 	// once so docker probes can drop into its session via launchctl asuser. If
@@ -118,6 +120,50 @@ func resolveDockerBin() string {
 func colimaDockerArgv(uid, user, dockerBin string, args []string) []string {
 	base := []string{"launchctl", "asuser", uid, "sudo", "-u", user, dockerBin}
 	return append(base, args...)
+}
+
+// colimaAdminArgv wraps a `colima` invocation (status / start) the same way —
+// in the auto-login user's session, where the VZ-backed VM lives (issue #172).
+func colimaAdminArgv(uid, user, colimaBin string, args []string) []string {
+	base := []string{"launchctl", "asuser", uid, "sudo", "-u", user, colimaBin}
+	return append(base, args...)
+}
+
+// resolveColimaBin finds the colima CLI by absolute path — sudo's secure_path
+// won't include Homebrew, so a bare "colima" wouldn't resolve under asuser/sudo.
+func resolveColimaBin() string {
+	for _, p := range []string{"/opt/homebrew/bin/colima", "/usr/local/bin/colima"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "colima"
+}
+
+// EnsureColima starts the per-user Colima VM if it has stopped (issue #172).
+// The VM is normally started by the com.uknomi.colima *user* LaunchAgent, but
+// that agent loads non-deterministically at GUI login — on some boots it never
+// runs, leaving Colima (and so the ALPR container) down. The agent is a root
+// LaunchDaemon that loads reliably at boot and already reaches Colima via
+// `launchctl asuser`, so it is the dependable backstop. No-op on un-migrated
+// devices (no colima user resolved). `colima start` takes no args: the saved
+// profile (CPU/mem/disk + the LAN-camera network flags) is persisted in
+// ~/.colima, and re-specifying them risks a reconfigure.
+func (b *darwinBackend) EnsureColima(ctx context.Context) {
+	if b.colimaUser == "" || b.colimaUID == "" || b.colimaBin == "" {
+		return // un-migrated (Docker Desktop) — nothing to keep alive
+	}
+	statusArgv := colimaAdminArgv(b.colimaUID, b.colimaUser, b.colimaBin, []string{"status"})
+	if _, _, err := b.run(ctx, statusArgv[0], statusArgv[1:]...); err == nil {
+		return // already running
+	}
+	b.logger.Info("colima not running — starting it (issue #172 backstop)")
+	startArgv := colimaAdminArgv(b.colimaUID, b.colimaUser, b.colimaBin, []string{"start"})
+	if _, stderr, err := b.run(ctx, startArgv[0], startArgv[1:]...); err != nil {
+		b.logger.Error("colima start failed", "error", err, "stderr", strings.TrimSpace(string(stderr)))
+		return
+	}
+	b.logger.Info("colima started")
 }
 
 func execRun(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
