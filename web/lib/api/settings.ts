@@ -106,3 +106,51 @@ export async function setTeamsWebhook(webhookUrl: string): Promise<void> {
     throw new ApiError(res.status, "failed to update Teams webhook");
   }
 }
+
+// Host-network-pressure probe scoring thresholds (store13/mesa port-exhaustion
+// incident). All four are read-write; the API fills unset fields with the
+// calibrated defaults. Edits apply fleet-wide on the next probe (~5 min).
+export interface HostPressureThresholds {
+  ephemeralWarnPct: number;
+  ephemeralCritPct: number;
+  closeWaitWarn: number;
+  closeWaitCrit: number;
+}
+
+export async function getHostPressureThresholds(): Promise<HostPressureThresholds> {
+  const res = await apiRequest("/settings/host-pressure");
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to load host-pressure thresholds");
+  }
+  const d = (await res.json()) as {
+    ephemeral_warn_pct?: number;
+    ephemeral_crit_pct?: number;
+    close_wait_warn?: number;
+    close_wait_crit?: number;
+  };
+  return {
+    ephemeralWarnPct: d.ephemeral_warn_pct ?? 40,
+    ephemeralCritPct: d.ephemeral_crit_pct ?? 60,
+    closeWaitWarn: d.close_wait_warn ?? 100,
+    closeWaitCrit: d.close_wait_crit ?? 400,
+  };
+}
+
+export async function setHostPressureThresholds(t: HostPressureThresholds): Promise<void> {
+  const res = await apiRequest("/settings/host-pressure", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({
+      ephemeral_warn_pct: t.ephemeralWarnPct,
+      ephemeral_crit_pct: t.ephemeralCritPct,
+      close_wait_warn: t.closeWaitWarn,
+      close_wait_crit: t.closeWaitCrit,
+    }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "failed to update host-pressure thresholds");
+  }
+}

@@ -152,6 +152,7 @@ func (b *darwinBackend) Collect(ctx context.Context) []healthprobes.Result {
 		b.probeUSBAudio(ctx),
 		b.probeWhisperModel(ctx),
 		b.probeBootSanity(ctx),
+		b.probeHostNetPressure(ctx),
 	}
 }
 
