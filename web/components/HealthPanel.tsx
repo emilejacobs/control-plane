@@ -49,6 +49,14 @@ function detailLine(p: HealthProbe): string {
       const user = d.console_user as string | undefined;
       return user ? `console: ${user}` : p.state;
     }
+    case "host_net_pressure": {
+      const pct = d.ephemeral_pct as number | undefined;
+      const closeWait = d.close_wait as number | undefined;
+      if (pct == null) return p.state;
+      const parts = [`ephemeral ports: ${pct.toFixed(1)}% of pool`];
+      if (closeWait != null) parts.push(`CLOSE_WAIT: ${closeWait}`);
+      return parts.join(" · ");
+    }
     default:
       return p.state;
   }

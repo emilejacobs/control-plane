@@ -27,6 +27,9 @@ import {
   setPRToken,
   getNotificationSettings,
   setNotificationConfig,
+  getHostPressureThresholds,
+  setHostPressureThresholds,
+  type HostPressureThresholds,
   setTeamsWebhook,
 } from "./settings";
 import { getDeviceCaptures, getCaptureUrl, requestSnapshot } from "./captures";
@@ -352,6 +355,24 @@ export function useSetTeamsWebhook() {
   return useMutation({
     mutationFn: (webhookUrl: string) => setTeamsWebhook(webhookUrl),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-settings"] }),
+  });
+}
+
+// useHostPressureThresholds reads the host_net_pressure scoring thresholds.
+export function useHostPressureThresholds() {
+  return useQuery({
+    queryKey: ["host-pressure-thresholds"],
+    queryFn: getHostPressureThresholds,
+  });
+}
+
+// useSetHostPressureThresholds writes all four thresholds; on success it
+// invalidates the query so the card reflects the save.
+export function useSetHostPressureThresholds() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (t: HostPressureThresholds) => setHostPressureThresholds(t),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["host-pressure-thresholds"] }),
   });
 }
 
