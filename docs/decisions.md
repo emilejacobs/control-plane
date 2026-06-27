@@ -47,3 +47,4 @@ ADRs from ADR-009 onward follow the template at [`agents/adr-template.md`](./age
 | 037 | [Install folded into the agent binary, delivered as a Mosyle-pushed signed pkg](./adr/0037-install-folded-into-agent-signed-pkg.md) | Accepted (2026-06-15) — extends ADR-017; refines ADR-004 |
 | 038 | [Colima replaces Docker Desktop; per-user VM, root agent drives via launchctl asuser](./adr/0038-colima-replaces-docker.md) | Accepted (2026-06-15) |
 | 039 | [Outbound fleet notifications — cp-ingest reconciler, alert_state dedupe, SES + Teams](./adr/0039-outbound-fleet-notifications.md) | Accepted (2026-06-16) |
+| 040 | [CP-scored continuous-metric health probes (host_net_pressure), operator-tunable thresholds](./adr/0040-cp-scored-metric-health-probes.md) | Accepted (2026-06-27) — extends ADR-034 / the #19 PRD for metric probes |
