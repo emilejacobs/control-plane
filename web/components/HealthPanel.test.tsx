@@ -52,6 +52,24 @@ describe("HealthPanel — populated state", () => {
     expect(within(table).getByText(/console: root/)).toBeInTheDocument();
   });
 
+  it("surfaces ephemeral-port % and CLOSE_WAIT for host_net_pressure", () => {
+    render(
+      <HealthPanel
+        probes={[
+          probe({
+            name: "host_net_pressure",
+            status: "red",
+            state: "critical",
+            details: { ephemeral_pct: 82.4, close_wait: 6 },
+          }),
+        ]}
+        now={now}
+      />,
+    );
+    expect(screen.getByText(/ephemeral ports: 82\.4% of pool/i)).toBeInTheDocument();
+    expect(screen.getByText(/close_wait: 6/i)).toBeInTheDocument();
+  });
+
   it("surfaces the whisper variant and size in the detail column", () => {
     render(
       <HealthPanel

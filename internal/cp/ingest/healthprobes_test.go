@@ -66,6 +66,64 @@ func TestHealthProbeIngesterHappyPath(t *testing.T) {
 	}
 }
 
+// CP is authoritative for the host_net_pressure probe: it re-scores the raw
+// metrics in Details against the configured thresholds, overriding whatever
+// status the agent stamped. Here the agent (stale defaults) said green, but
+// 82% ephemeral usage is critical → CP must persist red.
+func TestHealthProbeIngesterRescoresHostPressure(t *testing.T) {
+	w := &fakeHealthProbeWriter{}
+	ing := NewHealthProbeIngester(w, fixedClock(time.Now()))
+
+	report := healthprobes.Report{
+		DeviceID:      "dev-1",
+		CorrelationID: "corr-1",
+		Probes: []healthprobes.Result{{
+			Name:   healthprobes.ProbeHostNetPressure,
+			Status: healthprobes.StatusGreen, // agent's (overridable) opinion
+			State:  "ok",
+			Details: healthprobes.HostPressureMetrics{
+				EphemeralPct: 82.4, EphemeralPortsUsed: 13503, PoolSize: 16384, CloseWait: 6,
+			}.Details(),
+		}},
+	}
+	if err := ing.Handle(context.Background(), report); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := w.calls[0].results[0]
+	if got.Status != healthprobes.StatusRed || got.State != "critical" {
+		t.Errorf("persisted status/state = %q/%q, want red/critical", got.Status, got.State)
+	}
+}
+
+type fixedThresholds healthprobes.HostPressureThresholds
+
+func (f fixedThresholds) HostPressureThresholds(context.Context) healthprobes.HostPressureThresholds {
+	return healthprobes.HostPressureThresholds(f)
+}
+
+// A configured threshold source overrides the defaults: raising crit to 90%
+// makes 82% only yellow, not red — proving thresholds are tunable in CP.
+func TestHealthProbeIngesterHonoursConfiguredThresholds(t *testing.T) {
+	w := &fakeHealthProbeWriter{}
+	ing := NewHealthProbeIngester(w, fixedClock(time.Now()))
+	ing.Thresholds = fixedThresholds{EphemeralWarnPct: 70, EphemeralCritPct: 90, CloseWaitWarn: 100, CloseWaitCrit: 400}
+
+	report := healthprobes.Report{
+		DeviceID: "dev-1", CorrelationID: "c",
+		Probes: []healthprobes.Result{{
+			Name:    healthprobes.ProbeHostNetPressure,
+			Details: healthprobes.HostPressureMetrics{EphemeralPct: 82.4, PoolSize: 16384}.Details(),
+		}},
+	}
+	if err := ing.Handle(context.Background(), report); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := w.calls[0].results[0]
+	if got.Status != healthprobes.StatusYellow || got.State != "elevated" {
+		t.Errorf("status/state = %q/%q, want yellow/elevated (crit raised to 90)", got.Status, got.State)
+	}
+}
+
 func TestHealthProbeIngesterEmptyDeviceIDIsPoison(t *testing.T) {
 	w := &fakeHealthProbeWriter{}
 	ing := NewHealthProbeIngester(w, fixedClock(time.Now()))

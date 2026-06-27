@@ -362,6 +362,10 @@ func NewBuilderWith(d Deps) *Builder {
 			b.Get("/settings/notifications", requireAuth(onboarded(requireStaff(settingshttp.NewNotificationsGet(d.Registry)))))
 			b.Put("/settings/notifications", requireAuth(onboarded(requireStaff(settingshttp.NewNotificationsPut(d.Registry, auditW)))))
 			b.Put("/settings/notifications/teams-webhook", requireAuth(onboarded(requireStaff(settingshttp.NewTeamsWebhookPut(d.Registry, auditW)))))
+			// Host-network-pressure probe scoring thresholds — tunable so the
+			// red/yellow line can be adjusted fleet-wide without an agent roll.
+			b.Get("/settings/host-pressure", requireAuth(onboarded(requireStaff(settingshttp.NewHostPressureGet(d.Registry)))))
+			b.Put("/settings/host-pressure", requireAuth(onboarded(requireStaff(settingshttp.NewHostPressurePut(d.Registry, auditW)))))
 			b.Get("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewList(d.Operators)))))
 			b.Get("/operators/{id}", requireAuth(onboarded(requireStaff(operatorshttp.NewGet(d.Operators)))))
 			b.Post("/operators", requireAuth(onboarded(requireStaff(operatorshttp.NewCreate(d.Operators, auditW)))))

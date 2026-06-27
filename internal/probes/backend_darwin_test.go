@@ -254,7 +254,7 @@ func TestProbeWhisperModel(t *testing.T) {
 	})
 }
 
-func TestCollectReturnsAllSevenProbes(t *testing.T) {
+func TestCollectReturnsAllProbes(t *testing.T) {
 	b := &darwinBackend{
 		run:      fakeRunner{results: map[string]cmdResult{}}.run,
 		stat:     fakeStat(nil),
@@ -272,6 +272,7 @@ func TestCollectReturnsAllSevenProbes(t *testing.T) {
 		healthprobes.ProbeUSBAudio,
 		healthprobes.ProbeWhisperModel,
 		healthprobes.ProbeBootSanity,
+		healthprobes.ProbeHostNetPressure,
 	}
 	if len(results) != len(want) {
 		t.Fatalf("Collect returned %d probes, want %d", len(results), len(want))
