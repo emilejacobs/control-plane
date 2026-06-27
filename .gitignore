@@ -51,3 +51,19 @@ cdk.out/
 *.p12
 web-prototype/
 .secrets/
+
+# Operator scratch + captured device data — NEVER commit (may contain secrets:
+# webhook auth headers, RTSP creds, terraform plan state). Untracked 2026-06-27
+# after pr-config-capture/ + tfplan leaked into a PR.
+/agent
+/pr-config-capture/
+infra/terraform-deploy/tfplan
+*.tfplan
+/mac-tailnet-ips*.txt
+/courtney.txt
+/migrate-*.txt
+/deploy-edge-ui.sh
+/restart-fleet.sh
+/snapshot-activate.sh
+/snapshot-captures-check.sh
+/update-agent.sh
