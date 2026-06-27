@@ -305,6 +305,9 @@ func run(logger *slog.Logger) error {
 		// Surface red-probe log lines so the per-probe-type alarm's
 		// log-metric-filter can count them.
 		hpIngester.Logger = logger
+		// CP scores the host_net_pressure probe from operator-tunable
+		// thresholds read fresh from cp_settings on each report.
+		hpIngester.Thresholds = notify.NewHostPressureThresholdSource(reg)
 		healthProbeConsumer = sqsconsumer.NewConsumer[healthprobes.Report](
 			sqsClient,
 			hpIngester.Handle,

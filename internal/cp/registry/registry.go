@@ -1390,6 +1390,16 @@ const (
 	// sub-grace network blips. Stored as an integer-seconds string; unset →
 	// DefaultOfflineGraceSeconds; "0" disables the debounce.
 	SettingOfflineGraceSeconds = "notifications.offline_grace_seconds"
+
+	// Host-network-pressure probe thresholds (CP-tunable scoring for the
+	// host_net_pressure probe; store13/mesa port-exhaustion incident
+	// 2026-06-26). Stored as numeric strings; unset/invalid → the calibrated
+	// defaults in healthprobes. Ephemeral percentages are floats; CLOSE_WAIT
+	// counts are ints.
+	SettingHostPressureEphemeralWarnPct = "host_pressure.ephemeral_warn_pct"
+	SettingHostPressureEphemeralCritPct = "host_pressure.ephemeral_crit_pct"
+	SettingHostPressureCloseWaitWarn    = "host_pressure.close_wait_warn"
+	SettingHostPressureCloseWaitCrit    = "host_pressure.close_wait_crit"
 )
 
 // DefaultOfflineGraceSeconds is the offline-debounce window applied when the
