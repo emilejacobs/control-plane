@@ -74,3 +74,17 @@ func TestEnsureColima_NoopWhenRunning(t *testing.T) {
 		t.Errorf("must not start a running colima; calls were:\n%v", rr.calls)
 	}
 }
+
+// On an un-migrated device (no colima user resolved — still Docker Desktop),
+// EnsureColima does nothing at all: it must never run colima against a box that
+// isn't on Colima.
+func TestEnsureColima_NoopWhenUnmigrated(t *testing.T) {
+	rr := &recordingRunner{results: map[string]cmdResult{}}
+	b := &darwinBackend{run: rr.run, colimaUser: "", colimaUID: "", colimaBin: "/opt/homebrew/bin/colima", logger: discardLogger()}
+
+	b.EnsureColima(context.Background())
+
+	if len(rr.calls) != 0 {
+		t.Errorf("expected no commands on an un-migrated device; got:\n%v", rr.calls)
+	}
+}
