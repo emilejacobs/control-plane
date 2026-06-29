@@ -5,8 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"regexp"
 	"strings"
 
 	"github.com/emilejacobs/control-plane/internal/agent/enroll"
@@ -80,43 +78,20 @@ func defaultAgentConfig() config.Config {
 	}
 }
 
-// gatherHardware reads the macOS host identity for the enrollment request.
-// macOS-specific shell-outs (ioreg/sw_vers); the install slice (#86) moves
-// these behind the ADR-034 backend split.
-func gatherHardware() enroll.Hardware {
-	host, _ := os.Hostname()
-	agentVersion := version
+// gatherHardware reads the host identity for the enrollment request. It is
+// OS-specific (ioreg/sw_vers on macOS; /etc/machine-id + device-tree + os-release
+// on Linux per ADR-007's Pi/Radxa minimal agent) and lives behind the ADR-034
+// build-tag split in enroll_darwin.go / enroll_linux.go.
+
+// hostnameAndVersion is the OS-agnostic part of identity, shared by both
+// gatherHardware implementations.
+func hostnameAndVersion() (host, agentVersion string) {
+	host, _ = os.Hostname()
+	agentVersion = version
 	if agentVersion == "" {
 		agentVersion = "dev"
 	}
-	return enroll.Hardware{
-		Hostname:     host,
-		HardwareUUID: ioregPlatformUUID(),
-		HardwareKind: "mac",
-		OSVersion:    "macOS " + productVersion(),
-		AgentVersion: agentVersion,
-	}
-}
-
-var ioPlatformUUIDRe = regexp.MustCompile(`"IOPlatformUUID"\s*=\s*"([^"]+)"`)
-
-func ioregPlatformUUID() string {
-	out, err := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
-	if err != nil {
-		return ""
-	}
-	if m := ioPlatformUUIDRe.FindSubmatch(out); m != nil {
-		return string(m[1])
-	}
-	return ""
-}
-
-func productVersion() string {
-	out, err := exec.Command("sw_vers", "-productVersion").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return host, agentVersion
 }
 
 func fatalCLI(format string, a ...any) {

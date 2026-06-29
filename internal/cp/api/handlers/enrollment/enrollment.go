@@ -22,11 +22,13 @@ import (
 //
 // Two patterns are accepted:
 //  1. Legacy bench/lab pattern: `<kind>-<site>-<NN>`, e.g. `mac-mini-bench-01`.
-//  2. In-field fleet pattern:   `<id>-<chain>-<store>-macmini`, e.g.
-//     `07-eegees-mesa-macmini`. `<id>` is a numeric asset id, `<store>` may
-//     contain hyphens for compound names (e.g. `store-42`).
+//  2. In-field fleet pattern:   a numeric asset id, then hyphen-separated
+//     lowercase segments. Covers both Macs (`07-eegees-mesa-macmini`) and the
+//     legacy Pi/Radxa fleet (ADR-007), whose role suffix is the drive-thru
+//     position rather than `-macmini` — e.g. `25-cc-hickory-c2pi-order`,
+//     `21-cc-perkins-pi-stt`.
 var hostnameConvention = regexp.MustCompile(
-	`^((mac-mini|pi|radxa)-[a-z0-9-]+-\d{2}|\d+-[a-z0-9]+-[a-z0-9-]+-macmini)$`,
+	`^((mac-mini|pi|radxa)-[a-z0-9-]+-\d{2}|\d+-[a-z0-9]+(-[a-z0-9]+)+)$`,
 )
 
 // sourceIP is the client address an enrollment request arrived from, without

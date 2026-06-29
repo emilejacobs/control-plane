@@ -101,6 +101,12 @@ func TestEnrollmentAcceptsFieldNamingConvention(t *testing.T) {
 		"07-eegees-mesa-macmini",
 		"123-bigchain-store-42-macmini",
 		"1-a-b-macmini",
+		// In-field Pi/Radxa fleet (ADR-007) — same numeric-asset-id prefix, but
+		// the role suffix is the drive-thru position, not "-macmini".
+		"25-cc-hickory-c2pi-order",
+		"34-cc-congress-c3pi-arrival",
+		"41-cc-airline-c3pi-arrival",
+		"21-cc-perkins-pi-stt",
 	}
 	for _, hostname := range cases {
 		t.Run(hostname, func(t *testing.T) {
