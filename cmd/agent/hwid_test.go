@@ -2,6 +2,26 @@ package main
 
 import "testing"
 
+func TestParseOSReleaseVersion(t *testing.T) {
+	// PRETTY_NAME wins when present.
+	pretty := `NAME="Debian GNU/Linux"
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+VERSION_ID="12"`
+	if got := parseOSReleaseVersion(pretty); got != "Debian GNU/Linux 12 (bookworm)" {
+		t.Errorf("PRETTY_NAME case = %q", got)
+	}
+	// Fall back to NAME + VERSION_ID when PRETTY_NAME is absent.
+	noPretty := `NAME="Raspbian GNU/Linux"
+VERSION_ID="11"`
+	if got := parseOSReleaseVersion(noPretty); got != "Raspbian GNU/Linux 11" {
+		t.Errorf("fallback case = %q", got)
+	}
+	// Nothing usable → empty.
+	if got := parseOSReleaseVersion("# comment only\n"); got != "" {
+		t.Errorf("empty case = %q", got)
+	}
+}
+
 func TestLinuxKindFromModel(t *testing.T) {
 	cases := []struct {
 		model string
