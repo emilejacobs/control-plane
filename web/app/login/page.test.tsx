@@ -75,7 +75,7 @@ describe("login page — two-step", () => {
     expect(pushMock).not.toHaveBeenCalled();
     await user.type(code, "123456");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/devices"));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/overview"));
   });
 
   it("can use a recovery code on the 2FA step", async () => {
@@ -91,7 +91,7 @@ describe("login page — two-step", () => {
     await user.type(screen.getByLabelText(/recovery code/i), "abcd-efgh");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
 
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/devices"));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/overview"));
     expect(await ref.last!.json()).toMatchObject({ recovery_code: "abcd-efgh" });
   });
 
