@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { RequireAuth } from "./RequireAuth";
-import { setTokens, clearTokens } from "../lib/api/client";
+import { setTokens, clearTokens, SESSION_EXPIRED_EVENT } from "../lib/api/client";
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -36,5 +36,25 @@ describe("RequireAuth", () => {
 
     expect(replaceMock).toHaveBeenCalledWith("/login");
     expect(screen.queryByText("fleet content")).not.toBeInTheDocument();
+  });
+
+  // The session can expire while the operator sits on a page (a background
+  // poll's refresh fails). The gate must redirect immediately, not wait for
+  // the next manual navigation.
+  it("redirects to /login when the session expires while on the page", () => {
+    setTokens({ accessToken: "a", refreshToken: "r" });
+    render(
+      <RequireAuth>
+        <div>fleet content</div>
+      </RequireAuth>,
+    );
+    expect(screen.getByText("fleet content")).toBeInTheDocument();
+    expect(replaceMock).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    });
+
+    expect(replaceMock).toHaveBeenCalledWith("/login");
   });
 });
