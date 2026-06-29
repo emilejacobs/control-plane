@@ -54,6 +54,20 @@ export function clearTokens(): void {
   }
 }
 
+// SESSION_EXPIRED_EVENT fires when an involuntary logout is detected — the
+// refresh token was rejected (inactivity timeout / revocation), so the session
+// can't be recovered. RequireAuth listens for it and bounces to /login
+// immediately, rather than leaving the operator on a dead page until their
+// next manual navigation. Distinct from a deliberate logout, which routes on
+// its own. window-scoped so any mounted gate hears it.
+export const SESSION_EXPIRED_EVENT = "uknomi:session-expired";
+
+export function emitSessionExpired(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+}
+
 export function currentTokens(): Tokens | null {
   return tokens;
 }
@@ -126,6 +140,7 @@ async function tryRefresh(): Promise<boolean> {
   });
   if (!res.ok) {
     clearTokens();
+    emitSessionExpired();
     return false;
   }
   const body = (await res.json()) as { access_token: string; refresh_token: string };

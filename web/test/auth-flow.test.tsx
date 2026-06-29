@@ -76,10 +76,11 @@ describe("auth flow: first-run → TOTP enroll → login → devices", () => {
     // The 2FA step appears once the password is accepted.
     await user.type(await screen.findByLabelText(/authenticator code/i), "123456");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/devices"));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/overview"));
     cleanup();
 
-    // 4. Land on the Devices shell.
+    // 4. Session is live — an authenticated page renders (Devices shown here as
+    //    a representative authed shell; the post-login landing is /overview).
     renderWithClient(<DevicesPage />);
     expect(screen.getByRole("heading", { name: /devices/i })).toBeInTheDocument();
     expect(await screen.findByText(/no devices yet/i)).toBeInTheDocument();

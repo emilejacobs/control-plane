@@ -25,11 +25,11 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Onboarding order (#16): set new password (if on a temp one) → enroll
-  // TOTP → fleet.
+  // TOTP → the Overview dashboard (the default landing).
   function routeAfterAuth(o: Extract<LoginOutcome, { kind: "authenticated" }>) {
     if (o.mustChangePassword) router.push("/set-password");
     else if (o.requiresTotpEnrollment) router.push("/totp-enroll");
-    else router.push("/devices");
+    else router.push("/overview");
   }
 
   function submitCredentials(e: FormEvent) {

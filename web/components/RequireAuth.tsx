@@ -9,7 +9,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { currentTokens } from "../lib/api/client";
+import { currentTokens, SESSION_EXPIRED_EVENT } from "../lib/api/client";
 
 type GateState = "checking" | "ok";
 
@@ -27,6 +27,15 @@ export function RequireAuth({ children }: Props) {
       return;
     }
     setState("ok");
+  }, [router]);
+
+  // The mount check above only fires on (re)navigation. If the session dies
+  // while the operator sits here — a background poll's token refresh is
+  // rejected — bounce to /login at once instead of waiting for their next click.
+  useEffect(() => {
+    const onExpired = () => router.replace("/login");
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, [router]);
 
   if (state !== "ok") return null;
