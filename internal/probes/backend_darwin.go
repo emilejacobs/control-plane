@@ -56,6 +56,7 @@ type darwinBackend struct {
 	stat              statFunc
 	readFile          fileReadFunc
 	glob              globFunc
+	remove            func(path string) error
 	now               func() time.Time
 	expectedLoginUser string
 	logger            *slog.Logger
@@ -66,6 +67,7 @@ type darwinBackend struct {
 	// Empty colimaUser/UID falls back to root Docker Desktop (pre-migration).
 	colimaUser string
 	colimaUID  string
+	colimaHome string // the colima user's home — where ~/.colima lives
 	dockerBin  string
 	colimaBin  string
 }
@@ -82,6 +84,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 		stat:              statReal,
 		readFile:          os.ReadFile,
 		glob:              filepath.Glob,
+		remove:            os.Remove,
 		now:               time.Now,
 		expectedLoginUser: expectedLoginUser,
 		logger:            logger,
@@ -96,6 +99,7 @@ func NewSystemBackend(expectedLoginUser string, logger *slog.Logger) Backend {
 		if u, err := osuser.Lookup(expectedLoginUser); err == nil {
 			b.colimaUser = expectedLoginUser
 			b.colimaUID = u.Uid
+			b.colimaHome = u.HomeDir
 		}
 	}
 	return b
@@ -143,6 +147,20 @@ func resolveColimaBin() string {
 // The darwin backend is both a probe collector and a Colima ensurer (#172).
 var _ ColimaEnsurer = (*darwinBackend)(nil)
 
+// staleLockRe matches the Lima hostagent fatal a crashed VM leaves behind: it
+// died without releasing its persistent data disk, so the disk stays marked
+// in-use and every later `colima start` aborts at disk-attach. A plain retry
+// can never clear it — the lock must be removed first. (2026-07-01 55-eegees
+// incident: ALPR down ~1.5 days while EnsureColima retried into the same locked
+// disk every 5 min, leaking a helper process each time — 300+ piled up.)
+var staleLockRe = regexp.MustCompile(`in use by instance|attach disk`)
+
+// colimaHelperPatterns are the pkill -f patterns for the helper processes a
+// failed `colima start` orphans (the VZ user-network daemon and the profile
+// daemon starter). One leaks per failed attempt; reaped only during stale-lock
+// recovery, where Colima is known-stopped so any match is guaranteed an orphan.
+var colimaHelperPatterns = []string{"limactl usernet", "colima daemon start"}
+
 // EnsureColima starts the per-user Colima VM if it has stopped (issue #172).
 // The VM is normally started by the com.uknomi.colima *user* LaunchAgent, but
 // that agent loads non-deterministically at GUI login — on some boots it never
@@ -161,12 +179,74 @@ func (b *darwinBackend) EnsureColima(ctx context.Context) {
 		return // already running
 	}
 	b.logger.Info("colima not running — starting it (issue #172 backstop)")
-	startArgv := colimaAdminArgv(b.colimaUID, b.colimaUser, b.colimaBin, []string{"start"})
-	if _, stderr, err := b.run(ctx, startArgv[0], startArgv[1:]...); err != nil {
-		b.logger.Error("colima start failed", "error", err, "stderr", strings.TrimSpace(string(stderr)))
+	if ok, stderr := b.startColima(ctx); ok {
 		return
+	} else if !staleLockRe.MatchString(stderr) && !b.hasStaleDiskLock() {
+		return // genuine start failure (already logged) — a retry won't help
+	}
+	// A crashed VM left the data disk locked. Clear the residue and retry once —
+	// unlike a blind retry this can actually succeed, and it stops the helper
+	// leak that would otherwise accumulate one process per 5-min cycle.
+	b.recoverStaleDiskLock(ctx)
+	b.logger.Info("recovered stale colima disk lock — retrying start")
+	b.startColima(ctx)
+}
+
+// startColima runs `colima start` and reports success plus the stderr (so the
+// caller can classify a failure as a recoverable stale disk lock).
+func (b *darwinBackend) startColima(ctx context.Context) (ok bool, stderr string) {
+	startArgv := colimaAdminArgv(b.colimaUID, b.colimaUser, b.colimaBin, []string{"start"})
+	_, se, err := b.run(ctx, startArgv[0], startArgv[1:]...)
+	if err != nil {
+		s := strings.TrimSpace(string(se))
+		b.logger.Error("colima start failed", "error", err, "stderr", s)
+		return false, s
 	}
 	b.logger.Info("colima started")
+	return true, ""
+}
+
+// diskLockGlob matches Lima's per-disk in-use markers under the colima user's
+// ~/.colima. Lima creates in_use_by when it attaches a disk to a live VM and
+// removes it on clean shutdown; a crash leaves it dangling.
+func (b *darwinBackend) diskLockGlob() string {
+	return filepath.Join(b.colimaHome, ".colima", "_lima", "_disks", "*", "in_use_by")
+}
+
+// staleDiskLocks returns the in_use_by markers present on disk. It's only called
+// after status+start both reported not-running, so any marker found is stale (no
+// live instance owns it).
+func (b *darwinBackend) staleDiskLocks() []string {
+	if b.colimaHome == "" {
+		return nil
+	}
+	locks, _ := b.glob(b.diskLockGlob())
+	return locks
+}
+
+func (b *darwinBackend) hasStaleDiskLock() bool {
+	return len(b.staleDiskLocks()) > 0
+}
+
+// recoverStaleDiskLock clears everything a crashed Colima VM leaves behind so
+// the next `colima start` can re-attach the data disk: it reaps the leaked VZ
+// network/daemon helper processes, removes the stale in_use_by lock symlink(s),
+// and force-stops the instance to clear its residual pid/sock/tmp. Every step is
+// best-effort and safe here — we only reach this after status AND start both
+// reported not-running, so no live instance owns any of it.
+func (b *darwinBackend) recoverStaleDiskLock(ctx context.Context) {
+	for _, pat := range colimaHelperPatterns {
+		b.run(ctx, "pkill", "-f", pat) // exit 1 == nothing matched; ignore
+	}
+	for _, lock := range b.staleDiskLocks() {
+		if err := b.remove(lock); err != nil {
+			b.logger.Error("failed to clear stale colima disk lock", "path", lock, "error", err)
+			continue
+		}
+		b.logger.Info("removed stale colima disk lock", "path", lock)
+	}
+	stopArgv := colimaAdminArgv(b.colimaUID, b.colimaUser, b.colimaBin, []string{"stop", "-f"})
+	b.run(ctx, stopArgv[0], stopArgv[1:]...)
 }
 
 func execRun(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
